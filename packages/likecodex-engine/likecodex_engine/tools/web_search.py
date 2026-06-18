@@ -57,5 +57,8 @@ class WebSearchTools:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
             return json.dumps({"error": str(exc), "query": query})
-        results = [{"title": r.get("title"), "url": r.get("url"), "content": r.get("content", "")[:300]} for r in data.get("results", [])]
+        results = [
+            {"title": r.get("title"), "url": r.get("url"), "content": r.get("content", "")[:300]}
+            for r in data.get("results", [])
+        ]
         return json.dumps({"engine": "tavily", "query": query, "results": results})

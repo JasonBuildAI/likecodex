@@ -107,8 +107,10 @@ mod tests {
 
     #[test]
     fn sandbox_respects_allow_fallback_flag() {
-        let mut cfg = SandboxConfig::default();
-        cfg.allow_fallback = false;
+        let cfg = SandboxConfig {
+            allow_fallback: false,
+            ..Default::default()
+        };
         let executor = SandboxExecutor::new(cfg);
         assert!(executor.is_enabled());
     }

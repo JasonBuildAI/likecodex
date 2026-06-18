@@ -35,7 +35,7 @@ class ShellTools:
 
     def _shell_command(self, command: str) -> tuple[str, list[str]]:
         if sys.platform == "win32":
-            comspec = os.environ.get("ComSpec", "cmd.exe")
+            comspec = os.environ.get("COMSPEC", "cmd.exe")
             return comspec, ["/c", command]
         return "sh", ["-c", command]
 
@@ -60,7 +60,7 @@ class ShellTools:
                 }
             )
         except TimeoutError:
-            if proc is not None:
+            if proc is not None and proc.returncode is None:
                 proc.kill()
                 await proc.wait()
             return json.dumps(
@@ -73,4 +73,7 @@ class ShellTools:
                 }
             )
         except Exception as e:
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+                await proc.wait()
             return json.dumps({"command": command, "error": str(e)})

@@ -197,10 +197,12 @@ async fn run_tui_loop<B: Backend>(
     let (prompt_tx, mut prompt_rx) = mpsc::unbounded_channel::<String>();
 
     let engine_event_tx2 = event_tx.clone();
+    let engine_reader_client = client.clone();
+    let engine_reader_url = engine_url.clone();
     let _engine_reader = tokio::spawn(async move {
         while let Some(prompt) = prompt_rx.recv().await {
-            let url = engine_url.clone();
-            let client = client.clone();
+            let url = engine_reader_url.clone();
+            let client = engine_reader_client.clone();
             let tx = engine_event_tx2.clone();
             tokio::spawn(async move {
                 let tx2 = tx.clone();
@@ -272,35 +274,37 @@ async fn run_tui_loop<B: Backend>(
                 }
             }
             AppEvent::Terminal(_) => {}
-            AppEvent::Engine(engine_event) => match &engine_event {
-                EngineEvent::Permission { content } => {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
-                        let request_id = parsed["request_id"].as_str().unwrap_or("");
-                        let tool = parsed["tool"].as_str().unwrap_or("tool");
-                        if !request_id.is_empty() {
-                            crossterm::terminal::disable_raw_mode()?;
-                            let approved =
-                                interaction::request_permission(&format!("Allow {tool}?"), None)?;
-                            crossterm::terminal::enable_raw_mode()?;
-                            let resp = client
-                                .post(format!(
-                                    "{engine_url}/permissions/{request_id}/respond"
-                                ))
-                                .json(&serde_json::json!({ "approved": approved }))
-                                .send()
-                                .await;
-                            if let Err(e) = resp {
-                                app.push_system(format!("[permission error] {e}"));
+            AppEvent::Engine(engine_event) => {
+                match &engine_event {
+                    EngineEvent::Permission { content } => {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
+                            let request_id = parsed["request_id"].as_str().unwrap_or("");
+                            let tool = parsed["tool"].as_str().unwrap_or("tool");
+                            if !request_id.is_empty() {
+                                crossterm::terminal::disable_raw_mode()?;
+                                let approved =
+                                    interaction::request_permission(&format!("Allow {tool}?"), None)?;
+                                crossterm::terminal::enable_raw_mode()?;
+                                let resp = client
+                                    .post(format!(
+                                        "{engine_url}/permissions/{request_id}/respond"
+                                    ))
+                                    .json(&serde_json::json!({ "approved": approved }))
+                                    .send()
+                                    .await;
+                                if let Err(e) = resp {
+                                    app.push_system(format!("[permission error] {e}"));
+                                }
                             }
                         }
+                        app.apply_engine_event(engine_event);
                     }
-                    app.apply_engine_event(engine_event);
+                    _ => {
+                        app.apply_engine_event(engine_event);
+                    }
                 }
-                _ => {
-                    app.apply_engine_event(engine_event);
-                }
-            },
-            app.scroll = app.scroll.saturating_add(1);
+                app.scroll = app.scroll.saturating_add(1);
+            }
         }
     }
 

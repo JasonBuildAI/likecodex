@@ -20,6 +20,7 @@ impl EngineBridge {
         }
     }
 
+    #[allow(dead_code)]
     pub fn from_env() -> Self {
         let url = std::env::var("LIKECODEX_ENGINE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:9090".to_string());
@@ -129,7 +130,7 @@ impl EngineBridge {
                         }
                         Err(e) => {
                             error!(error = %e, "failed to poll task");
-                            return Some((Err(e), last_count));
+                            return None;
                         }
                     }
                 }

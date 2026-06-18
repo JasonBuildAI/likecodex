@@ -22,7 +22,7 @@ class ContextCompactor:
         body = messages[1:] if system else list(messages)
         while body and (
             len(body) + (1 if system else 0) > self.max_messages
-            or self._estimate_tokens([m for m in ([system] if system else []) + body]) > self.max_tokens
+            or self._estimate_tokens(list(([system] if system else []) + body)) > self.max_tokens
         ):
             body.pop(0)
         preserved: list[Message] = []

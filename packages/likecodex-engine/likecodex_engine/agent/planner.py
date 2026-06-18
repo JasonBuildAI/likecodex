@@ -82,7 +82,8 @@ Keep steps small, actionable, and limited to at most 10."""
     def _extract_json(text: str) -> str:
         text = text.strip()
         if text.startswith("```"):
-            text = text.strip("`")
+            text = text[3:]
             if text.lower().startswith("json"):
-                text = text[4:].strip()
-        return text
+                text = text[4:]
+            text = text.strip("`\n")
+        return text.strip()

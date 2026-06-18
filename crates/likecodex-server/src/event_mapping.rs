@@ -39,7 +39,9 @@ pub fn map_engine_output(task_id: &str, output: &Value) -> Event {
                     .as_str()
                     .unwrap_or("")
                     .to_string(),
-                success: !content.contains("\"error\""),
+                success: serde_json::from_str::<serde_json::Value>(&content)
+                    .map(|v| v.get("error").is_none())
+                    .unwrap_or(true),
                 output: content,
                 metadata: Default::default(),
             },
@@ -96,6 +98,7 @@ pub fn map_task_status(task_id: &str, prompt: &str, status: &str) -> Event {
     Event::TaskCompleted(task)
 }
 
+#[allow(dead_code)]
 pub fn assistant_message_event(task_id: &str, content: &str) -> Event {
     Event::MessageAdded {
         task_id: task_id.to_string(),

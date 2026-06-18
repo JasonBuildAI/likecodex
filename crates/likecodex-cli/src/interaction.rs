@@ -27,6 +27,7 @@ pub fn confirm(question: &str, default: bool) -> Result<bool> {
 }
 
 /// Prompt the user to choose one of the provided options by number.
+#[allow(dead_code)]
 pub fn choose(question: &str, options: &[&str]) -> Result<usize> {
     println!("{}", question);
     for (i, option) in options.iter().enumerate() {

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from likecodex_engine.context.manager import ContextManager
 from likecodex_engine.llm.base import Message
 
 
@@ -178,8 +179,6 @@ class SessionStore:
 
     def restore_context_manager(self, session_id: str) -> ContextManager | None:
         """Rebuild a ContextManager with stable SYSTEM prefix from session events."""
-        from likecodex_engine.context.manager import ContextManager
-
         restored = self.rebuild_context(session_id)
         if not restored:
             return None

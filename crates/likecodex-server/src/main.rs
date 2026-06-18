@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::{
     extract::{Query, State},
     http::{header, HeaderMap, StatusCode},
@@ -18,6 +18,7 @@ use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
+use subtle::ConstantTimeEq;
 use tracing::{info, warn};
 
 mod engine_bridge;
@@ -63,7 +64,7 @@ fn authorize_execute(headers: &HeaderMap, config: &Config) -> Result<(), (Status
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let token = auth.strip_prefix("Bearer ").unwrap_or("");
-    if token == expected {
+    if token.as_bytes().ct_eq(expected.as_bytes()).into() {
         Ok(())
     } else {
         Err((StatusCode::UNAUTHORIZED, "invalid or missing API token".to_string()))
@@ -81,7 +82,7 @@ fn resolve_working_dir(requested: Option<String>) -> Result<PathBuf, (StatusCode
         .map_err(|_| (StatusCode::BAD_REQUEST, "invalid working directory".to_string()))?;
     let cwd_canonical = cwd
         .canonicalize()
-        .unwrap_or(cwd);
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "failed to canonicalize server cwd".to_string()))?;
     if !canonical.starts_with(&cwd_canonical) {
         return Err((
             StatusCode::FORBIDDEN,
@@ -285,59 +286,64 @@ async fn chat_stream(
     let bridge = state.engine_bridge.clone();
     let bus = state.event_bus.clone();
 
-    let initial = match bridge.chat_stream(&req.prompt).await {
-        Ok(stream) => Some(stream),
+    let initial: (Option<EngineStream>, String) = match bridge.chat_stream(&req.prompt).await {
+        Ok(stream) => (Some(stream), String::new()),
         Err(e) => {
             let _ = bus.emit(Event::Error {
                 task_id: Some(task_id.clone()),
                 message: e.to_string(),
             });
-            None
+            (None, String::new())
         }
     };
 
-    let stream = futures::stream::unfold(initial, move |opt| {
+    let stream = futures::stream::unfold(initial, move |(mut opt, mut buffer)| {
         let bus = bus.clone();
         let task_id = task_id.clone();
         async move {
-            match opt {
-                None => None,
-                Some(mut stream) => match stream.next().await {
-                    None => None,
-                    Some(Ok(chunk)) => {
-                        for line in chunk.lines() {
-                            let line = line.trim();
-                            if let Some(data) = line.strip_prefix("data: ") {
-                                if data != "[DONE]" {
-                                    if let Ok(output) = serde_json::from_str::<serde_json::Value>(data)
-                                    {
-                                        let event = map_engine_output(&task_id, &output);
-                                        let _ = bus.emit(event.clone()).ok();
-                                        let payload =
-                                            serde_json::to_string(&event).unwrap_or_default();
-                                        return Some((
-                                            Ok::<_, std::convert::Infallible>(
-                                                SseEvent::default().data(payload),
-                                            ),
-                                            Some(stream),
-                                        ));
-                                    }
-                                }
-                            }
+            loop {
+                if let Some(nl) = buffer.find('\n') {
+                    let line = buffer[..nl].trim().to_string();
+                    let rest = buffer[nl + 1..].to_string();
+                    buffer = rest;
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        if data == "[DONE]" {
+                            return None;
                         }
-                        Some((
-                            Ok(SseEvent::default().data(chunk)),
-                            Some(stream),
-                        ))
+                        if let Ok(output) = serde_json::from_str::<serde_json::Value>(data) {
+                            let event = map_engine_output(&task_id, &output);
+                            let _ = bus.emit(event.clone()).ok();
+                            let payload = serde_json::to_string(&event).unwrap_or_default();
+                            return Some((
+                                Ok::<_, std::convert::Infallible>(
+                                    SseEvent::default().data(payload),
+                                ),
+                                (opt, buffer),
+                            ));
+                        }
                     }
-                    Some(Err(e)) => {
-                        let _ = bus.emit(Event::Error {
-                            task_id: Some(task_id.clone()),
-                            message: e.to_string(),
-                        });
-                        Some((Ok(SseEvent::default().data(e.to_string())), Some(stream)))
-                    }
-                },
+                    continue;
+                }
+
+                match opt.as_mut() {
+                    None => return None,
+                    Some(stream) => match stream.next().await {
+                        None => return None,
+                        Some(Ok(chunk)) => {
+                            buffer.push_str(&chunk);
+                        }
+                        Some(Err(e)) => {
+                            let _ = bus.emit(Event::Error {
+                                task_id: Some(task_id.clone()),
+                                message: e.to_string(),
+                            });
+                            return Some((
+                                Ok(SseEvent::default().data(e.to_string())),
+                                (opt, buffer),
+                            ));
+                        }
+                    },
+                }
             }
         }
     })
@@ -349,15 +355,19 @@ async fn chat_stream(
 type BoxStream =
     Pin<Box<dyn tokio_stream::Stream<Item = Result<SseEvent, std::convert::Infallible>> + Send>>;
 
+type EngineStream = Pin<Box<dyn futures::Stream<Item = Result<String, anyhow::Error>> + Send>>;
+
 async fn events_stream(State(state): State<Arc<AppState>>) -> Sse<BoxStream> {
     let receiver = state.event_bus.subscribe();
     let stream = BroadcastStream::new(receiver)
-        .filter(|event| futures::future::ready(event.is_ok()))
-        .map(|event| {
-            let e = event.unwrap();
-            Ok::<_, std::convert::Infallible>(
-                SseEvent::default().data(serde_json::to_string(&e).unwrap_or_default()),
-            )
+        .filter_map(|event| {
+            let payload = event
+                .ok()
+                .and_then(|e| serde_json::to_string(&e).ok())
+                .unwrap_or_default();
+            futures::future::ready(Some(Ok::<_, std::convert::Infallible>(
+                SseEvent::default().data(payload),
+            )))
         })
         .boxed();
     Sse::new(stream)

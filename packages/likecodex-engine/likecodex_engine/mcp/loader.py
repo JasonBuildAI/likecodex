@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -47,22 +48,21 @@ async def register_mcp_tools(
             if not tool_name:
                 continue
             registered_name = f"mcp_{server_name}_{tool_name}"
-
-            async def handler(
-                _client: McpClient = client,
-                _tool_name: str = tool_name,
-                **kwargs: Any,
-            ) -> str:
-                result = await _client.call_tool(_tool_name, kwargs)
-                return json.dumps(result)
-
             registry.register(
                 registered_name,
                 {
                     "description": tool.get("description", f"MCP tool {tool_name}"),
                     "parameters": tool.get("inputSchema", {"type": "object", "properties": {}}),
                 },
-                handler,
+                _make_mcp_handler(client, tool_name),
             )
             registered.append(registered_name)
     return registered
+
+
+def _make_mcp_handler(client: McpClient, tool_name: str) -> Callable[..., Awaitable[str]]:
+    async def handler(**kwargs: Any) -> str:
+        result = await client.call_tool(tool_name, kwargs)
+        return json.dumps(result)
+
+    return handler

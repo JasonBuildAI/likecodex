@@ -24,6 +24,8 @@ from likecodex_engine.persistence.session import SessionEvent, SessionStore
 from likecodex_engine.skills.loader import discover_skills, skills_prefix_block
 from likecodex_engine.tools.registry import ToolRegistry
 
+CONFIG_KEY: web.AppKey[dict] = web.AppKey("config")
+
 _ACTIVE_LOOPS: dict[str, AgentLoop] = {}
 _SESSION_STORE: SessionStore | None = None
 _CONTEXT_CACHE = SessionContextCache()
@@ -185,7 +187,7 @@ def _make_agent(
         agent_factory=agent_factory,
         no_tools=no_tools,
     )
-    _ACTIVE_LOOPS[sid] = loop
+    _ACTIVE_LOOPS[str(uuid.uuid4())] = loop
     return loop
 
 
@@ -199,7 +201,7 @@ async def chat(request: web.Request) -> web.StreamResponse:
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
     no_tools = bool(data.get("no_tools", False))
-    cfg = _resolve_config(request.app["config"])
+    cfg = _resolve_config(request.app[CONFIG_KEY])
     working_dir = cfg.get("working_dir", ".")
 
     sid = session_id or session_id_for_dir(working_dir)
@@ -225,7 +227,8 @@ async def chat(request: web.Request) -> web.StreamResponse:
         payload = json.dumps(_serialize_response(resp))
         await response.write(f"data: {payload}\n\n".encode())
     cache_stats = global_cache_metrics().to_dict()
-    await response.write(f"data: {json.dumps({'type': 'cache_stats', 'content': '', 'cache': cache_stats})}\n\n".encode())
+    cache_payload = json.dumps({"type": "cache_stats", "content": "", "cache": cache_stats})
+    await response.write(f"data: {cache_payload}\n\n".encode())
     await response.write(b"data: [DONE]\n\n")
     return response
 
@@ -234,7 +237,7 @@ async def run_task(request: web.Request) -> web.Response:
     data = await request.json()
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
-    cfg = _resolve_config(request.app["config"])
+    cfg = _resolve_config(request.app[CONFIG_KEY])
     working_dir = cfg.get("working_dir", ".")
 
     sid = session_id or session_id_for_dir(working_dir)
@@ -254,7 +257,7 @@ async def run_task(request: web.Request) -> web.Response:
 async def plan_task(request: web.Request) -> web.Response:
     data = await request.json()
     prompt = data.get("prompt", "")
-    cfg = _resolve_config(request.app["config"])
+    cfg = _resolve_config(request.app[CONFIG_KEY])
 
     llm = create_provider(
         cfg.get("provider", "deepseek"),
@@ -287,7 +290,7 @@ async def create_task(request: web.Request) -> web.Response:
     data = await request.json()
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
-    cfg = _resolve_config(request.app["config"])
+    cfg = _resolve_config(request.app[CONFIG_KEY])
     task_id = session_id or session_id_for_dir(cfg.get("working_dir", "."))
 
     store = _session_store()
@@ -299,7 +302,6 @@ async def create_task(request: web.Request) -> web.Response:
         await _ensure_mcp(cfg, loop.tools)
         try:
             async for resp in loop.run(prompt):
-                payload = _serialize_response(resp)
                 metadata = {"model": resp.model}
                 if resp.usage:
                     metadata["usage"] = resp.usage
@@ -319,7 +321,10 @@ async def create_task(request: web.Request) -> web.Response:
                 SessionEvent(event_type="error", content=str(e), metadata={}),
             )
         finally:
-            _ACTIVE_LOOPS.pop(task_id, None)
+            for loop_id, loop in list(_ACTIVE_LOOPS.items()):
+                if loop.session_id == task_id:
+                    _ACTIVE_LOOPS.pop(loop_id, None)
+                    break
 
     asyncio.create_task(run_in_background())
 
@@ -399,7 +404,7 @@ async def get_session_events(request: web.Request) -> web.Response:
 
 def create_app(config: dict | None = None) -> web.Application:
     app = web.Application()
-    app["config"] = config or {}
+    app[CONFIG_KEY] = config or {}
     app.router.add_get("/health", health)
     app.router.add_get("/metrics", metrics)
     app.router.add_post("/chat", chat)

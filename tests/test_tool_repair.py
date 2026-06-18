@@ -7,7 +7,6 @@ from likecodex_engine.llm.tool_repair import (
     flatten_schema,
     merge_tool_calls,
     repair_json,
-    repair_tool_calls,
     scavenge_tool_calls_from_text,
 )
 

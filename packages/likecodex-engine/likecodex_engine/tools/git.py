@@ -99,5 +99,5 @@ class GitTools:
     async def git_commit(self, message: str, all: bool = False) -> str:
         if all:
             await self._run(["add", "-A"])
-        result = await self._run(["commit", "-m", message])
+        result = await self._run(["commit", "-m", message, "--"])
         return json.dumps(result)

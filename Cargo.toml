@@ -31,6 +31,7 @@ futures = "0.3"
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
+subtle = "2"
 docker-api = "0.14"
 ignore = "0.4"
 tree-sitter = "0.24"

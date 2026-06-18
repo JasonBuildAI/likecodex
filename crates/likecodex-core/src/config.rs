@@ -95,16 +95,10 @@ impl LlmConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeepSeekConfig {
     #[serde(default = "default_false")]
     pub thinking: bool,
-}
-
-impl Default for DeepSeekConfig {
-    fn default() -> Self {
-        Self { thinking: false }
-    }
 }
 
 fn default_max_tokens() -> u32 {

@@ -156,10 +156,11 @@ class CacheFirstContext:
         out: list[Message] = [Message(role=Role.SYSTEM, content=self.prefix.combined)]
         for message in self._log:
             if message.role == Role.ASSISTANT and message.tool_calls:
-                if message.raw_tool_calls:
-                    tool_calls = json.loads(message.raw_tool_calls)
-                else:
-                    tool_calls = message.tool_calls
+                tool_calls = (
+                    json.loads(message.raw_tool_calls)
+                    if message.raw_tool_calls
+                    else message.tool_calls
+                )
                 out.append(
                     Message(
                         role=message.role,
