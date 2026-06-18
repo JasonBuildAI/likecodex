@@ -1,0 +1,25 @@
+name: Bug Report
+description: Report a bug in LikeCodex
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: LikeCodex version / commit
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment (OS, Rust, Python, Node versions)
