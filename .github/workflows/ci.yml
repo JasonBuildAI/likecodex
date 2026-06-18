@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt -- --check
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build workspace
+        run: cargo build --workspace
+      - name: Run Rust tests
+        run: cargo test --workspace
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - name: Install Python dependencies
+        run: uv sync --all-packages
+      - name: Lint with ruff
+        run: uv run ruff check packages/likecodex-engine tests
+      - name: Format check
+        run: uv run ruff format --check packages/likecodex-engine tests
+      - name: Run Python tests
+        run: uv run pytest packages/likecodex-engine/tests tests -v
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        working-directory: web
+        run: npm install --legacy-peer-deps
+      - name: Lint web
+        working-directory: web
+        run: npm run lint
+      - name: Type check web
+        working-directory: web
+        run: npm run type-check
+      - name: Test web
+        working-directory: web
+        run: npm run test
+      - name: Build web
+        working-directory: web
+        run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sandbox image
+        run: docker build -t likecodex/sandbox:latest docker/sandbox
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: [python, rust]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install deps
+        run: uv sync --all-packages
+      - name: Build server
+        run: cargo build -p likecodex-server
+      - name: Start engine
+        run: |
+          uv run python -m likecodex_engine.server &
+          sleep 2
+          curl -sf http://127.0.0.1:9090/health
