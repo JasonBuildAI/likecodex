@@ -1,6 +1,6 @@
 # LikeCodex Architecture
 
-LikeCodex is a Rust + Python hybrid coding agent inspired by OpenAI Codex.
+LikeCodex is a Rust + Python hybrid coding agent powered by **DeepSeek V4**, optimized for context cache hit rate.
 
 ## Layers
 
@@ -17,7 +17,7 @@ Tools            Python tools (filesystem, shell, git, code search, review, MCP)
                                    |
 Execution        Rust executors (local, Docker sandbox)
                                    |
-Models           Python LLM clients (OpenAI, Anthropic, mock)
+Models           DeepSeek V4 (Flash/Pro) via OpenAI-compatible API
                                    |
 Persistence      SQLite sessions, JSONL events, vector memory
 ```
@@ -38,6 +38,18 @@ Persistence      SQLite sessions, JSONL events, vector memory
 - Rust CLI/Web talks to Python engine over HTTP (`/run`, `/chat`, `/tasks`, `/plan`).
 - Streaming responses use Server-Sent Events (SSE).
 - All agent outputs are normalized as events so CLI and Web share the same experience.
+
+## Cache Architecture
+
+DeepSeek context caching requires a **byte-stable prefix** from token 0:
+
+1. Single frozen `system.md` SYSTEM message (version `PROMPT_VERSION=1`)
+2. Sorted tool schemas passed as API `tools` parameter
+3. Conversation history appended after the prefix
+4. Dynamic memory/sub-agent data as trailing `[Context]` USER messages
+5. Session reuse preserves prefix across HTTP requests with the same `session_id`
+
+Metrics: `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` aggregated at `GET /metrics`.
 
 ## Security
 

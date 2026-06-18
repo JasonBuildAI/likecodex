@@ -29,7 +29,8 @@ async def register_mcp_tools(
     servers.update(config.get("mcp_servers", {}))
 
     registered: list[str] = []
-    for server_name, server_cfg in servers.items():
+    for server_name in sorted(servers.keys()):
+        server_cfg = servers[server_name]
         if not server_cfg.get("enabled", True):
             continue
         command = server_cfg.get("command")

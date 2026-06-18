@@ -137,6 +137,15 @@ export async function fetchConfig(): Promise<Record<string, unknown>> {
   return resp.json();
 }
 
+export async function fetchCacheMetrics(): Promise<{
+  hit_rate?: number;
+  recent_hit_rate?: number;
+}> {
+  const resp = await fetch(`${API_BASE}/metrics`);
+  if (!resp.ok) return {};
+  return resp.json();
+}
+
 export async function fetchSessions(): Promise<SessionSummary[]> {
   const resp = await fetch(`${API_BASE}/sessions`);
   if (!resp.ok) return [];

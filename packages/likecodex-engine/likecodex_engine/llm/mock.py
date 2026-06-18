@@ -11,11 +11,12 @@ from likecodex_engine.llm.base import LLMProvider, LLMResponse, Message, ToolCal
 class MockProvider(LLMProvider):
     """A deterministic LLM provider that returns scripted responses."""
 
-    def __init__(self, responses: list[LLMResponse] | None = None) -> None:
+    def __init__(self, responses: list[LLMResponse] | None = None, simulate_cache: bool = False) -> None:
         super().__init__("mock")
         self.responses = responses or []
         self.calls: list[list[Message]] = []
         self.index = 0
+        self.simulate_cache = simulate_cache
 
     async def complete(
         self,
@@ -28,8 +29,23 @@ class MockProvider(LLMProvider):
         if self.index < len(self.responses):
             resp = self.responses[self.index]
             self.index += 1
+            if self.simulate_cache and len(self.calls) > 1:
+                usage = dict(resp.usage or {})
+                usage.setdefault("prompt_cache_hit_tokens", 800)
+                usage.setdefault("prompt_cache_miss_tokens", 50)
+                usage.setdefault("prompt_tokens", 850)
+                usage.setdefault("completion_tokens", 20)
+                resp = resp.model_copy(update={"usage": usage})
             return resp
-        return LLMResponse(content="No more scripted responses.")
+        usage = None
+        if self.simulate_cache and len(self.calls) > 1:
+            usage = {
+                "prompt_cache_hit_tokens": 800,
+                "prompt_cache_miss_tokens": 50,
+                "prompt_tokens": 850,
+                "completion_tokens": 10,
+            }
+        return LLMResponse(content="No more scripted responses.", usage=usage)
 
     async def stream(
         self,
@@ -72,4 +88,16 @@ class MockProvider(LLMProvider):
                 ),
                 LLMResponse(content="Created hello.py and ran it successfully."),
             ]
+        )
+
+    @classmethod
+    def for_cache_test(cls) -> MockProvider:
+        """Return a mock that finishes in one turn for cache prefix tests."""
+        return cls(
+            simulate_cache=True,
+            responses=[
+                LLMResponse(content="First response."),
+                LLMResponse(content="Second response with cache hit."),
+                LLMResponse(content="Third response with cache hit."),
+            ],
         )

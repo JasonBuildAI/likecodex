@@ -129,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/config", get(get_config))
+        .route("/metrics", get(get_metrics))
         .route("/tasks", post(create_task))
         .route("/chat", post(chat_stream))
         .route("/execute", post(execute_command))
@@ -156,6 +157,15 @@ async fn health() -> &'static str {
 
 async fn get_config(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(serde_json::to_value(state.config.redacted()).unwrap_or_default())
+}
+
+async fn get_metrics(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    state
+        .engine_bridge
+        .get("/metrics")
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))
 }
 
 async fn execute_command(

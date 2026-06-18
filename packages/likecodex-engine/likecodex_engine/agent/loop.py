@@ -12,8 +12,9 @@ from typing import Any
 import aiohttp
 
 from likecodex_engine.agent.planner import Plan, Planner, PlanStep, StepStatus
-from likecodex_engine.context.manager import ContextManager
+from likecodex_engine.context.manager import ContextManager, stable_json_dumps, stable_tool_calls_json
 from likecodex_engine.llm.base import LLMProvider, LLMResponse
+from likecodex_engine.llm.cache_metrics import global_cache_metrics
 from likecodex_engine.memory.vector import VectorMemory
 from likecodex_engine.permissions.classifier import RiskClassifier, RiskLevel
 from likecodex_engine.permissions.evaluator import (
@@ -62,7 +63,7 @@ class AgentLoop:
             memories = self.memory.search(prompt, top_k=3)
             if memories:
                 snippet = "\n".join(f"- {m.get('text', '')}" for m in memories)
-                self.context.add_system_note(f"Relevant memory:\n{snippet}")
+                self.context.add_context_block(f"Relevant memory:\n{snippet}")
 
         self.context.add_user_message(prompt)
 
@@ -92,7 +93,7 @@ class AgentLoop:
                 orchestrator = SubAgentOrchestrator(self.agent_factory)
                 results = await orchestrator.run_parallel([(step.id, step.description) for step in parallel])
                 summary = SubAgentOrchestrator.summarize(results)
-                self.context.add_system_note(f"Sub-agent results:\n{summary}")
+                self.context.add_context_block(f"Sub-agent results:\n{summary}")
                 yield self._emit(LLMResponse(content=summary, model="subagent", event_type="subagent"))
                 for step in parallel:
                     step.status = StepStatus.COMPLETED
@@ -147,22 +148,28 @@ class AgentLoop:
                 temperature=0.0,
                 max_tokens=4096,
             )
+            global_cache_metrics().record(response.usage)
 
-            self.context.add_assistant_message(
-                content=response.content,
-                tool_calls=[
+            raw_tool_calls: str | None = None
+            tool_call_payload: list[dict[str, Any]] | None = None
+            if response.tool_calls:
+                tool_call_payload = [
                     {
                         "id": tc.id,
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": json.dumps(tc.arguments),
+                            "arguments": stable_json_dumps(tc.arguments),
                         },
                     }
                     for tc in response.tool_calls
                 ]
-                if response.tool_calls
-                else None,
+                raw_tool_calls = stable_tool_calls_json(tool_call_payload)
+
+            self.context.add_assistant_message(
+                content=response.content,
+                tool_calls=tool_call_payload,
+                raw_tool_calls=raw_tool_calls,
             )
 
             yield self._emit(
@@ -261,6 +268,7 @@ class AgentLoop:
                 tool_calls=[],
                 model="tool-result",
                 event_type="tool_result",
+                metadata={"tool_call_id": tool_call.id},
             )
         )
 

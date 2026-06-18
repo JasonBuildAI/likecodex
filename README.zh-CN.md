@@ -6,7 +6,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![Node.js 20+](https://img.shields.io/badge/node.js-20+-green.svg)](https://nodejs.org/)
 
-**LikeCodex** 是一个面向生产环境的开源编程 Agent，灵感来自 [OpenAI Codex](https://openai.com/index/introducing-codex/)。项目采用 **Rust 控制平面**（CLI、HTTP API、沙箱执行）+ **Python Agent 引擎**（LLM 循环、工具调用、规划、记忆）+ **Next.js Web 界面** 的混合架构，在终端、TUI 和浏览器中提供统一体验。
+**LikeCodex** 是一个由 **DeepSeek V4** 驱动的开源编程 Agent，采用 Rust 控制平面 + Python Agent 引擎 + Next.js Web 界面，并针对 **DeepSeek 上下文缓存命中率** 做了专门优化，以降低多轮工具循环的 API 成本。
 
 **[English README](README.md)**
 
@@ -73,15 +73,16 @@
 - **会话持久化** — SQLite 会话 + JSONL 事件历史
 - **向量记忆** — 可选长期记忆（`.likecodex/memory.jsonl`）
 
-### 支持的模型
+### 模型（仅 DeepSeek V4）
 
-| 提供商 | 配置值 | 说明 |
-|--------|--------|------|
-| OpenAI | `provider = "openai"` | GPT-4o 及兼容模型 |
-| Anthropic | `provider = "anthropic"` | Claude 系列 |
-| Mock | `provider = "mock"` | 测试用确定性响应 |
+| 模型 | 配置值 | 说明 |
+|------|--------|------|
+| V4 Flash | `deepseek-v4-flash` | 默认，速度快、成本低、缓存最省 |
+| V4 Pro | `deepseek-v4-pro` | 复杂编程任务，质量更高 |
 
-API Key 可从 `config.toml` 或环境变量 `{PROVIDER}_API_KEY` 读取。
+API Key：`DEEPSEEK_API_KEY` 或 `LIKECODEX_LLM_API_KEY`。Base URL：`https://api.deepseek.com`。
+
+Thinking 模式：`[deepseek] thinking = true` 或 `LIKECODEX_DEEPSEEK_THINKING=true`。
 
 ---
 
@@ -188,11 +189,13 @@ cp .env.example .env
 
 ```toml
 [llm]
-provider = "openai"
-model = "gpt-4o"
-api_key = "sk-..."          # 或在 .env 中设置 OPENAI_API_KEY
-temperature = 0.0
-max_tokens = 4096
+provider = "deepseek"
+model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
+api_key = "..."               # 或在 .env 中设置 DEEPSEEK_API_KEY
+base_url = "https://api.deepseek.com"
+
+[deepseek]
+thinking = false
 
 [approval]
 mode = "auto"               # read-only | auto | full-access | sandbox-required
@@ -390,9 +393,11 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/root"]
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `LIKECODEX_LLM_PROVIDER` | `openai` | LLM 提供商 |
-| `LIKECODEX_LLM_MODEL` | `gpt-4o` | 模型名称 |
-| `LIKECODEX_LLM_API_KEY` | — | API Key（也可用 `OPENAI_API_KEY`） |
+| `LIKECODEX_LLM_PROVIDER` | `deepseek` | LLM 提供商（仅 DeepSeek） |
+| `LIKECODEX_LLM_MODEL` | `deepseek-v4-flash` | 模型名称 |
+| `DEEPSEEK_API_KEY` | — | DeepSeek API Key |
+| `LIKECODEX_LLM_BASE_URL` | `https://api.deepseek.com` | API 地址 |
+| `LIKECODEX_DEEPSEEK_THINKING` | `false` | 启用 V4 thinking 模式 |
 | `LIKECODEX_ENGINE_URL` | `http://127.0.0.1:9090` | Python 引擎地址 |
 | `LIKECODEX_ENGINE_HOST` | `127.0.0.1` | 引擎绑定主机 |
 | `LIKECODEX_ENGINE_PORT` | `9090` | 引擎绑定端口 |
@@ -408,7 +413,28 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/root"]
 
 ---
 
-## 安全与审批模式
+## DeepSeek 缓存优化
+
+LikeCodex 针对 **DeepSeek 自动上下文缓存**（从第 0 个 token 起前缀字节级一致）做了专门设计：
+
+| 策略 | 实现 |
+|------|------|
+| 静态 SYSTEM 提示词 | 版本化 [`system.md`](packages/likecodex-engine/likecodex_engine/prompts/system.md)（>1024 tokens） |
+| 动态内容置后 | 记忆/子 Agent 摘要以 `[Context]` USER 消息追加 |
+| 会话连续性 | 同一 `session_id` 复用 `ContextManager` |
+| 确定性 JSON | 工具 schema 与 tool_calls 按 key 排序 |
+| 尾部裁剪 | 压缩历史时不修改 SYSTEM 前缀 |
+
+监控缓存命中率：
+
+```bash
+curl http://127.0.0.1:9090/metrics
+curl http://127.0.0.1:8080/metrics
+```
+
+Web UI 顶栏显示实时 cache hit %。
+
+---
 
 LikeCodex 采用多层防护：
 

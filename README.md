@@ -6,7 +6,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![Node.js 20+](https://img.shields.io/badge/node.js-20+-green.svg)](https://nodejs.org/)
 
-**LikeCodex** is a production-oriented, open-source coding agent inspired by [OpenAI Codex](https://openai.com/index/introducing-codex/). It combines a **Rust control plane** (CLI, HTTP API, sandbox execution) with a **Python agent engine** (LLM loop, tools, planning, memory) and a **Next.js web UI** — giving you terminal, TUI, and browser interfaces over the same event stream.
+**LikeCodex** is a DeepSeek V4-powered, open-source coding agent. It combines a **Rust control plane** (CLI, HTTP API, sandbox execution) with a **Python agent engine** (LLM loop, tools, planning, memory) and a **Next.js web UI** — optimized for **DeepSeek context cache hit rate** to minimize API cost on multi-turn tool loops.
 
 **[中文文档 README.zh-CN.md](README.zh-CN.md)**
 
@@ -73,15 +73,16 @@ This hybrid design gives you **fast, safe execution** in Rust and **rapid agent 
 - **Session persistence** — SQLite-backed sessions with JSONL event history
 - **Vector memory** — optional long-term memory store (`.likecodex/memory.jsonl`)
 
-### Models
+### Models (DeepSeek V4 only)
 
-| Provider | Config value | Notes |
-|----------|--------------|-------|
-| OpenAI | `provider = "openai"` | GPT-4o and compatible models |
-| Anthropic | `provider = "anthropic"` | Claude models |
-| Mock | `provider = "mock"` | Deterministic responses for tests |
+| Model | Config value | Notes |
+|-------|--------------|-------|
+| V4 Flash | `deepseek-v4-flash` | Default — fast, lowest cost, best cache economics |
+| V4 Pro | `deepseek-v4-pro` | Higher quality for complex coding tasks |
 
-API keys resolve from `config.toml` or `{PROVIDER}_API_KEY` environment variables.
+API key: `DEEPSEEK_API_KEY` or `LIKECODEX_LLM_API_KEY`. Base URL: `https://api.deepseek.com`.
+
+Enable thinking mode for hard reasoning: `[deepseek] thinking = true` or `LIKECODEX_DEEPSEEK_THINKING=true`.
 
 ---
 
@@ -188,14 +189,16 @@ Create user config at `~/.likecodex/config.toml` (see [Configuration](#configura
 
 ```toml
 [llm]
-provider = "openai"
-model = "gpt-4o"
-api_key = "sk-..."          # or set OPENAI_API_KEY in .env
-temperature = 0.0
-max_tokens = 4096
+provider = "deepseek"
+model = "deepseek-v4-flash"   # or deepseek-v4-pro
+api_key = "..."               # or set DEEPSEEK_API_KEY in .env
+base_url = "https://api.deepseek.com"
+
+[deepseek]
+thinking = false                # true for V4 thinking mode
 
 [approval]
-mode = "auto"               # read-only | auto | full-access | sandbox-required
+mode = "auto"
 
 [sandbox]
 enabled = true
@@ -393,9 +396,11 @@ See [.env.example](.env.example):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LIKECODEX_LLM_PROVIDER` | `openai` | LLM provider name |
-| `LIKECODEX_LLM_MODEL` | `gpt-4o` | Model identifier |
-| `LIKECODEX_LLM_API_KEY` | — | API key (also `OPENAI_API_KEY`) |
+| `LIKECODEX_LLM_PROVIDER` | `deepseek` | LLM provider (DeepSeek only) |
+| `LIKECODEX_LLM_MODEL` | `deepseek-v4-flash` | Model identifier |
+| `DEEPSEEK_API_KEY` | — | DeepSeek API key |
+| `LIKECODEX_LLM_BASE_URL` | `https://api.deepseek.com` | API base URL |
+| `LIKECODEX_DEEPSEEK_THINKING` | `false` | Enable V4 thinking mode |
 | `LIKECODEX_ENGINE_URL` | `http://127.0.0.1:9090` | Python engine base URL |
 | `LIKECODEX_ENGINE_HOST` | `127.0.0.1` | Engine bind host |
 | `LIKECODEX_ENGINE_PORT` | `9090` | Engine bind port |
@@ -411,7 +416,28 @@ See [.env.example](.env.example):
 
 ---
 
-## Security & Approval Modes
+## DeepSeek Cache Optimization
+
+LikeCodex is designed to maximize **DeepSeek automatic context caching** (prefix must be byte-identical from token 0):
+
+| Technique | Implementation |
+|-----------|----------------|
+| Static SYSTEM prompt | Versioned [`system.md`](packages/likecodex-engine/likecodex_engine/prompts/system.md) (>1024 tokens) |
+| Dynamic context at end | Memory/sub-agent notes as `[Context]` USER messages |
+| Session continuity | Reuse `ContextManager` per `session_id` across turns |
+| Deterministic tool JSON | Sorted keys in tool schemas and assistant `tool_calls` |
+| Tail-only compaction | Never modify the SYSTEM prefix when trimming history |
+
+Monitor cache performance:
+
+```bash
+curl http://127.0.0.1:9090/metrics
+curl http://127.0.0.1:8080/metrics   # via Rust proxy
+```
+
+Web UI shows live cache hit % in the header.
+
+---
 
 LikeCodex applies defense in depth:
 

@@ -58,16 +58,9 @@ class ToolRegistry:
         self._handlers[name] = handler
 
     def to_openai_schema(self) -> list[dict[str, Any]]:
-        return [{"type": "function", "function": {"name": name, **schema}} for name, schema in self._tools.items()]
-
-    def to_anthropic_schema(self) -> list[dict[str, Any]]:
         return [
-            {
-                "name": name,
-                "description": schema.get("description", ""),
-                "input_schema": schema.get("parameters", {"type": "object"}),
-            }
-            for name, schema in self._tools.items()
+            {"type": "function", "function": {"name": name, **schema}}
+            for name, schema in sorted(self._tools.items(), key=lambda item: item[0])
         ]
 
     async def execute(self, name: str, arguments: dict[str, Any]) -> str:

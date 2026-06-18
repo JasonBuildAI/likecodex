@@ -8,6 +8,8 @@ pub struct Config {
     #[serde(default)]
     pub llm: LlmConfig,
     #[serde(default)]
+    pub deepseek: DeepSeekConfig,
+    #[serde(default)]
     pub approval: ApprovalConfig,
     #[serde(default)]
     pub sandbox: SandboxConfig,
@@ -64,10 +66,10 @@ pub struct LlmConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
-            provider: "openai".to_string(),
-            model: "gpt-4o".to_string(),
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-flash".to_string(),
             api_key: None,
-            base_url: None,
+            base_url: Some("https://api.deepseek.com".to_string()),
             temperature: 0.0,
             max_tokens: default_max_tokens(),
         }
@@ -77,9 +79,29 @@ impl Default for LlmConfig {
 impl LlmConfig {
     fn resolve_api_key(&mut self) {
         if self.api_key.is_none() {
+            if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
+                self.api_key = Some(key);
+                return;
+            }
+            if let Ok(key) = std::env::var("LIKECODEX_LLM_API_KEY") {
+                self.api_key = Some(key);
+                return;
+            }
             let env_var = format!("{}_API_KEY", self.provider.to_uppercase());
             self.api_key = std::env::var(&env_var).ok();
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeepSeekConfig {
+    #[serde(default = "default_false")]
+    pub thinking: bool,
+}
+
+impl Default for DeepSeekConfig {
+    fn default() -> Self {
+        Self { thinking: false }
     }
 }
 

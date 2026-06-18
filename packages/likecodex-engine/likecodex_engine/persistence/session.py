@@ -155,14 +155,34 @@ class SessionStore:
         ]
 
     def rebuild_context(self, session_id: str) -> list[Message]:
-        """Rebuild a message context from persisted assistant/user events."""
+        """Rebuild a message context from persisted assistant/user/tool events."""
         messages: list[Message] = []
         for event in self.get_events(session_id):
             if event.event_type == "user":
                 messages.append(Message(role="user", content=event.content))
             elif event.event_type == "assistant":
-                messages.append(Message(role="assistant", content=event.content))
+                tool_calls = event.metadata.get("tool_calls")
+                raw_tool_calls = event.metadata.get("raw_tool_calls")
+                messages.append(
+                    Message(
+                        role="assistant",
+                        content=event.content,
+                        tool_calls=tool_calls,
+                        raw_tool_calls=raw_tool_calls,
+                    )
+                )
             elif event.event_type == "tool_result":
                 tool_call_id = event.metadata.get("tool_call_id")
                 messages.append(Message(role="tool", content=event.content, tool_call_id=tool_call_id))
         return messages
+
+    def restore_context_manager(self, session_id: str) -> ContextManager | None:
+        """Rebuild a ContextManager with stable SYSTEM prefix from session events."""
+        from likecodex_engine.context.manager import ContextManager
+
+        restored = self.rebuild_context(session_id)
+        if not restored:
+            return None
+        manager = ContextManager()
+        manager.messages.extend(restored)
+        return manager

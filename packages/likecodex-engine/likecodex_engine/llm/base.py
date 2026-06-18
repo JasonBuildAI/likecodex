@@ -23,6 +23,7 @@ class Message(BaseModel):
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
     name: str | None = None
+    raw_tool_calls: str | None = None
 
 
 class ToolCall(BaseModel):
@@ -37,6 +38,7 @@ class LLMResponse(BaseModel):
     model: str = ""
     usage: dict[str, int] | None = None
     event_type: str = "assistant"  # assistant | tool_result | permission | error | plan
+    metadata: dict[str, Any] | None = None
 
 
 class LLMProvider(ABC):

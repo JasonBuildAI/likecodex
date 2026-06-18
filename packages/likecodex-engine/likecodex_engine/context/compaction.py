@@ -6,7 +6,7 @@ from likecodex_engine.llm.base import Message, Role
 
 
 class ContextCompactor:
-    """Compresses conversation history to fit within token limits."""
+    """Compresses conversation history while preserving the static SYSTEM prefix."""
 
     def __init__(self, max_messages: int = 100, max_tokens: int = 60000) -> None:
         self.max_messages = max_messages
@@ -21,29 +21,27 @@ class ContextCompactor:
             return messages
 
         system = messages[0] if messages[0].role == Role.SYSTEM else None
-        user_goal = next((m for m in messages if m.role == Role.USER), None)
+        body = messages[1:] if system else messages
 
-        # Keep the most recent half, plus system and original user goal.
-        keep_count = max(self.max_messages // 2, 1)
-        recent = messages[-keep_count:]
+        # Tail-only trim: drop oldest turns from the front of the body.
+        while body and (
+            len(body) + (1 if system else 0) > self.max_messages
+            or self._estimate_tokens([m for m in ([system] if system else []) + body]) > self.max_tokens
+        ):
+            body.pop(0)
+
         preserved: list[Message] = []
         if system:
             preserved.append(system)
-        if user_goal and user_goal not in recent:
-            preserved.append(user_goal)
-            preserved.append(
-                Message(
-                    role=Role.SYSTEM,
-                    content="[Intermediate conversation turns summarized or omitted due to context limits.]",
-                )
-            )
-        preserved.extend(recent)
+        preserved.extend(body)
         return preserved
 
     def _estimate_tokens(self, messages: list[Message]) -> int:
         total = 0
         for m in messages:
             total += len(m.content) // 4
-            if m.tool_calls:
+            if m.raw_tool_calls:
+                total += len(m.raw_tool_calls) // 4
+            elif m.tool_calls:
                 total += len(str(m.tool_calls)) // 4
         return total

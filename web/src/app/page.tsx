@@ -5,7 +5,7 @@ import { ChatMessages } from '@/components/Chat';
 import { DiffViewer } from '@/components/DiffViewer';
 import { PermissionModal } from '@/components/PermissionModal';
 import { TaskTimeline } from '@/components/TaskTimeline';
-import { createTask, fetchConfig, fetchSessions, subscribeEvents } from '@/lib/api';
+import { createTask, fetchCacheMetrics, fetchConfig, fetchSessions, subscribeEvents } from '@/lib/api';
 import { useAppStore } from '@/lib/store';
 
 export default function Home() {
@@ -17,6 +17,8 @@ export default function Home() {
   const pendingPermissions = useAppStore((s) => s.pendingPermissions);
   const activeDiff = useAppStore((s) => s.activeDiff);
   const config = useAppStore((s) => s.config);
+  const cacheHitRate = useAppStore((s) => s.cacheHitRate);
+  const setCacheHitRate = useAppStore((s) => s.setCacheHitRate);
   const isStreaming = useAppStore((s) => s.isStreaming);
   const addMessage = useAppStore((s) => s.addMessage);
   const appendToLastMessage = useAppStore((s) => s.appendToLastMessage);
@@ -40,7 +42,18 @@ export default function Home() {
   useEffect(() => {
     fetchConfig().then(setConfig);
     fetchSessions().then(setSessions);
-  }, [setConfig, setSessions]);
+    fetchCacheMetrics().then((metrics) => {
+      const rate = metrics.recent_hit_rate ?? metrics.hit_rate;
+      setCacheHitRate(typeof rate === 'number' ? rate : null);
+    });
+    const interval = setInterval(() => {
+      fetchCacheMetrics().then((metrics) => {
+        const rate = metrics.recent_hit_rate ?? metrics.hit_rate;
+        setCacheHitRate(typeof rate === 'number' ? rate : null);
+      });
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [setConfig, setSessions, setCacheHitRate]);
 
   useEffect(() => {
     const unsubscribe = subscribeEvents({
@@ -113,7 +126,9 @@ export default function Home() {
   };
 
   const approvalMode = (config as { approval?: { mode?: string } })?.approval?.mode || 'auto';
-  const model = (config as { llm?: { model?: string } })?.llm?.model || 'unknown';
+  const model = (config as { llm?: { model?: string } })?.llm?.model || 'deepseek-v4-flash';
+  const cacheLabel =
+    cacheHitRate !== null ? `${Math.round(cacheHitRate * 100)}% cache` : 'cache —';
 
   return (
     <main className="flex h-screen flex-col">
@@ -121,6 +136,7 @@ export default function Home() {
         <h1 className="text-xl font-semibold">LikeCodex</h1>
         <div className="text-sm text-muted flex gap-4">
           <span>{model}</span>
+          <span>{cacheLabel}</span>
           <span>{approvalMode}</span>
         </div>
       </header>
