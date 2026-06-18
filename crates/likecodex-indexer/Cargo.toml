@@ -1,0 +1,14 @@
+[package]
+name = "likecodex-indexer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+likecodex-core = { path = "../likecodex-core" }
+ignore = { workspace = true }
+tree-sitter = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
