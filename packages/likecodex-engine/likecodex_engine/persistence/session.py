@@ -184,5 +184,5 @@ class SessionStore:
         if not restored:
             return None
         manager = ContextManager()
-        manager.messages.extend(restored)
+        manager._log = restored
         return manager

@@ -25,15 +25,39 @@ class VectorMemory:
         except Exception:
             self._collection = None
 
-    def add(self, text: str, metadata: dict[str, Any] | None = None) -> None:
-        entry = {"text": text, "metadata": metadata or {}}
+    def add(self, text: str, metadata: dict[str, Any] | None = None, memory_type: str = "user") -> None:
+        meta = {"type": memory_type, **(metadata or {})}
+        entry = {"text": text, "metadata": meta}
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
         if self._collection is not None:
             doc_id = str(abs(hash(text + str(metadata))))
-            self._collection.upsert(ids=[doc_id], documents=[text], metadatas=[metadata or {}])
+            self._collection.upsert(ids=[doc_id], documents=[text], metadatas=[meta])
 
-    def search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+    def search(self, query: str, top_k: int = 5, memory_type: str | None = None) -> list[dict[str, Any]]:
+        results = self._search_impl(query, top_k)
+        if memory_type:
+            results = [r for r in results if r.get("metadata", {}).get("type") == memory_type]
+        return results[:top_k]
+
+    def list_by_type(self, memory_type: str, limit: int = 10) -> list[dict[str, Any]]:
+        if not self.path.exists():
+            return []
+        items: list[dict[str, Any]] = []
+        with self.path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("metadata", {}).get("type") == memory_type:
+                    items.append(entry)
+        return items[:limit]
+
+    def _search_impl(self, query: str, top_k: int) -> list[dict[str, Any]]:
         if self._collection is not None:
             try:
                 result = self._collection.query(query_texts=[query], n_results=top_k)

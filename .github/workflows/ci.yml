@@ -38,6 +38,16 @@ jobs:
       - name: Run Python tests
         run: uv run pytest packages/likecodex-engine/tests tests -v
 
+  cache-benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - name: Install Python dependencies
+        run: uv sync --all-packages
+      - name: Cache hit rate benchmark
+        run: uv run python benchmarks/cache/run.py --turns 10 --simulate-cache
+
   web:
     runs-on: ubuntu-latest
     steps:

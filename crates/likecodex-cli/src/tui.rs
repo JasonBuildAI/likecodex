@@ -16,6 +16,8 @@ use ratatui::{
 use reqwest::Client;
 use tokio::sync::mpsc;
 
+use crate::interaction;
+
 #[derive(Debug, Clone)]
 pub struct DisplayMessage {
     pub role: String,
@@ -36,6 +38,7 @@ enum EngineEvent {
     Plan { content: String },
     Permission { content: String },
     Error { content: String },
+    CacheStats { hit_rate: f64, hit_tokens: u64, miss_tokens: u64 },
     Done,
 }
 
@@ -44,6 +47,10 @@ pub struct App {
     input: String,
     is_streaming: bool,
     scroll: u16,
+    cache_hit_rate: f64,
+    cache_hit_tokens: u64,
+    cache_miss_tokens: u64,
+    status_line: String,
 }
 
 impl App {
@@ -53,6 +60,10 @@ impl App {
             input: String::new(),
             is_streaming: false,
             scroll: 0,
+            cache_hit_rate: 0.0,
+            cache_hit_tokens: 0,
+            cache_miss_tokens: 0,
+            status_line: "deepseek-v4-flash".to_string(),
         }
     }
 
@@ -97,9 +108,22 @@ impl App {
     }
 
     fn push_tool_result(&mut self, content: &str) {
+        let display = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
+            if let Some(diff) = parsed["diff"].as_str() {
+                if !diff.is_empty() {
+                    format!("--- diff ---\n{diff}")
+                } else {
+                    content.to_string()
+                }
+            } else {
+                content.to_string()
+            }
+        } else {
+            content.to_string()
+        };
         self.messages.push(DisplayMessage {
             role: "tool_result".to_string(),
-            content: content.to_string(),
+            content: display,
         });
     }
 
@@ -118,6 +142,15 @@ impl App {
                 self.push_system(format!("[permission] {content}"))
             }
             EngineEvent::Error { content } => self.push_system(format!("[error] {content}")),
+            EngineEvent::CacheStats {
+                hit_rate,
+                hit_tokens,
+                miss_tokens,
+            } => {
+                self.cache_hit_rate = hit_rate;
+                self.cache_hit_tokens = hit_tokens;
+                self.cache_miss_tokens = miss_tokens;
+            }
             EngineEvent::Done => self.is_streaming = false,
         }
     }
@@ -239,10 +272,35 @@ async fn run_tui_loop<B: Backend>(
                 }
             }
             AppEvent::Terminal(_) => {}
-            AppEvent::Engine(engine_event) => {
-                app.apply_engine_event(engine_event);
-                app.scroll = app.scroll.saturating_add(1);
-            }
+            AppEvent::Engine(engine_event) => match &engine_event {
+                EngineEvent::Permission { content } => {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
+                        let request_id = parsed["request_id"].as_str().unwrap_or("");
+                        let tool = parsed["tool"].as_str().unwrap_or("tool");
+                        if !request_id.is_empty() {
+                            crossterm::terminal::disable_raw_mode()?;
+                            let approved =
+                                interaction::request_permission(&format!("Allow {tool}?"), None)?;
+                            crossterm::terminal::enable_raw_mode()?;
+                            let resp = client
+                                .post(format!(
+                                    "{engine_url}/permissions/{request_id}/respond"
+                                ))
+                                .json(&serde_json::json!({ "approved": approved }))
+                                .send()
+                                .await;
+                            if let Err(e) = resp {
+                                app.push_system(format!("[permission error] {e}"));
+                            }
+                        }
+                    }
+                    app.apply_engine_event(engine_event);
+                }
+                _ => {
+                    app.apply_engine_event(engine_event);
+                }
+            },
+            app.scroll = app.scroll.saturating_add(1);
         }
     }
 
@@ -289,6 +347,22 @@ async fn stream_engine_events(
                 continue;
             };
             let event_type = event["type"].as_str().unwrap_or("assistant");
+            if event_type == "cache_stats" {
+                let cache = &event["cache"];
+                let hit_rate = cache["hit_rate"].as_f64().unwrap_or(0.0);
+                let hit_tokens = cache["total_hit_tokens"].as_u64().unwrap_or(0);
+                let miss_tokens = cache["total_miss_tokens"].as_u64().unwrap_or(0);
+                let _ = send_engine_event(
+                    &tx,
+                    EngineEvent::CacheStats {
+                        hit_rate,
+                        hit_tokens,
+                        miss_tokens,
+                    },
+                )
+                .await;
+                continue;
+            }
             let content = event["content"].as_str().unwrap_or("").to_string();
             let engine_event = match event_type {
                 "tool_result" => EngineEvent::ToolResult { content },
@@ -325,8 +399,22 @@ async fn stream_engine_events(
 fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(3),
+        ])
         .split(f.area());
+
+    let status = format!(
+        " cache {:.1}% | hit={} miss={} | {}",
+        app.cache_hit_rate * 100.0,
+        app.cache_hit_tokens,
+        app.cache_miss_tokens,
+        app.status_line
+    );
+    let status_bar = Paragraph::new(status).style(Style::default().fg(Color::Cyan));
+    f.render_widget(status_bar, chunks[0]);
 
     let messages: Vec<Line> = app
         .messages
@@ -403,14 +491,14 @@ fn draw(f: &mut Frame, app: &App) {
         )
         .wrap(Wrap { trim: true })
         .scroll((app.scroll, 0));
-    f.render_widget(messages_paragraph, chunks[0]);
+    f.render_widget(messages_paragraph, chunks[1]);
 
     let input_hint = if app.is_streaming {
         "Running..."
     } else {
-        "Type task and press Enter"
+        "Type task and press Enter (/compact /todo)"
     };
     let input_paragraph = Paragraph::new(app.input.as_str())
         .block(Block::default().borders(Borders::ALL).title(input_hint));
-    f.render_widget(input_paragraph, chunks[1]);
+    f.render_widget(input_paragraph, chunks[2]);
 }

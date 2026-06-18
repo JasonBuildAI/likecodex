@@ -55,10 +55,10 @@ class CodeSearchTools:
 
     async def grep_files(self, pattern: str, glob: str | None = None, max_results: int = 20) -> str:
         try:
-            pattern = glob or "**/*"
-            if "*" in pattern and "**" not in pattern:
-                pattern = f"**/{pattern}"
-            files = list(self.working_dir.glob(pattern))
+            file_glob = glob or "**/*"
+            if "*" in file_glob and "**" not in file_glob:
+                file_glob = f"**/{file_glob}"
+            files = list(self.working_dir.glob(file_glob))
             results = []
             regex = re.compile(pattern)
             for file_path in files:
@@ -81,7 +81,7 @@ class CodeSearchTools:
                             break
                 if len(results) >= max_results:
                     break
-            return json.dumps({"pattern": pattern, "results": results, "count": len(results)})
+            return json.dumps({"pattern": pattern, "glob": file_glob, "results": results, "count": len(results)})
         except Exception as e:
             return json.dumps({"error": str(e)})
 

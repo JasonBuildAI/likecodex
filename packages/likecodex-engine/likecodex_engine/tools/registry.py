@@ -8,9 +8,11 @@ from typing import Any
 
 from likecodex_engine.tools.code_review import CodeReviewTools
 from likecodex_engine.tools.code_search import CodeSearchTools
+from likecodex_engine.tools.edit_file import EditFileTools
 from likecodex_engine.tools.filesystem import FileSystemTools
 from likecodex_engine.tools.git import GitTools
 from likecodex_engine.tools.shell import ShellTools
+from likecodex_engine.tools.web_search import WebSearchTools
 
 
 class ToolRegistry:
@@ -27,6 +29,9 @@ class ToolRegistry:
         self.register("write_file", fs.write_file_schema(), fs.write_file)
         self.register("list_dir", fs.list_dir_schema(), fs.list_dir)
         self.register("search_files", fs.search_files_schema(), fs.search_files)
+
+        edit = EditFileTools(self.working_dir)
+        self.register("edit_file", edit.edit_file_schema(), edit.edit_file)
 
         shell = ShellTools(self.working_dir)
         self.register("run_command", shell.run_command_schema(), shell.run_command)
@@ -47,6 +52,9 @@ class ToolRegistry:
         self.register("review_file", review.review_file_schema(), review.review_file)
         self.register("review_diff", review.review_diff_schema(), review.review_diff)
         self.register("check_dependencies", review.check_dependencies_schema(), review.check_dependencies)
+
+        search_web = WebSearchTools()
+        self.register("web_search", search_web.search_schema(), search_web.web_search)
 
     def register(
         self,

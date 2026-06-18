@@ -1,0 +1,84 @@
+{
+  "turns": 10,
+  "simulate_cache": true,
+  "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16",
+  "prefix_hash_stable": true,
+  "overall_hit_rate": 0.9412,
+  "turn_stats": [
+    {
+      "turn": 1,
+      "hit_tokens": 0,
+      "miss_tokens": 0,
+      "hit_rate": 0.0,
+      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+    },
+    {
+      "turn": 2,
+      "hit_tokens": 800,
+      "miss_tokens": 50,
+      "hit_rate": 0.9412,
+      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+    },
+    {
+      "turn": 3,
+      "hit_tokens": 800,
+      "miss_tokens": 50,
+      "hit_rate": 0.9412,
+      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+    },
+    {
+      "turn": 4,
+      "hit_tokens": 800,
+      "miss_tokens": 50,
+      "hit_rate": 0.9412,
+      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+    },
+    {
+      "turn": 5,
+      "hit_tokens": 800,
+      "miss_tokens": 50,
+      "hit_rate": 0.9412,
+      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+    },
+    {
+      "turn": 6,
+      "hit_tokens": 800,
+      "miss_tokens": 50,
+      "hit_rate": 0.9412,
+      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+    },
+    {
+      "turn": 7,
+      "hit_tokens": 800,
+      "miss_tokens": 50,
+      "hit_rate": 0.9412,
+      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+    },
+    {
+      "turn": 8,
+      "hit_tokens": 800,
+      "miss_tokens": 50,
+      "hit_rate": 0.9412,
+      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+    },
+    {
+      "turn": 9,
+      "hit_tokens": 800,
+      "miss_tokens": 50,
+      "hit_rate": 0.9412,
+      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+    },
+    {
+      "turn": 10,
+      "hit_tokens": 800,
+      "miss_tokens": 50,
+      "hit_rate": 0.9412,
+      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+    }
+  ],
+  "total_hit_tokens": 7200,
+  "total_miss_tokens": 450,
+  "estimated_cost_usd": 8.3e-05,
+  "estimated_cost_without_cache_usd": 0.001071,
+  "savings_pct": 92.24
+}

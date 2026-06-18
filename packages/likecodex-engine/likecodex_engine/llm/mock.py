@@ -91,13 +91,9 @@ class MockProvider(LLMProvider):
         )
 
     @classmethod
-    def for_cache_test(cls) -> MockProvider:
-        """Return a mock that finishes in one turn for cache prefix tests."""
+    def for_cache_test(cls, turns: int = 10) -> MockProvider:
+        """Return a mock that simulates cache hits from turn 2 onward."""
         return cls(
             simulate_cache=True,
-            responses=[
-                LLMResponse(content="First response."),
-                LLMResponse(content="Second response with cache hit."),
-                LLMResponse(content="Third response with cache hit."),
-            ],
+            responses=[LLMResponse(content=f"Response turn {i}.") for i in range(1, turns + 1)],
         )

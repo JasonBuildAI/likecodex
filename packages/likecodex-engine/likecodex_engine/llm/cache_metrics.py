@@ -12,8 +12,16 @@ class CacheMetrics:
     total_hit_tokens: int = 0
     total_miss_tokens: int = 0
     request_count: int = 0
+    cache_reset_count: int = 0
     recent_hit_rates: list[float] = field(default_factory=list)
     max_recent: int = 100
+
+    def reset(self) -> None:
+        self.total_hit_tokens = 0
+        self.total_miss_tokens = 0
+        self.request_count = 0
+        self.cache_reset_count = 0
+        self.recent_hit_rates.clear()
 
     def record(self, usage: dict[str, int] | None) -> None:
         if not usage:
@@ -57,3 +65,7 @@ _GLOBAL_METRICS = CacheMetrics()
 
 def global_cache_metrics() -> CacheMetrics:
     return _GLOBAL_METRICS
+
+
+def reset_global_cache_metrics() -> None:
+    _GLOBAL_METRICS.reset()

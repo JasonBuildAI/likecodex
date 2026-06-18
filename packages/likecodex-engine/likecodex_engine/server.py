@@ -14,12 +14,14 @@ from likecodex_engine.agent.loop import AgentLoop
 from likecodex_engine.agent.planner import Planner
 from likecodex_engine.context.manager import ContextManager
 from likecodex_engine.context.session_cache import SessionContextCache
+from likecodex_engine.context.session_resolver import session_id_for_dir
 from likecodex_engine.llm.cache_metrics import global_cache_metrics
 from likecodex_engine.llm.factory import create_provider
 from likecodex_engine.mcp.loader import register_mcp_tools
 from likecodex_engine.memory.vector import VectorMemory
 from likecodex_engine.permissions.evaluator import ApprovalMode, PermissionEvaluator
 from likecodex_engine.persistence.session import SessionEvent, SessionStore
+from likecodex_engine.skills.loader import discover_skills, skills_prefix_block
 from likecodex_engine.tools.registry import ToolRegistry
 
 _ACTIVE_LOOPS: dict[str, AgentLoop] = {}
@@ -90,6 +92,7 @@ def _make_agent(
     enable_planner: bool | None = None,
     session_id: str | None = None,
     context: ContextManager | None = None,
+    no_tools: bool = False,
 ) -> AgentLoop:
     cfg = _resolve_config(config)
     working_dir = cfg.get("working_dir", ".")
@@ -106,14 +109,29 @@ def _make_agent(
     evaluator = PermissionEvaluator(ApprovalMode(approval_mode))
     if enable_planner is None:
         enable_planner = str(cfg.get("enable_planner", "false")).lower() in ("1", "true", "yes")
-    planner = Planner(llm) if enable_planner else None
+    planner_model = cfg.get("planner_model", cfg.get("model", "deepseek-v4-flash"))
+    planner_llm = create_provider(
+        cfg.get("provider", "deepseek"),
+        planner_model,
+        cfg.get("api_key"),
+        cfg.get("base_url"),
+        thinking=bool(cfg.get("thinking", False)),
+    )
+    planner = Planner(planner_llm) if enable_planner else None
 
     store = _session_store()
-    sid = session_id or str(uuid.uuid4())
+    sid = session_id or session_id_for_dir(working_dir)
     store.create_session(sid, {"working_dir": working_dir})
 
     if context is None:
         context = _get_or_create_context(sid, store)
+
+    skills = discover_skills(working_dir)
+    context.set_skills_content(skills_prefix_block(skills))
+    project_memories = memory.list_by_type("project", limit=10)
+    if project_memories and hasattr(context, "set_project_memories"):
+        pinned = "\n".join(f"- {m.get('text', '')}" for m in project_memories)
+        context.set_project_memories(pinned)
 
     def on_event(resp) -> None:
         metadata: dict = {"model": resp.model, **(resp.metadata or {})}
@@ -145,7 +163,14 @@ def _make_agent(
         )
 
     def agent_factory() -> AgentLoop:
-        return _make_agent(cfg, enable_planner=enable_planner, session_id=sid, context=ContextManager())
+        sub_sid = f"{sid}-sub-{uuid.uuid4().hex[:8]}"
+        sub_ctx = ContextManager()
+        return _make_agent(
+            cfg,
+            enable_planner=False,
+            session_id=sub_sid,
+            context=sub_ctx,
+        )
 
     loop = AgentLoop(
         llm,
@@ -158,6 +183,7 @@ def _make_agent(
         session_id=sid,
         on_event=on_event,
         agent_factory=agent_factory,
+        no_tools=no_tools,
     )
     _ACTIVE_LOOPS[sid] = loop
     return loop
@@ -172,12 +198,14 @@ async def chat(request: web.Request) -> web.StreamResponse:
     data = await request.json()
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
+    no_tools = bool(data.get("no_tools", False))
     cfg = _resolve_config(request.app["config"])
+    working_dir = cfg.get("working_dir", ".")
 
-    sid = session_id or str(uuid.uuid4())
+    sid = session_id or session_id_for_dir(working_dir)
     store = _session_store()
     context = _get_or_create_context(sid, store)
-    loop = _make_agent(cfg, session_id=sid, context=context)
+    loop = _make_agent(cfg, session_id=sid, context=context, no_tools=no_tools)
     await _ensure_mcp(cfg, loop.tools)
     store.append_event(sid, SessionEvent(event_type="user", content=prompt, metadata={}))
 
@@ -207,8 +235,9 @@ async def run_task(request: web.Request) -> web.Response:
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
     cfg = _resolve_config(request.app["config"])
+    working_dir = cfg.get("working_dir", ".")
 
-    sid = session_id or str(uuid.uuid4())
+    sid = session_id or session_id_for_dir(working_dir)
     store = _session_store()
     context = _get_or_create_context(sid, store)
     loop = _make_agent(cfg, session_id=sid, context=context)
@@ -259,7 +288,7 @@ async def create_task(request: web.Request) -> web.Response:
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
     cfg = _resolve_config(request.app["config"])
-    task_id = session_id or str(uuid.uuid4())
+    task_id = session_id or session_id_for_dir(cfg.get("working_dir", "."))
 
     store = _session_store()
     store.create_session(task_id, {"prompt": prompt, "status": "running"})
@@ -401,6 +430,8 @@ def main() -> None:
         "enable_mcp": os.environ.get("LIKECODEX_ENABLE_MCP", "false"),
         "sandbox_executor_url": os.environ.get("LIKECODEX_SANDBOX_URL"),
         "memory_path": os.environ.get("LIKECODEX_MEMORY_PATH", ".likecodex/memory.jsonl"),
+        "planner_model": os.environ.get("LIKECODEX_PLANNER_MODEL", "deepseek-v4-pro"),
+        "compact_ratio": os.environ.get("LIKECODEX_COMPACT_RATIO", "0.8"),
     }
     app = create_app(config)
     web.run_app(app, host=host, port=port)

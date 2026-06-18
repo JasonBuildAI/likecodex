@@ -13,8 +13,10 @@ import aiohttp
 
 from likecodex_engine.agent.planner import Plan, Planner, PlanStep, StepStatus
 from likecodex_engine.context.manager import ContextManager, stable_json_dumps, stable_tool_calls_json
+from likecodex_engine.hooks.runner import fire_hooks
 from likecodex_engine.llm.base import LLMProvider, LLMResponse
 from likecodex_engine.llm.cache_metrics import global_cache_metrics
+from likecodex_engine.llm.tool_repair import flatten_tool_schemas, merge_tool_calls
 from likecodex_engine.memory.vector import VectorMemory
 from likecodex_engine.permissions.classifier import RiskClassifier, RiskLevel
 from likecodex_engine.permissions.evaluator import (
@@ -41,6 +43,7 @@ class AgentLoop:
         session_id: str | None = None,
         on_event: Callable[[LLMResponse], None] | None = None,
         agent_factory: Callable[[], AgentLoop] | None = None,
+        no_tools: bool = False,
     ) -> None:
         self.llm = llm
         self.tools = tools
@@ -55,6 +58,7 @@ class AgentLoop:
         self.session_id = session_id
         self.on_event = on_event
         self.agent_factory = agent_factory
+        self.no_tools = no_tools
         self.pending_permissions: dict[str, asyncio.Future[bool]] = {}
 
     async def run(self, prompt: str) -> AsyncIterator[LLMResponse]:
@@ -67,9 +71,30 @@ class AgentLoop:
 
         self.context.add_user_message(prompt)
 
+        hook_out = await fire_hooks(
+            "UserPromptSubmit",
+            self.tools.working_dir,
+            {"prompt": prompt[:500]},
+        )
+        if hook_out:
+            self.context.add_context_block(hook_out)
+
         plan: Plan | None = None
         if self.planner:
             plan = await self.planner.plan(self.session_id or "task", prompt)
+            if hasattr(self.context, "add_plan_block"):
+                import json as _json
+
+                plan_text = _json.dumps(
+                    {
+                        "reasoning": plan.reasoning,
+                        "steps": [{"id": s.id, "description": s.description} for s in plan.steps],
+                    },
+                    sort_keys=True,
+                )
+                self.context.add_plan_block(plan_text)
+            else:
+                self.context.add_context_block(f"Plan:\n{plan.reasoning}")
             yield self._emit(LLMResponse(content=plan.reasoning, model="planner", event_type="plan"))
             for step in plan.steps:
                 yield self._emit(
@@ -138,7 +163,7 @@ class AgentLoop:
         if prompt and self.context.messages[-1].role.value != "user":
             self.context.add_user_message(prompt)
 
-        tool_schemas = self.tools.to_openai_schema()
+        tool_schemas = [] if self.no_tools else flatten_tool_schemas(self.tools.to_openai_schema())
 
         for _iteration in range(self.max_iterations):
             messages = self.context.get_messages()
@@ -148,7 +173,10 @@ class AgentLoop:
                 temperature=0.0,
                 max_tokens=4096,
             )
+            response = merge_tool_calls(response)
             global_cache_metrics().record(response.usage)
+            if hasattr(self.context, "record_prompt_tokens"):
+                self.context.record_prompt_tokens(response.usage)
 
             raw_tool_calls: str | None = None
             tool_call_payload: list[dict[str, Any]] | None = None
@@ -198,6 +226,14 @@ class AgentLoop:
             )
 
     async def _handle_tool_call(self, tool_call: Any) -> AsyncIterator[LLMResponse]:
+        pre_hook = await fire_hooks(
+            "PreToolUse",
+            self.tools.working_dir,
+            {"tool": tool_call.name, "args": stable_json_dumps(tool_call.arguments)},
+        )
+        if pre_hook:
+            self.context.add_context_block(pre_hook)
+
         decision = self.permission_evaluator.evaluate(tool_call.name, tool_call.arguments)
         result: str
         if not decision.allowed:
@@ -262,6 +298,7 @@ class AgentLoop:
             result = await self.tools.execute(tool_call.name, tool_call.arguments)
 
         self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
+        await fire_hooks("PostToolUse", self.tools.working_dir, {"tool": tool_call.name, "result": result[:500]})
         yield self._emit(
             LLMResponse(
                 content=result,

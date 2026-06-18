@@ -17,6 +17,8 @@ pub struct Config {
     pub mcp: McpConfig,
     #[serde(default)]
     pub server: ServerConfig,
+    #[serde(default)]
+    pub agent: AgentConfig,
 }
 
 impl Config {
@@ -227,6 +229,47 @@ fn default_false() -> bool {
 
 fn default_timeout_secs() -> Option<u64> {
     Some(120)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    #[serde(default = "default_max_steps")]
+    pub max_steps: u32,
+    #[serde(default)]
+    pub planner_model: Option<String>,
+    #[serde(default)]
+    pub executor_model: Option<String>,
+    #[serde(default = "default_planner_max_steps")]
+    pub planner_max_steps: u32,
+    #[serde(default = "default_compact_ratio")]
+    pub compact_ratio: f32,
+    #[serde(default = "default_false")]
+    pub enable_planner: bool,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            max_steps: default_max_steps(),
+            planner_model: Some("deepseek-v4-pro".to_string()),
+            executor_model: Some("deepseek-v4-flash".to_string()),
+            planner_max_steps: default_planner_max_steps(),
+            compact_ratio: default_compact_ratio(),
+            enable_planner: false,
+        }
+    }
+}
+
+fn default_max_steps() -> u32 {
+    50
+}
+
+fn default_planner_max_steps() -> u32 {
+    10
+}
+
+fn default_compact_ratio() -> f32 {
+    0.8
 }
 
 impl ServerConfig {
