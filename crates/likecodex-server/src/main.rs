@@ -9,8 +9,8 @@ use axum::{
 use futures::StreamExt;
 use likecodex_core::config::Config;
 use likecodex_core::events::{Event, EventBus};
-use likecodex_core::Task;
-use likecodex_indexer::FileIndex;
+use likecodex_core::{PermissionResponse, Task};
+use likecodex_indexer::{CodeGraph, FileIndex};
 use likecodex_sandbox::SandboxExecutor;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -35,6 +35,20 @@ struct AppState {
 #[derive(serde::Deserialize)]
 struct CreateTaskRequest {
     prompt: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    no_tools: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct PlanRequest {
+    prompt: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RewindCheckpointRequest {
+    checkpoint_id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -132,6 +146,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/metrics", get(get_metrics))
         .route("/tasks", post(create_task))
         .route("/chat", post(chat_stream))
+        .route("/run", post(proxy_run))
+        .route("/plan", post(proxy_plan))
+        .route("/checkpoints", get(proxy_list_checkpoints))
+        .route("/checkpoints/rewind", post(proxy_rewind_checkpoint))
         .route("/execute", post(execute_command))
         .route("/events", get(events_stream))
         .route("/permissions/pending", get(list_pending_permissions))
@@ -139,6 +157,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/sessions", get(list_sessions))
         .route("/sessions/:id/events", get(get_session_events))
         .route("/index/search", get(index_search))
+        .route("/codegraph/search", get(codegraph_search))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -285,7 +304,14 @@ async fn chat_stream(
     let bridge = state.engine_bridge.clone();
     let bus = state.event_bus.clone();
 
-    let initial = match bridge.chat_stream(&req.prompt).await {
+    let initial = match bridge
+        .chat_stream(
+            &req.prompt,
+            req.session_id.as_deref(),
+            req.no_tools,
+        )
+        .await
+    {
         Ok(stream) => Some(stream),
         Err(e) => {
             let _ = bus.emit(Event::Error {
@@ -387,6 +413,21 @@ async fn respond_permission(
         )
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+    let response = if req.approved {
+        PermissionResponse::AllowOnce
+    } else {
+        PermissionResponse::DenyOnce
+    };
+    let _ = state
+        .event_bus
+        .emit(Event::PermissionResponded {
+            task_id: String::new(),
+            request_id: id,
+            response,
+        })
+        .ok();
+
     Ok(Json(body))
 }
 
@@ -436,4 +477,110 @@ async fn index_search(
         }
     };
     Json(serde_json::json!({ "pattern": query.pattern, "results": results }))
+}
+
+fn percent_encode_query(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+async fn codegraph_search(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<IndexSearchQuery>,
+) -> Json<serde_json::Value> {
+    let path = format!(
+        "/codegraph/search?pattern={}",
+        percent_encode_query(&query.pattern)
+    );
+    if let Ok(body) = state.engine_bridge.get(&path).await {
+        return Json(body);
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut graph = CodeGraph::new();
+    if let Err(e) = graph.build(&cwd) {
+        return Json(serde_json::json!({ "error": e.to_string(), "results": [] }));
+    }
+    let _ = graph.save_cached(&cwd);
+    let results = graph
+        .search(&query.pattern)
+        .into_iter()
+        .take(50)
+        .map(|sym| {
+            serde_json::json!({
+                "name": sym.name,
+                "kind": sym.kind,
+                "path": sym.path.display().to_string(),
+                "line": sym.line,
+            })
+        })
+        .collect::<Vec<_>>();
+    Json(serde_json::json!({
+        "pattern": query.pattern,
+        "results": results,
+        "files": graph.file_count,
+    }))
+}
+
+async fn proxy_run(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateTaskRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let body = state
+        .engine_bridge
+        .post(
+            "/run",
+            &serde_json::json!({
+                "prompt": req.prompt,
+                "session_id": req.session_id,
+            }),
+        )
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(Json(body))
+}
+
+async fn proxy_plan(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PlanRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let body = state
+        .engine_bridge
+        .post("/plan", &serde_json::json!({ "prompt": req.prompt }))
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(Json(body))
+}
+
+async fn proxy_list_checkpoints(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let body = state
+        .engine_bridge
+        .get("/checkpoints")
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(Json(body))
+}
+
+async fn proxy_rewind_checkpoint(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RewindCheckpointRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let body = state
+        .engine_bridge
+        .post(
+            "/checkpoints/rewind",
+            &serde_json::json!({ "checkpoint_id": req.checkpoint_id }),
+        )
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(Json(body))
 }

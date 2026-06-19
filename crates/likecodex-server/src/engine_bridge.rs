@@ -79,12 +79,18 @@ impl EngineBridge {
     pub async fn chat_stream(
         &self,
         prompt: &str,
+        session_id: Option<&str>,
+        no_tools: bool,
     ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<String>> + Send>>> {
         let url = format!("{}/chat", self.base_url);
         let resp = self
             .client
             .post(&url)
-            .json(&serde_json::json!({ "prompt": prompt }))
+            .json(&serde_json::json!({
+                "prompt": prompt,
+                "session_id": session_id,
+                "no_tools": no_tools,
+            }))
             .send()
             .await
             .context("failed to contact engine")?;
