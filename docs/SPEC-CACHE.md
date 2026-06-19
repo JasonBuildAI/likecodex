@@ -28,10 +28,16 @@ Code follows this spec; change the spec first, then the code.
 
 ### 2.1 ImmutablePrefix
 
-- Loaded once from [`prompts/system.md`](../packages/likecodex-engine/likecodex_engine/prompts/system.md) (`PROMPT_VERSION=N`).
+- Loaded once from [`prompts/system.md`](../packages/likecodex-engine/likecodex_engine/prompts/system.md) (`PROMPT_VERSION=N`; bump on tool-set or prompt changes).
 - Optional sorted **skills block** appended inside the single SYSTEM message.
-- `prefix_hash = sha256(system + skills)` computed at session start.
+- Optional **project memory block** (`## Project Memory`) from `LIKECODEX.md`/`AGENTS.md`
+  (and pinned vector "project" memories), appended after skills. Generated via `/init`.
+  Because it is part of the immutable prefix it stays byte-stable within a session.
+- `prefix_hash = sha256(system + skills + project_memories)` computed at session start.
 - Must not contain: timestamps, session IDs, working directory paths, random IDs.
+- The interactive **planner** (`deepseek-v4-pro`) runs in its own isolated message list,
+  never sharing the executor (`deepseek-v4-flash`) prefix, so dual-model use does not
+  invalidate the executor cache.
 
 ### 2.2 AppendOnlyLog
 
