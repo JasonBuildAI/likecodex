@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from likecodex_engine.permissions.classifier import RiskClassifier, RiskLevel
+from likecodex_engine.permissions.policy import Decision, Policy
 
 
 class ApprovalMode(StrEnum):
@@ -30,17 +32,36 @@ class PermissionDecision:
     reason: str
 
 
+MEMORY_TOOLS = frozenset({"remember", "forget"})
+
+
 class PermissionEvaluator:
     """Decides whether and where a tool call may execute."""
 
-    def __init__(self, mode: ApprovalMode | str = ApprovalMode.AUTO) -> None:
+    def __init__(
+        self,
+        mode: ApprovalMode | str = ApprovalMode.AUTO,
+        policy: Policy | None = None,
+        working_dir: str = ".",
+    ) -> None:
         self.mode = ApprovalMode(mode)
+        self.policy = policy or Policy()
+        self.grants_path = Path(working_dir) / ".likecodex" / "approvals.json"
+        self.policy.load_grants(self.grants_path)
 
     def evaluate(self, tool_name: str, arguments: dict[str, Any]) -> PermissionDecision:
-        risk = RiskClassifier.classify_tool_call(tool_name, arguments)
+        read_only = tool_name in RiskClassifier.READ_ONLY_TOOLS or tool_name.startswith("lsp_")
+        read_only = read_only or tool_name in {"history", "memory_search", "code_index"}
+
+        if tool_name in MEMORY_TOOLS:
+            return PermissionDecision(True, ExecutionMode.PROMPT, "memory tools always require approval")
+
+        policy_decision = self.policy.decide(tool_name, read_only, arguments)
+        if policy_decision == Decision.DENY:
+            return PermissionDecision(False, ExecutionMode.DENY, "Denied by policy rule")
 
         if self.mode == ApprovalMode.READ_ONLY:
-            if risk == RiskLevel.LOW and tool_name in RiskClassifier.READ_ONLY_TOOLS:
+            if read_only:
                 return PermissionDecision(True, ExecutionMode.LOCAL, "read-only mode allows reads")
             return PermissionDecision(False, ExecutionMode.DENY, "read-only mode denies writes")
 
@@ -48,13 +69,23 @@ class PermissionEvaluator:
             return PermissionDecision(True, ExecutionMode.LOCAL, "full-access mode allows all locally")
 
         if self.mode == ApprovalMode.SANDBOX_REQUIRED:
-            if risk == RiskLevel.LOW and tool_name in RiskClassifier.READ_ONLY_TOOLS:
+            if read_only:
                 return PermissionDecision(True, ExecutionMode.LOCAL, "reads allowed locally")
             return PermissionDecision(True, ExecutionMode.SANDBOX, "non-reads routed to sandbox")
 
         # AUTO mode
+        if policy_decision == Decision.ASK:
+            return PermissionDecision(True, ExecutionMode.PROMPT, "policy requires approval")
+
+        risk = RiskClassifier.classify_tool_call(tool_name, arguments)
         if risk == RiskLevel.HIGH:
             return PermissionDecision(True, ExecutionMode.SANDBOX, "high-risk routed to sandbox")
         if risk == RiskLevel.MEDIUM:
             return PermissionDecision(True, ExecutionMode.PROMPT, "medium-risk requires approval")
         return PermissionDecision(True, ExecutionMode.LOCAL, "low-risk allowed locally")
+
+    def grant_session(self, tool_name: str, arguments: dict[str, Any]) -> None:
+        from likecodex_engine.permissions.policy import extract_subject
+
+        self.policy.grant_session(tool_name, extract_subject(tool_name, arguments))
+        self.policy.save_grants(self.grants_path)
