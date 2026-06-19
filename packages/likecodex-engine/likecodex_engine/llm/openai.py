@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
 from openai import AsyncOpenAI
 
 from likecodex_engine.llm.base import LLMProvider, LLMResponse, Message, ToolCall
+from likecodex_engine.llm.openai_stream import complete_with_reconnect, stream_openai_chat_with_reconnect
 
 
 class OpenAIProvider(LLMProvider):
@@ -24,8 +26,20 @@ class OpenAIProvider(LLMProvider):
                 item["tool_calls"] = m.tool_calls
             if m.tool_call_id:
                 item["tool_call_id"] = m.tool_call_id
+            if m.name:
+                item["name"] = m.name
             out.append(item)
         return out
+
+    @staticmethod
+    def _parse_usage(usage: Any) -> dict[str, int]:
+        if usage is None:
+            return {}
+        return {
+            "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+        }
 
     async def complete(
         self,
@@ -44,13 +58,13 @@ class OpenAIProvider(LLMProvider):
             params["tools"] = tools
             params["tool_choice"] = "auto"
 
-        resp = await self.client.chat.completions.create(**params)
+        resp = await complete_with_reconnect(
+            lambda: self.client.chat.completions.create(**params)
+        )
         choice = resp.choices[0]
         tool_calls = []
         if choice.message.tool_calls:
             for tc in choice.message.tool_calls:
-                import json
-
                 tool_calls.append(
                     ToolCall(
                         id=tc.id,
@@ -58,14 +72,14 @@ class OpenAIProvider(LLMProvider):
                         arguments=json.loads(tc.function.arguments),
                     )
                 )
+        usage = self._parse_usage(resp.usage)
+        if choice.finish_reason:
+            usage = {**usage, "finish_reason": choice.finish_reason}
         return LLMResponse(
             content=choice.message.content or "",
             tool_calls=tool_calls,
             model=resp.model,
-            usage={
-                "prompt_tokens": resp.usage.prompt_tokens if resp.usage else 0,
-                "completion_tokens": resp.usage.completion_tokens if resp.usage else 0,
-            },
+            usage=usage,
         )
 
     async def stream(
@@ -81,26 +95,18 @@ class OpenAIProvider(LLMProvider):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if tools:
             params["tools"] = tools
             params["tool_choice"] = "auto"
 
-        async for chunk in await self.client.chat.completions.create(**params):
-            delta = chunk.choices[0].delta
-            tool_calls = []
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    import json
+        async def create_stream():
+            return await self.client.chat.completions.create(**params)
 
-                    args = tc.function.arguments or "{}"
-                    try:
-                        parsed = json.loads(args)
-                    except json.JSONDecodeError:
-                        parsed = {}
-                    tool_calls.append(ToolCall(id=tc.id or "", name=tc.function.name or "", arguments=parsed))
-            yield LLMResponse(
-                content=delta.content or "",
-                tool_calls=tool_calls,
-                model=chunk.model,
-            )
+        async for event in stream_openai_chat_with_reconnect(
+            create_stream,
+            model=self.model,
+            parse_usage=self._parse_usage,
+        ):
+            yield event

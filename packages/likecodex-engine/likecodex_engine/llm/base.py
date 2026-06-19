@@ -36,7 +36,7 @@ class LLMResponse(BaseModel):
     content: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
     model: str = ""
-    usage: dict[str, int] | None = None
+    usage: dict[str, Any] | None = None
     event_type: str = "assistant"  # assistant | tool_result | permission | error | plan
     metadata: dict[str, Any] | None = None
 

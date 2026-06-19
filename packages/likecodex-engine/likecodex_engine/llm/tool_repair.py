@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from typing import Any
 
 from likecodex_engine.context.utils import stable_json_dumps
-from likecodex_engine.llm.base import LLMResponse, ToolCall
+from likecodex_engine.llm.base import LLMResponse, Message, Role, ToolCall
+
+INTERRUPTED_TOOL_RESULT = (
+    "[no result: the previous turn was interrupted before this tool call completed]"
+)
 
 
 def flatten_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +135,183 @@ def merge_tool_calls(response: LLMResponse) -> LLMResponse:
     return repair_tool_calls(response.model_copy(update={"tool_calls": merged}))
 
 
+def ensure_tool_call_ids(tool_calls: list[ToolCall]) -> list[ToolCall]:
+    """Assign stable ids to tool calls missing them before persistence."""
+    out: list[ToolCall] = []
+    for idx, tc in enumerate(tool_calls):
+        if tc.id:
+            out.append(tc)
+            continue
+        out.append(tc.model_copy(update={"id": f"call_{idx}_{uuid.uuid4().hex[:8]}"}))
+    return out
+
+
 def stable_tool_schemas_for_api(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     flattened = flatten_tool_schemas(tools)
     return json.loads(stable_json_dumps(flattened))
+
+
+def _tool_call_id(tc: dict[str, Any]) -> str:
+    return str(tc.get("id") or "")
+
+
+def _tool_call_name(tc: dict[str, Any]) -> str:
+    fn = tc.get("function") or {}
+    return str(fn.get("name") or "")
+
+
+def _tool_call_args(tc: dict[str, Any]) -> str:
+    fn = tc.get("function") or {}
+    args = fn.get("arguments", "{}")
+    if isinstance(args, dict):
+        return stable_json_dumps(args)
+    return str(args or "{}")
+
+
+def _id_distinct(calls: list[dict[str, Any]]) -> bool:
+    seen: set[str] = set()
+    for tc in calls:
+        call_id = _tool_call_id(tc)
+        if not call_id or call_id in seen:
+            return False
+        seen.add(call_id)
+    return True
+
+
+def close_truncated_json(text: str) -> str:
+    """Best-effort completion for JSON cut off mid-stream."""
+    stack: list[str] = []
+    in_str = False
+    escaped = False
+    for ch in text:
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in "}]" and stack:
+            stack.pop()
+    out = text
+    if escaped:
+        out = out[:-1]
+    if in_str:
+        out += '"'
+    trimmed = out.rstrip(" \t\r\n")
+    if trimmed.endswith(","):
+        out = trimmed[:-1]
+    elif trimmed.endswith(":"):
+        out = trimmed + "null"
+    out += "".join(reversed(stack))
+    try:
+        json.loads(out)
+        return out
+    except json.JSONDecodeError:
+        return "{}"
+
+
+def _repair_tool_call_dicts(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    repaired: list[dict[str, Any]] = []
+    for tc in calls:
+        args = _tool_call_args(tc)
+        if args and args != "{}":
+            try:
+                json.loads(args)
+            except json.JSONDecodeError:
+                args = close_truncated_json(args)
+        fn = dict(tc.get("function") or {})
+        fn["arguments"] = args
+        repaired.append({**tc, "function": fn})
+    return repaired
+
+
+def _backfill_tool_call_names(
+    calls: list[dict[str, Any]], results: list[Message]
+) -> list[dict[str, Any]]:
+    if not any(not _tool_call_name(tc) for tc in calls):
+        return calls
+    out = [dict(tc) for tc in calls]
+    if _id_distinct(calls):
+        by_id = {r.tool_call_id or "": r.name or "" for r in results if r.name}
+        for tc in out:
+            if not _tool_call_name(tc):
+                name = by_id.get(_tool_call_id(tc), "")
+                if name:
+                    tc.setdefault("function", {})["name"] = name
+        return out
+    for idx, tc in enumerate(out):
+        if not _tool_call_name(tc) and idx < len(results) and results[idx].name:
+            tc.setdefault("function", {})["name"] = results[idx].name or ""
+    return out
+
+
+def _pair_tool_results(calls: list[dict[str, Any]], avail: list[Message]) -> list[Message]:
+    out: list[Message] = []
+    if _id_distinct(calls):
+        by_id = {r.tool_call_id or "": r for r in avail}
+        for tc in calls:
+            call_id = _tool_call_id(tc)
+            if call_id in by_id:
+                out.append(by_id[call_id])
+            else:
+                out.append(
+                    Message(
+                        role=Role.TOOL,
+                        content=INTERRUPTED_TOOL_RESULT,
+                        tool_call_id=call_id,
+                        name=_tool_call_name(tc) or None,
+                    )
+                )
+        return out
+    for idx, tc in enumerate(calls):
+        call_id = _tool_call_id(tc)
+        if idx < len(avail):
+            result = avail[idx].model_copy(update={"tool_call_id": call_id or avail[idx].tool_call_id})
+            out.append(result)
+        else:
+            out.append(
+                Message(
+                    role=Role.TOOL,
+                    content=INTERRUPTED_TOOL_RESULT,
+                    tool_call_id=call_id,
+                    name=_tool_call_name(tc) or None,
+                )
+            )
+    return out
+
+
+def sanitize_tool_pairing(messages: list[Message]) -> list[Message]:
+    """Repair tool-call / tool-result pairing before sending to the LLM API."""
+    out: list[Message] = []
+    i = 0
+    while i < len(messages):
+        message = messages[i]
+        if message.role == Role.ASSISTANT and message.tool_calls:
+            j = i + 1
+            while j < len(messages) and messages[j].role == Role.TOOL:
+                j += 1
+            if message.raw_tool_calls:
+                calls = json.loads(message.raw_tool_calls)
+            else:
+                calls = list(message.tool_calls)
+            calls = _backfill_tool_call_names(calls, messages[i + 1 : j])
+            calls = _repair_tool_call_dicts(calls)
+            assistant = message.model_copy(update={"tool_calls": calls})
+            out.append(assistant)
+            out.extend(_pair_tool_results(calls, messages[i + 1 : j]))
+            i = j
+            continue
+        if message.role == Role.TOOL:
+            i += 1
+            continue
+        out.append(message.model_copy(deep=True))
+        i += 1
+    return out
