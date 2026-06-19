@@ -95,4 +95,5 @@ def test_assistant_tool_calls_stable_serialization() -> None:
     ctx = ContextManager()
     ctx.add_assistant_message("", tool_calls=calls, raw_tool_calls=serialized)
     rebuilt = ctx.build_for_llm()
-    assert rebuilt[-1].tool_calls == calls
+    assistant = next(m for m in reversed(rebuilt) if m.role.value == "assistant" and m.tool_calls)
+    assert assistant.tool_calls == calls

@@ -11,11 +11,12 @@ from likecodex_engine.tools.registry import ToolRegistry
 
 @pytest.mark.asyncio
 async def test_subagent_parallel(tmp_path):
-    def factory():
+    def factory(_wl=None, _ms=None):
         return AgentLoop(
             MockProvider(responses=[LLMResponse(content="ok")]),
             ToolRegistry(str(tmp_path)),
             ContextManager(system_prompt="test"),
+            is_subagent=True,
         )
 
     orchestrator = SubAgentOrchestrator(factory)
