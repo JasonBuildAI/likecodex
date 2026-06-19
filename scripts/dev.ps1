@@ -40,7 +40,6 @@ if (-not $SkipWeb) {
 }
 
 Write-Host "==> LikeCodex dev environment started." -ForegroundColor Green
-Write-Host "Engine :9090 | API :8080 | Web :3000" -ForegroundColor Cyan
 Write-Host "Press Ctrl+C to stop all background jobs." -ForegroundColor Yellow
 
 try {
