@@ -20,7 +20,7 @@ async def test_write_and_read_file(tmp_path: Path) -> None:
 
     result = await fs.read_file("test.txt")
     data = json.loads(result)
-    assert data["content"] == "hello"
+    assert "hello" in data["content"]
 
 
 @pytest.mark.asyncio

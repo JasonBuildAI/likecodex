@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
+
 from likecodex_engine.agent.loop import AgentLoop
 from likecodex_engine.context.manager import ContextManager
 from likecodex_engine.llm.mock import MockProvider
-from likecodex_engine.permissions.evaluator import ApprovalMode, PermissionEvaluator
 from likecodex_engine.tools.registry import ToolRegistry
 
 
@@ -17,12 +18,7 @@ async def test_agent_writes_and_runs_hello(tmp_path: Path) -> None:
     tools = ToolRegistry(str(tmp_path))
     context = ContextManager()
     llm = MockProvider.for_hello_world()
-    loop = AgentLoop(
-        llm,
-        tools,
-        context,
-        permission_evaluator=PermissionEvaluator(ApprovalMode.FULL_ACCESS),
-    )
+    loop = AgentLoop(llm, tools, context)
 
     outputs = []
     async for resp in loop.run("create hello.py and run it"):
@@ -42,12 +38,7 @@ async def test_agent_loop_stops_without_tool_calls() -> None:
     tools = ToolRegistry(str(Path.cwd()))
     context = ContextManager()
     llm = MockProvider(responses=[MockProvider.responses_default()])
-    loop = AgentLoop(
-        llm,
-        tools,
-        context,
-        permission_evaluator=PermissionEvaluator(ApprovalMode.FULL_ACCESS),
-    )
+    loop = AgentLoop(llm, tools, context)
 
     outputs = []
     async for resp in loop.run("say hi"):
