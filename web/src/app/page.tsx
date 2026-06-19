@@ -22,6 +22,7 @@ export default function Home() {
   const isStreaming = useAppStore((s) => s.isStreaming);
   const addMessage = useAppStore((s) => s.addMessage);
   const appendToLastMessage = useAppStore((s) => s.appendToLastMessage);
+  const upsertToolDispatch = useAppStore((s) => s.upsertToolDispatch);
   const setIsStreaming = useAppStore((s) => s.setIsStreaming);
   const setTasks = useAppStore((s) => s.setTasks);
   const updateTask = useAppStore((s) => s.updateTask);
@@ -59,9 +60,16 @@ export default function Home() {
     const unsubscribe = subscribeEvents({
       onMessage: addMessage,
       onAppend: appendToLastMessage,
+      onUpsertToolDispatch: upsertToolDispatch,
       onTaskStarted: (task) => {
         setTasks([...useAppStore.getState().tasks, task]);
         setCurrentTaskId(task.id);
+        addMessage({
+          id: `assistant-${task.id}`,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+        });
       },
       onTaskCompleted: (taskId, failed) => {
         updateTask(taskId, { status: failed ? 'failed' : 'completed' });
@@ -70,6 +78,7 @@ export default function Home() {
       },
       onStreamFinished: () => setIsStreaming(false),
       onPermission: addPendingPermission,
+      onPermissionResponded: (requestId) => removePendingPermission(requestId),
       onPlanStep: (step) => {
         const existing = useAppStore.getState().planSteps;
         if (existing.find((s) => s.id === step.id)) {
@@ -84,11 +93,13 @@ export default function Home() {
   }, [
     addMessage,
     appendToLastMessage,
+    upsertToolDispatch,
     setTasks,
     setCurrentTaskId,
     updateTask,
     setIsStreaming,
     addPendingPermission,
+    removePendingPermission,
     setPlanSteps,
     updatePlanStep,
     setActiveDiff,
