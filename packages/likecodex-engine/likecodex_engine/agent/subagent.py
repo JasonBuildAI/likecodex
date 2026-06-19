@@ -35,7 +35,7 @@ class SubAgentOrchestrator:
     async def _run_one(self, subtask_id: str, description: str) -> SubAgentResult:
         result = SubAgentResult(subtask_id=subtask_id, description=description)
         try:
-            agent: AgentLoop = self.factory()
+            agent: AgentLoop = self.factory(None, None)
             async for resp in agent.run(description):
                 result.outputs.append(resp)
         except Exception as e:
