@@ -6,11 +6,15 @@ import hashlib
 import importlib.resources as pkg_resources
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from likecodex_engine.context.compaction import CacheFirstCompactor
+from likecodex_engine.context.cache_shape import PrefixShape, capture_prefix_shape
+from likecodex_engine.context.prune import prune_stale_tool_results
 from likecodex_engine.context.utils import CONTEXT_PREFIX, DEFAULT_SYSTEM_PROMPT_PATH, stable_tool_calls_json
 from likecodex_engine.llm.base import Message, Role
+from likecodex_engine.llm.tool_repair import sanitize_tool_pairing
 
 PLAN_PREFIX = "[Plan]\n"
 DEFAULT_CONTEXT_WINDOW = 1_000_000
@@ -79,9 +83,12 @@ class CacheFirstContext:
             max_messages=max_messages,
             context_window=context_window,
             compact_ratio=compact_ratio,
+            working_dir=".",
         )
+        self._compact_llm = None
         self.last_prompt_tokens = 0
         self.cache_reset_count = 0
+        self.rewrite_version = 0
 
         if messages is not None:
             self._log: list[Message] = list(messages)
@@ -95,6 +102,9 @@ class CacheFirstContext:
 
     def prefix_hash(self) -> str:
         return self.prefix.hash()
+
+    def capture_prefix_shape(self, tool_schemas: list[dict[str, Any]]) -> PrefixShape:
+        return capture_prefix_shape(self.prefix.combined, tool_schemas, self.rewrite_version)
 
     def set_skills_content(self, content: str) -> None:
         self.prefix.skills_content = content
@@ -140,21 +150,73 @@ class CacheFirstContext:
     def add_tool_result(self, tool_call_id: str, content: str) -> None:
         self._log.append(Message(role=Role.TOOL, content=content, tool_call_id=tool_call_id))
 
+    def update_tool_result(self, tool_call_id: str, content: str) -> bool:
+        for msg in reversed(self._log):
+            if msg.role == Role.TOOL and msg.tool_call_id == tool_call_id:
+                msg.content = content
+                return True
+        return False
+
+    def set_working_dir(self, working_dir: str) -> None:
+        self.compactor.working_dir = Path(working_dir)
+
+    def set_compact_llm(self, llm: Any) -> None:
+        self._compact_llm = llm
+
     def record_prompt_tokens(self, usage: dict[str, int] | None) -> None:
         if not usage:
             return
         self.last_prompt_tokens = int(usage.get("prompt_tokens", self.last_prompt_tokens))
         if self.compactor.should_compact(self.last_prompt_tokens):
-            self._compact()
+            # Sync compact triggered; async LLM compact done via compact_async
+            self._compact_sync()
 
-    def _compact(self) -> None:
-        summary = self.compactor.summarize_log(self._log)
-        self._log = [Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
+    async def compact_async(
+        self,
+        *,
+        instructions: str = "",
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """LLM compaction with archive."""
+        del force  # reserved for fold-economics skip (manual /compact always compacts)
+        self._log, prune_stats = prune_stale_tool_results(self._log)
+        pinned, foldable = self.compactor.split_compactable(self._log)
+        if not foldable:
+            return {"compacted": False, "reason": "nothing_to_fold"}
+        archive_path = self.compactor.archive_messages(foldable)
+        if self._compact_llm is not None:
+            summary = await self.compactor.llm_summarize(
+                foldable,
+                self._compact_llm,
+                instructions=instructions,
+            )
+        else:
+            summary = self.compactor.summarize_log(foldable)
+        self._log = [*pinned, Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
         self.cache_reset_count += 1
+        self.rewrite_version += 1
+        return {
+            "compacted": True,
+            "archive": str(archive_path) if archive_path else None,
+            "cache_reset_count": self.cache_reset_count,
+            "pruned_results": prune_stats.results,
+            "pruned_chars": prune_stats.saved_chars,
+        }
+
+    def _compact_sync(self) -> None:
+        self._log, _ = prune_stale_tool_results(self._log)
+        pinned, foldable = self.compactor.split_compactable(self._log)
+        if not foldable:
+            return
+        self.compactor.archive_messages(foldable)
+        summary = self.compactor.summarize_log(foldable)
+        self._log = [*pinned, Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
+        self.cache_reset_count += 1
+        self.rewrite_version += 1
 
     def build_for_llm(self) -> list[Message]:
         out: list[Message] = [Message(role=Role.SYSTEM, content=self.prefix.combined)]
-        for message in self._log:
+        for message in sanitize_tool_pairing(self._log):
             if message.role == Role.ASSISTANT and message.tool_calls:
                 if message.raw_tool_calls:
                     tool_calls = json.loads(message.raw_tool_calls)
