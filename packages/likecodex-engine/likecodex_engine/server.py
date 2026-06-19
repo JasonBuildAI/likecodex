@@ -6,25 +6,35 @@ import asyncio
 import json
 import os
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 from aiohttp import web
 
-from likecodex_engine.agent.loop import AgentLoop
+from likecodex_engine.agent.checkpoints import CheckpointManager
+from likecodex_engine.agent.commands import expand_prompt
+from likecodex_engine.agent.coordinator import Coordinator
+from likecodex_engine.agent.loop import AgentLoop, build_subagent_loop
+from likecodex_engine.agent.plan_state import PlanState
 from likecodex_engine.agent.planner import Planner
 from likecodex_engine.context.manager import ContextManager
+from likecodex_engine.context.project_memory import load_project_memory
 from likecodex_engine.context.session_cache import SessionContextCache
 from likecodex_engine.context.session_resolver import session_id_for_dir
 from likecodex_engine.llm.cache_metrics import global_cache_metrics
+from likecodex_engine.llm.base import LLMResponse
 from likecodex_engine.llm.factory import create_provider
 from likecodex_engine.mcp.loader import register_mcp_tools
 from likecodex_engine.memory.vector import VectorMemory
 from likecodex_engine.permissions.evaluator import ApprovalMode, PermissionEvaluator
+from likecodex_engine.permissions.policy import Policy
 from likecodex_engine.persistence.session import SessionEvent, SessionStore
 from likecodex_engine.skills.loader import discover_skills, skills_prefix_block
 from likecodex_engine.tools.registry import ToolRegistry
 
 _ACTIVE_LOOPS: dict[str, AgentLoop] = {}
+_ACTIVE_COORDINATORS: dict[str, Coordinator] = {}
 _SESSION_STORE: SessionStore | None = None
 _CONTEXT_CACHE = SessionContextCache()
 
@@ -69,7 +79,45 @@ def _serialize_response(resp) -> dict:
     }
     if resp.usage:
         payload["usage"] = resp.usage
+    if resp.metadata:
+        payload["metadata"] = resp.metadata
     return payload
+
+
+async def _run_manual_compact(
+    context: ContextManager,
+    llm: Any,
+    focus: str,
+) -> AsyncIterator[LLMResponse]:
+    """Run a manual /compact pass, yielding compaction + assistant events."""
+    if hasattr(context, "set_compact_llm"):
+        context.set_compact_llm(llm)
+    if not hasattr(context, "compact_async"):
+        yield LLMResponse(
+            content="Compaction is not available for this session context.",
+            model="command",
+            event_type="assistant",
+        )
+        return
+
+    yield LLMResponse(
+        content=json.dumps({"trigger": "manual", "focus": focus}),
+        model="system",
+        event_type="compaction_started",
+    )
+    info = await context.compact_async(instructions=focus, force=True)
+    yield LLMResponse(
+        content=json.dumps(info),
+        model="system",
+        event_type="compaction_done",
+    )
+    if info.get("compacted"):
+        reply = "Context compacted."
+        if focus:
+            reply += f" Focus: {focus}"
+    else:
+        reply = "Nothing to compact."
+    yield LLMResponse(content=reply, model="command", event_type="assistant")
 
 
 def _get_or_create_context(session_id: str, store: SessionStore) -> ContextManager:
@@ -85,6 +133,20 @@ def _get_or_create_context(session_id: str, store: SessionStore) -> ContextManag
     context = ContextManager()
     _CONTEXT_CACHE.put(session_id, context)
     return context
+
+
+def _get_runner(session_id: str) -> AgentLoop | Coordinator:
+    if session_id in _ACTIVE_COORDINATORS:
+        return _ACTIVE_COORDINATORS[session_id]
+    return _ACTIVE_LOOPS[session_id]
+
+
+def _resolve_loop(session_id: str) -> AgentLoop | None:
+    runner = _ACTIVE_LOOPS.get(session_id)
+    if runner is not None:
+        return runner
+    coord = _ACTIVE_COORDINATORS.get(session_id)
+    return coord.executor if coord else None
 
 
 def _make_agent(
@@ -106,18 +168,19 @@ def _make_agent(
     tools = ToolRegistry(working_dir)
     memory = VectorMemory(cfg.get("memory_path", ".likecodex/memory.jsonl"))
     approval_mode = cfg.get("approval_mode", "auto")
-    evaluator = PermissionEvaluator(ApprovalMode(approval_mode))
+    policy = Policy.from_config(cfg)
+    evaluator = PermissionEvaluator(ApprovalMode(approval_mode), policy, working_dir)
+    planner = None
     if enable_planner is None:
         enable_planner = str(cfg.get("enable_planner", "false")).lower() in ("1", "true", "yes")
-    planner_model = cfg.get("planner_model", cfg.get("model", "deepseek-v4-flash"))
+    planner_model = cfg.get("planner_model") or "deepseek-v4-pro"
     planner_llm = create_provider(
         cfg.get("provider", "deepseek"),
         planner_model,
         cfg.get("api_key"),
         cfg.get("base_url"),
         thinking=bool(cfg.get("thinking", False)),
-    )
-    planner = Planner(planner_llm) if enable_planner else None
+    ) if enable_planner else None
 
     store = _session_store()
     sid = session_id or session_id_for_dir(working_dir)
@@ -128,10 +191,16 @@ def _make_agent(
 
     skills = discover_skills(working_dir)
     context.set_skills_content(skills_prefix_block(skills))
-    project_memories = memory.list_by_type("project", limit=10)
-    if project_memories and hasattr(context, "set_project_memories"):
-        pinned = "\n".join(f"- {m.get('text', '')}" for m in project_memories)
-        context.set_project_memories(pinned)
+    if hasattr(context, "set_project_memories"):
+        memory_parts: list[str] = []
+        file_memory = load_project_memory(working_dir)
+        if file_memory:
+            memory_parts.append(file_memory)
+        project_memories = memory.list_by_type("project", limit=10)
+        if project_memories:
+            memory_parts.append("\n".join(f"- {m.get('text', '')}" for m in project_memories))
+        if memory_parts:
+            context.set_project_memories("\n\n".join(memory_parts))
 
     def on_event(resp) -> None:
         metadata: dict = {"model": resp.model, **(resp.metadata or {})}
@@ -162,20 +231,16 @@ def _make_agent(
             ),
         )
 
-    def agent_factory() -> AgentLoop:
-        sub_sid = f"{sid}-sub-{uuid.uuid4().hex[:8]}"
-        sub_ctx = ContextManager()
-        return _make_agent(
-            cfg,
-            enable_planner=False,
-            session_id=sub_sid,
-            context=sub_ctx,
-        )
+    def agent_factory(tool_whitelist: list[str] | None = None, max_steps: int | None = None) -> AgentLoop:
+        return build_subagent_loop(loop_holder["loop"], tool_whitelist, max_steps)
+
+    loop_holder: dict[str, AgentLoop] = {}
 
     loop = AgentLoop(
         llm,
         tools,
         context,
+        max_iterations=int(cfg.get("max_steps", 50)),
         planner=planner,
         permission_evaluator=evaluator,
         sandbox_executor_url=cfg.get("sandbox_executor_url"),
@@ -184,8 +249,22 @@ def _make_agent(
         on_event=on_event,
         agent_factory=agent_factory,
         no_tools=no_tools,
+        plan_state=PlanState(),
     )
+    loop_holder["loop"] = loop
+    tools.set_agent_factory(agent_factory)
+    tools.set_session_log_provider(lambda: loop.context.messages)
+    tools.set_session_id(sid)
     _ACTIVE_LOOPS[sid] = loop
+    if enable_planner and planner_llm is not None:
+        planning_context = context.prefix.project_memories if hasattr(context, "prefix") else ""
+        coordinator = Coordinator(
+            loop,
+            planner_llm,
+            planner_max_steps=int(cfg.get("planner_max_steps", 20)),
+            planning_context=planning_context,
+        )
+        _ACTIVE_COORDINATORS[sid] = coordinator
     return loop
 
 
@@ -209,6 +288,8 @@ async def chat(request: web.Request) -> web.StreamResponse:
     await _ensure_mcp(cfg, loop.tools)
     store.append_event(sid, SessionEvent(event_type="user", content=prompt, metadata={}))
 
+    expanded = expand_prompt(prompt, working_dir)
+
     response = web.StreamResponse(
         status=200,
         reason="OK",
@@ -221,11 +302,37 @@ async def chat(request: web.Request) -> web.StreamResponse:
     )
     await response.prepare(request)
 
-    async for resp in loop.run(prompt):
+    if expanded.compact_trigger:
+        async for resp in _run_manual_compact(context, loop.llm, expanded.compact_focus):
+            payload = json.dumps(_serialize_response(resp))
+            await response.write(f"data: {payload}\n\n".encode())
+        await response.write(b"data: [DONE]\n\n")
+        return response
+
+    if expanded.direct_reply is not None:
+        reply = {"type": "assistant", "content": expanded.direct_reply, "tool_calls": [], "model": "command"}
+        await response.write(f"data: {json.dumps(reply)}\n\n".encode())
+        await response.write(b"data: [DONE]\n\n")
+        return response
+
+    for block in expanded.context_blocks:
+        context.add_context_block(block)
+
+    runner = _get_runner(sid)
+
+    if expanded.plan_mode_enter:
+        runner.plan_state.enter()
+    if expanded.plan_mode_exit_request:
+        runner.plan_state.request_exit(expanded.prompt)
+    if expanded.plan_mode_exit_approve:
+        runner.plan_state.approve_exit()
+
+    async for resp in runner.run(expanded.prompt):
         payload = json.dumps(_serialize_response(resp))
         await response.write(f"data: {payload}\n\n".encode())
     cache_stats = global_cache_metrics().to_dict()
-    await response.write(f"data: {json.dumps({'type': 'cache_stats', 'content': '', 'cache': cache_stats})}\n\n".encode())
+    cache_event = json.dumps({"type": "cache_stats", "content": "", "cache": cache_stats})
+    await response.write(f"data: {cache_event}\n\n".encode())
     await response.write(b"data: [DONE]\n\n")
     return response
 
@@ -244,8 +351,22 @@ async def run_task(request: web.Request) -> web.Response:
     await _ensure_mcp(cfg, loop.tools)
     store.append_event(sid, SessionEvent(event_type="user", content=prompt, metadata={}))
 
+    expanded = expand_prompt(prompt, working_dir)
+    if expanded.compact_trigger:
+        outputs = []
+        async for resp in _run_manual_compact(context, loop.llm, expanded.compact_focus):
+            outputs.append(_serialize_response(resp))
+        return web.json_response({"outputs": outputs, "session_id": sid})
+    if expanded.direct_reply is not None:
+        reply = {"type": "assistant", "content": expanded.direct_reply, "tool_calls": [], "model": "command"}
+        return web.json_response({"outputs": [reply], "session_id": sid})
+    for block in expanded.context_blocks:
+        context.add_context_block(block)
+
+    runner = _get_runner(sid)
+
     outputs = []
-    async for resp in loop.run(prompt):
+    async for resp in runner.run(expanded.prompt):
         outputs.append(_serialize_response(resp))
 
     return web.json_response({"outputs": outputs, "session_id": sid, "cache": global_cache_metrics().to_dict()})
@@ -299,7 +420,6 @@ async def create_task(request: web.Request) -> web.Response:
         await _ensure_mcp(cfg, loop.tools)
         try:
             async for resp in loop.run(prompt):
-                payload = _serialize_response(resp)
                 metadata = {"model": resp.model}
                 if resp.usage:
                     metadata["usage"] = resp.usage
@@ -355,9 +475,15 @@ async def get_task(request: web.Request) -> web.Response:
 
 
 async def list_pending_permissions(request: web.Request) -> web.Response:
-    pending = []
-    for loop in _ACTIVE_LOOPS.values():
-        pending.extend(loop.list_pending_permissions())
+    pending: list[dict] = []
+    seen: set[str] = set()
+    for sid in set(_ACTIVE_LOOPS) | set(_ACTIVE_COORDINATORS):
+        runner = _get_runner(sid)
+        for item in runner.list_pending_permissions():
+            rid = item.get("request_id")
+            if rid and rid not in seen:
+                seen.add(rid)
+                pending.append(item)
     return web.json_response({"pending": pending})
 
 
@@ -365,10 +491,52 @@ async def respond_permission(request: web.Request) -> web.Response:
     request_id = request.match_info["id"]
     data = await request.json()
     approved = bool(data.get("approved", False))
-    for loop in _ACTIVE_LOOPS.values():
-        if await loop.respond_permission(request_id, approved):
+    for sid in list(_ACTIVE_LOOPS.keys()) + list(_ACTIVE_COORDINATORS.keys()):
+        runner = _get_runner(sid)
+        if await runner.respond_permission(request_id, approved):
             return web.json_response({"ok": True, "request_id": request_id, "approved": approved})
     return web.json_response({"error": "Permission request not found"}, status=404)
+
+
+async def list_checkpoints(request: web.Request) -> web.Response:
+    cfg = _resolve_config(request.app["config"])
+    manager = CheckpointManager(cfg.get("working_dir", "."))
+    return web.json_response({"checkpoints": [c.to_dict() for c in manager.list_checkpoints()]})
+
+
+async def codegraph_search(request: web.Request) -> web.Response:
+    pattern = request.query.get("pattern", "")
+    cfg = _resolve_config(request.app["config"])
+    working_dir = cfg.get("working_dir", ".")
+    from likecodex_engine.tools.codegraph import load_or_build
+
+    graph = load_or_build(working_dir)
+    results = []
+    for sym in graph.symbols:
+        if pattern.lower() in sym.name.lower():
+            results.append(
+                {
+                    "name": sym.name,
+                    "kind": sym.kind,
+                    "path": sym.path,
+                    "line": sym.line,
+                }
+            )
+            if len(results) >= 50:
+                break
+    return web.json_response(
+        {"pattern": pattern, "results": results, "files": graph.file_count}
+    )
+
+
+async def rewind_checkpoint(request: web.Request) -> web.Response:
+    data = await request.json()
+    checkpoint_id = data.get("checkpoint_id")
+    cfg = _resolve_config(request.app["config"])
+    manager = CheckpointManager(cfg.get("working_dir", "."))
+    result = manager.rewind(checkpoint_id)
+    status = 200 if result.get("rewound") else 400
+    return web.json_response(result, status=status)
 
 
 async def list_sessions(request: web.Request) -> web.Response:
@@ -411,6 +579,9 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_post("/permissions/{id}/respond", respond_permission)
     app.router.add_get("/sessions", list_sessions)
     app.router.add_get("/sessions/{id}/events", get_session_events)
+    app.router.add_get("/checkpoints", list_checkpoints)
+    app.router.add_post("/checkpoints/rewind", rewind_checkpoint)
+    app.router.add_get("/codegraph/search", codegraph_search)
     return app
 
 
