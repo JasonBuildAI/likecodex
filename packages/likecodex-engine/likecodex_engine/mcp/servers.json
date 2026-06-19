@@ -1,12 +1,10 @@
 {
   "filesystem": {
-    "enabled": false,
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
     "env": {}
   },
   "fetch": {
-    "enabled": false,
     "command": "uvx",
     "args": ["mcp-server-fetch"],
     "env": {}
