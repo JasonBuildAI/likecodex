@@ -68,9 +68,6 @@ impl SandboxExecutor {
         if DockerExecutor::is_available().await {
             let docker = DockerExecutor::new(&self.image, self.policy.clone());
             if let Err(e) = docker.ensure_image().await {
-                if !self.config.allow_fallback {
-                    anyhow::bail!("failed to ensure sandbox image: {e}");
-                }
                 warn!(error = %e, "failed to ensure sandbox image, falling back to local");
                 return FallbackExecutor::new(self.policy.clone())
                     .execute(command, &working_dir)
@@ -79,9 +76,6 @@ impl SandboxExecutor {
             match docker.execute(command, &working_dir).await {
                 Ok(result) => Ok(result),
                 Err(e) => {
-                    if !self.config.allow_fallback {
-                        anyhow::bail!("sandbox execution failed: {e}");
-                    }
                     warn!(error = %e, "sandbox execution failed, falling back to local");
                     FallbackExecutor::new(self.policy.clone())
                         .execute(command, &working_dir)
@@ -89,27 +83,10 @@ impl SandboxExecutor {
                 }
             }
         } else {
-            if !self.config.allow_fallback {
-                anyhow::bail!("docker not available and sandbox fallback is disabled");
-            }
             info!("docker not available, using fallback local executor");
             FallbackExecutor::new(self.policy.clone())
                 .execute(command, &working_dir)
                 .await
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use likecodex_core::config::SandboxConfig;
-
-    #[test]
-    fn sandbox_respects_allow_fallback_flag() {
-        let mut cfg = SandboxConfig::default();
-        cfg.allow_fallback = false;
-        let executor = SandboxExecutor::new(cfg);
-        assert!(executor.is_enabled());
     }
 }

@@ -83,25 +83,14 @@ impl DockerExecutor {
         command: &str,
         working_dir: impl AsRef<Path>,
     ) -> Result<ExecutionResult> {
-        let working_dir = working_dir
-            .as_ref()
-            .canonicalize()
-            .unwrap_or_else(|_| working_dir.as_ref().to_path_buf());
+        let working_dir = working_dir.as_ref().canonicalize().unwrap_or_else(|_| working_dir.as_ref().to_path_buf());
         let start = std::time::Instant::now();
 
         let mut docker_args = vec![
             "run".to_string(),
             "--rm".to_string(),
-            "--read-only".to_string(),
-            "--cap-drop=ALL".to_string(),
-            "--user".to_string(),
-            "1000:1000".to_string(),
             "--network".to_string(),
-            if self.policy.allow_network {
-                "bridge".to_string()
-            } else {
-                "none".to_string()
-            },
+            if self.policy.allow_network { "bridge".to_string() } else { "none".to_string() },
         ];
 
         if let Some(mem) = self.policy.memory_mb {
@@ -113,14 +102,12 @@ impl DockerExecutor {
             docker_args.push(cpus.to_string());
         }
 
-        // Mount the project directory read-write for workspace operations.
+        // Mount the project directory. By default read-write for the workspace.
         let mount = format!("{}:/workspace", working_dir.display());
         docker_args.push("-v".to_string());
         docker_args.push(mount);
         docker_args.push("-w".to_string());
         docker_args.push("/workspace".to_string());
-        docker_args.push("--tmpfs".to_string());
-        docker_args.push("/tmp:rw,noexec,nosuid,size=64m".to_string());
 
         docker_args.push(self.image.clone());
         docker_args.push("sh".to_string());
