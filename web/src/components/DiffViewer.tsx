@@ -1,27 +1,17 @@
 'use client';
 
 interface DiffViewerProps {
-  before: string;
-  after: string;
+  oldText?: string;
+  newText?: string;
 }
 
-export function DiffViewer({ before, after }: DiffViewerProps) {
+export function DiffViewer({ oldText = '', newText = '' }: DiffViewerProps) {
   return (
-    <div className="bg-surface border border-border rounded-lg p-4 h-full flex flex-col">
+    <div className="bg-surface border border-border rounded-lg p-4">
       <h2 className="text-sm font-semibold mb-3">Diff</h2>
-      <div className="grid grid-cols-2 gap-2 flex-1 min-h-0">
-        <div className="flex flex-col min-h-0">
-          <div className="text-xs text-muted mb-1">Before</div>
-          <pre className="text-xs overflow-auto flex-1 bg-background p-2 rounded border border-border">
-            {before || '(empty)'}
-          </pre>
-        </div>
-        <div className="flex flex-col min-h-0">
-          <div className="text-xs text-muted mb-1">After</div>
-          <pre className="text-xs overflow-auto flex-1 bg-background p-2 rounded border border-border">
-            {after || '(empty)'}
-          </pre>
-        </div>
+      <div className="grid grid-cols-2 gap-4 text-xs">
+        <pre className="bg-red-950/30 p-2 rounded border border-red-900/50 overflow-auto">{oldText}</pre>
+        <pre className="bg-green-950/30 p-2 rounded border border-green-900/50 overflow-auto">{newText}</pre>
       </div>
     </div>
   );
