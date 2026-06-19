@@ -1,0 +1,28 @@
+{
+  "results": [
+    {
+      "scenario": "fix_bug",
+      "steps": 4,
+      "tool_failures": 1,
+      "compactions": 0
+    },
+    {
+      "scenario": "plan_readonly",
+      "steps": 4,
+      "tool_failures": 0,
+      "compactions": 0
+    },
+    {
+      "scenario": "handoff_guard",
+      "steps": 6,
+      "tool_failures": 1,
+      "compactions": 0
+    },
+    {
+      "scenario": "context_compact",
+      "steps": 3,
+      "tool_failures": 0,
+      "compactions": 2
+    }
+  ]
+}
