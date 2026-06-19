@@ -159,4 +159,30 @@ mod tests {
         assert!(json.contains("\"type\":\"stream_chunk\""));
         assert!(json.contains("\"payload\""));
     }
+
+    #[test]
+    fn stream_retrying_serializes() {
+        let event = Event::StreamRetrying {
+            task_id: "t1".to_string(),
+            attempt: 1,
+            max: 1,
+            message: "retry".to_string(),
+            reason: "provider".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"stream_retrying\""));
+    }
+
+    #[test]
+    fn checkpoint_created_serializes() {
+        let event = Event::CheckpointCreated {
+            task_id: "t1".to_string(),
+            checkpoint_id: "cp1".to_string(),
+            label: "write_file".to_string(),
+            files: vec!["a.txt".to_string()],
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"checkpoint_created\""));
+        assert!(json.contains("\"checkpoint_id\":\"cp1\""));
+    }
 }

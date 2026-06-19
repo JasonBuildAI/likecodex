@@ -30,6 +30,7 @@ pub enum Event {
     },
     PermissionResponded {
         task_id: String,
+        request_id: String,
         response: PermissionResponse,
     },
     StreamChunk {
@@ -38,6 +39,29 @@ pub enum Event {
     },
     StreamFinished {
         task_id: String,
+    },
+    StreamRetrying {
+        task_id: String,
+        attempt: i32,
+        max: i32,
+        message: String,
+        reason: String,
+    },
+    CompactionStarted {
+        task_id: String,
+        trigger: String,
+    },
+    CompactionDone {
+        task_id: String,
+        messages: i32,
+        summary_chars: i32,
+        archive: Option<String>,
+    },
+    CheckpointCreated {
+        task_id: String,
+        checkpoint_id: String,
+        label: String,
+        files: Vec<String>,
     },
     Error {
         task_id: Option<String>,
