@@ -7,8 +7,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from likecodex_engine.tools.path_utils import resolve_in_working_dir
-
 
 class CodeReviewTools:
     """Best-effort static review helpers: pattern-based bug/quality checks."""
@@ -17,7 +15,10 @@ class CodeReviewTools:
         self.working_dir = Path(working_dir).resolve()
 
     def _resolve(self, path: str) -> Path:
-        return resolve_in_working_dir(self.working_dir, path)
+        target = Path(path)
+        if not target.is_absolute():
+            target = self.working_dir / target
+        return target.resolve()
 
     def review_file_schema(self) -> dict[str, Any]:
         return {
@@ -37,10 +38,7 @@ class CodeReviewTools:
         }
 
     async def review_file(self, path: str, focus: str = "general") -> str:
-        try:
-            target = self._resolve(path)
-        except PermissionError as e:
-            return json.dumps({"error": str(e)})
+        target = self._resolve(path)
         if not target.exists():
             return json.dumps({"error": f"File not found: {path}"})
         try:
@@ -136,10 +134,7 @@ class CodeReviewTools:
         }
 
     async def check_dependencies(self, manifest: str) -> str:
-        try:
-            target = self._resolve(manifest)
-        except PermissionError as e:
-            return json.dumps({"error": str(e)})
+        target = self._resolve(manifest)
         if not target.exists():
             return json.dumps({"error": f"Manifest not found: {manifest}"})
         try:
@@ -167,7 +162,7 @@ class CodeReviewTools:
                 msg = "Wildcard dependency version detected"
                 findings.append(self._finding(0, "warning", "dependencies", msg))
         elif name == "pyproject.toml":
-            has_deps = "dependencies = [" in content or "[project.dependencies]" in content
+            has_deps = 'dependencies = [' in content or "[project.dependencies]" in content
             if has_deps and "==" not in content:
                 msg = "Project dependencies may not be pinned"
                 findings.append(self._finding(0, "info", "dependencies", msg))

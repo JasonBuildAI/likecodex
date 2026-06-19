@@ -6,64 +6,190 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from likecodex_engine.tools.agent_memory import AgentMemoryTools
+from likecodex_engine.tools.code_index import CodeIndexTools
 from likecodex_engine.tools.code_review import CodeReviewTools
 from likecodex_engine.tools.code_search import CodeSearchTools
 from likecodex_engine.tools.edit_file import EditFileTools
 from likecodex_engine.tools.filesystem import FileSystemTools
 from likecodex_engine.tools.git import GitTools
+from likecodex_engine.tools.history import HistoryTools
+from likecodex_engine.tools.lsp import LspTools
+from likecodex_engine.tools.lsp_tools import LspSemanticTools
+from likecodex_engine.tools.notebook import NotebookTools
+from likecodex_engine.tools.plan_progress import PlanProgressTools
 from likecodex_engine.tools.shell import ShellTools
+from likecodex_engine.tools.todo import TodoTools
+from likecodex_engine.tools.web_fetch import WebFetchTools
 from likecodex_engine.tools.web_search import WebSearchTools
+
+AgentFactory = Callable[[list[str] | None, int | None], Any]
 
 
 class ToolRegistry:
     """Registers tools and dispatches calls."""
 
-    def __init__(self, working_dir: str | None = None) -> None:
+    def __init__(
+        self,
+        working_dir: str | None = None,
+        agent_factory: AgentFactory | None = None,
+        session_log_provider: Callable[[], list[Any]] | None = None,
+        config: dict[str, Any] | None = None,
+        register_defaults: bool = True,
+    ) -> None:
         self.working_dir = working_dir or "."
         self._tools: dict[str, dict[str, Any]] = {}
         self._handlers: dict[str, Callable[..., Awaitable[str]]] = {}
+        self._read_only: set[str] = set()
+        self._agent_factory = agent_factory
+        self._session_log = session_log_provider
+        self._session_id = ""
+        self.todo = TodoTools()
+        self.plan_progress = PlanProgressTools(session_log_provider, self.todo)
+        if register_defaults:
+            self._register_defaults(agent_factory)
+        elif agent_factory:
+            self._register_meta_tools(agent_factory)
 
-        # Register built-in tools
+    def _register_defaults(self, agent_factory: AgentFactory | None) -> None:
         fs = FileSystemTools(self.working_dir)
-        self.register("read_file", fs.read_file_schema(), fs.read_file)
+        self.register("read_file", fs.read_file_schema(), fs.read_file, read_only=True)
         self.register("write_file", fs.write_file_schema(), fs.write_file)
-        self.register("list_dir", fs.list_dir_schema(), fs.list_dir)
-        self.register("search_files", fs.search_files_schema(), fs.search_files)
+        self.register("list_dir", fs.list_dir_schema(), fs.list_dir, read_only=True)
+        self.register("ls", fs.ls_schema(), fs.ls, read_only=True)
+        self.register("glob", fs.glob_schema(), fs.glob, read_only=True)
+        self.register("move_file", fs.move_file_schema(), fs.move_file)
+        self.register("search_files", fs.search_files_schema(), fs.search_files, read_only=True)
 
         edit = EditFileTools(self.working_dir)
         self.register("edit_file", edit.edit_file_schema(), edit.edit_file)
+        self.register("multi_edit", edit.multi_edit_schema(), edit.multi_edit)
+        self.register("delete_range", edit.delete_range_schema(), edit.delete_range)
+        self.register("delete_symbol", edit.delete_symbol_schema(), edit.delete_symbol)
 
         shell = ShellTools(self.working_dir)
         self.register("run_command", shell.run_command_schema(), shell.run_command)
+        self.register("bgjobs", shell.bgjobs_schema(), shell.bgjobs)
+        self.register("bash_output", shell.bash_output_schema(), shell.bash_output, read_only=True)
+        self.register("kill_shell", shell.kill_shell_schema(), shell.kill_shell)
+        self.register("wait_job", shell.wait_job_schema(), shell.wait_job, read_only=True)
 
         search = CodeSearchTools(self.working_dir)
-        self.register("grep_files", search.grep_schema(), search.grep_files)
-        self.register("find_symbol", search.find_symbol_schema(), search.find_symbol)
-        self.register("index_search", search.index_search_schema(), search.index_search)
+        self.register("grep_files", search.grep_schema(), search.grep_files, read_only=True)
+        self.register("find_symbol", search.find_symbol_schema(), search.find_symbol, read_only=True)
+        self.register("index_search", search.index_search_schema(), search.index_search, read_only=True)
+        self.register("codegraph_search", search.codegraph_search_schema(), search.codegraph_search, read_only=True)
+        self.register("codegraph_symbols", search.codegraph_symbols_schema(), search.codegraph_symbols, read_only=True)
+        self.register("codegraph_callers", search.codegraph_callers_schema(), search.codegraph_callers, read_only=True)
+        self.register("codegraph_reindex", search.codegraph_reindex_schema(), search.codegraph_reindex, read_only=True)
+
+        code_index = CodeIndexTools(self.working_dir)
+        self.register("code_index", code_index.code_index_schema(), code_index.code_index, read_only=True)
 
         git = GitTools(self.working_dir)
-        self.register("git_status", git.status_schema(), git.git_status)
-        self.register("git_diff", git.diff_schema(), git.git_diff)
-        self.register("git_log", git.log_schema(), git.git_log)
-        self.register("git_branch", git.branch_schema(), git.git_branch)
+        self.register("git_status", git.status_schema(), git.git_status, read_only=True)
+        self.register("git_diff", git.diff_schema(), git.git_diff, read_only=True)
+        self.register("git_log", git.log_schema(), git.git_log, read_only=True)
+        self.register("git_branch", git.branch_schema(), git.git_branch, read_only=True)
         self.register("git_commit", git.commit_schema(), git.git_commit)
 
         review = CodeReviewTools(self.working_dir)
-        self.register("review_file", review.review_file_schema(), review.review_file)
-        self.register("review_diff", review.review_diff_schema(), review.review_diff)
-        self.register("check_dependencies", review.check_dependencies_schema(), review.check_dependencies)
+        self.register("review_file", review.review_file_schema(), review.review_file, read_only=True)
+        self.register("review_diff", review.review_diff_schema(), review.review_diff, read_only=True)
+        self.register(
+            "check_dependencies",
+            review.check_dependencies_schema(),
+            review.check_dependencies,
+            read_only=True,
+        )
 
         search_web = WebSearchTools()
-        self.register("web_search", search_web.search_schema(), search_web.web_search)
+        self.register("web_search", search_web.search_schema(), search_web.web_search, read_only=True)
+
+        fetch = WebFetchTools()
+        self.register("web_fetch", fetch.fetch_schema(), fetch.web_fetch, read_only=True)
+
+        notebook = NotebookTools(self.working_dir)
+        self.register("notebook_edit", notebook.notebook_edit_schema(), notebook.notebook_edit)
+
+        lsp_sem = LspSemanticTools(self.working_dir)
+        self.register("lsp_definition", lsp_sem.lsp_definition_schema(), lsp_sem.lsp_definition, read_only=True)
+        self.register("lsp_references", lsp_sem.lsp_references_schema(), lsp_sem.lsp_references, read_only=True)
+        self.register("lsp_hover", lsp_sem.lsp_hover_schema(), lsp_sem.lsp_hover, read_only=True)
+        self.register("lsp_diagnostics", lsp_sem.lsp_diagnostics_schema(), lsp_sem.lsp_diagnostics, read_only=True)
+
+        checker = LspTools(self.working_dir)
+        self._checker = checker
+
+        hist = HistoryTools(self.working_dir)
+        self.register("history", hist.history_schema(), hist.history, read_only=True)
+
+        mem = AgentMemoryTools(self.working_dir)
+        self.register("remember", mem.remember_schema(), mem.remember)
+        self.register("forget", mem.forget_schema(), mem.forget)
+        self.register("memory_search", mem.memory_search_schema(), mem.memory_search, read_only=True)
+
+        self.register("todo_write", self.todo.todo_write_schema(), self.todo.todo_write)
+        self.register(
+            "complete_step",
+            self.plan_progress.complete_step_schema(),
+            self.plan_progress.complete_step,
+        )
+
+        if agent_factory:
+            self._register_meta_tools(agent_factory)
+
+    def set_session_log_provider(self, provider: Callable[[], list[Any]]) -> None:
+        self._session_log = provider
+        self.plan_progress._session_log = provider
+
+    def set_evidence_ledger(self, ledger: Any) -> None:
+        self.todo.set_evidence_ledger(ledger)
+
+    def set_session_id(self, session_id: str) -> None:
+        self._session_id = session_id
+
+    def set_agent_factory(self, factory: AgentFactory) -> None:
+        self._agent_factory = factory
+        self._register_meta_tools(factory)
+
+    def _register_meta_tools(self, factory: AgentFactory) -> None:
+        from likecodex_engine.agent.parallel_tasks import ParallelTasksTool
+        from likecodex_engine.agent.subagent_store import SubagentStore
+        from likecodex_engine.agent.task import TaskTool
+        from likecodex_engine.skills.runner import SkillRunner
+
+        store = SubagentStore(self.working_dir)
+        store.cleanup_stale_running()
+        task = TaskTool(
+            factory,
+            store=store,
+            parent_session=self._session_id,
+            working_dir=self.working_dir,
+        )
+        self.register("task", task.task_schema(), task.task)
+        parallel = ParallelTasksTool(factory)
+        self.register("parallel_tasks", parallel.parallel_tasks_schema(), parallel.parallel_tasks)
+        skills = SkillRunner(self.working_dir, factory)
+        self.register("run_skill", skills.run_skill_schema(), skills.run_skill)
 
     def register(
         self,
         name: str,
         schema: dict[str, Any],
         handler: Callable[..., Awaitable[str]],
+        read_only: bool = False,
     ) -> None:
         self._tools[name] = schema
         self._handlers[name] = handler
+        if read_only:
+            self._read_only.add(name)
+
+    def is_read_only(self, name: str) -> bool:
+        return name in self._read_only
+
+    def filter_names(self, names: list[str]) -> list[str]:
+        return [n for n in names if n in self._tools]
 
     def to_openai_schema(self) -> list[dict[str, Any]]:
         return [
@@ -82,3 +208,7 @@ class ToolRegistry:
 
     def list_tools(self) -> list[str]:
         return list(self._tools.keys())
+
+    @property
+    def handlers(self) -> dict[str, Callable[..., Awaitable[str]]]:
+        return self._handlers

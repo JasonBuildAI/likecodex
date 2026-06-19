@@ -12,25 +12,24 @@ class GitTools:
     def __init__(self, working_dir: str) -> None:
         self.working_dir = Path(working_dir).resolve()
 
-    async def _run(self, args: list[str]) -> dict[str, Any]:
-        command_display = "git " + " ".join(args)
+    async def _run(self, args: str) -> dict[str, Any]:
+        command = f"git {args}"
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "git",
-                *args,
+            proc = await asyncio.create_subprocess_shell(
+                command,
                 cwd=self.working_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
             return {
-                "command": command_display,
+                "command": command,
                 "exit_code": proc.returncode,
                 "stdout": stdout.decode("utf-8", errors="replace"),
                 "stderr": stderr.decode("utf-8", errors="replace"),
             }
         except Exception as e:
-            return {"command": command_display, "exit_code": None, "error": str(e)}
+            return {"command": command, "exit_code": None, "error": str(e)}
 
     def status_schema(self) -> dict[str, Any]:
         return {
@@ -39,7 +38,7 @@ class GitTools:
         }
 
     async def git_status(self) -> str:
-        result = await self._run(["status", "--porcelain", "-b"])
+        result = await self._run("status --porcelain -b")
         return json.dumps(result)
 
     def diff_schema(self) -> dict[str, Any]:
@@ -52,9 +51,7 @@ class GitTools:
         }
 
     async def git_diff(self, target: str = "HEAD") -> str:
-        if target.startswith("-"):
-            return json.dumps({"error": "Invalid diff target"})
-        result = await self._run(["diff", target])
+        result = await self._run(f"diff {target}")
         return json.dumps(result)
 
     def log_schema(self) -> dict[str, Any]:
@@ -63,14 +60,13 @@ class GitTools:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "count": {"type": "integer", "default": 10, "description": "Number of commits to show"},
+                    "count": {"type": "integer", "default": 10, "description": "Number of commits to show"}
                 },
             },
         }
 
     async def git_log(self, count: int = 10) -> str:
-        count = max(1, min(int(count), 100))
-        result = await self._run(["log", "--oneline", "-n", str(count)])
+        result = await self._run(f"log --oneline -n {count}")
         return json.dumps(result)
 
     def branch_schema(self) -> dict[str, Any]:
@@ -80,7 +76,7 @@ class GitTools:
         }
 
     async def git_branch(self) -> str:
-        result = await self._run(["branch", "--show-current"])
+        result = await self._run("branch --show-current")
         return json.dumps(result)
 
     def commit_schema(self) -> dict[str, Any]:
@@ -98,6 +94,7 @@ class GitTools:
 
     async def git_commit(self, message: str, all: bool = False) -> str:
         if all:
-            await self._run(["add", "-A"])
-        result = await self._run(["commit", "-m", message])
+            await self._run("add -A")
+        escaped_message = message.replace('"', '\\"')
+        result = await self._run(f'commit -m "{escaped_message}"')
         return json.dumps(result)

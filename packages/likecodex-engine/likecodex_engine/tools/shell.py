@@ -1,18 +1,44 @@
-"""Shell execution tools for the agent."""
+"""Shell execution tools for the agent, including background jobs."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import shutil
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
+
+
+class BackgroundJob:
+    """Tracks a long-running command started in the background."""
+
+    def __init__(self, job_id: str, command: str) -> None:
+        self.job_id = job_id
+        self.command = command
+        self.proc: asyncio.subprocess.Process | None = None
+        self.stdout = bytearray()
+        self.stderr = bytearray()
+        self.exit_code: int | None = None
+        self.done = False
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "command": self.command,
+            "running": not self.done,
+            "exit_code": self.exit_code,
+            "stdout": bytes(self.stdout).decode("utf-8", errors="replace"),
+            "stderr": bytes(self.stderr).decode("utf-8", errors="replace"),
+        }
 
 
 class ShellTools:
     def __init__(self, working_dir: str) -> None:
         self.working_dir = Path(working_dir).resolve()
+        self._jobs: dict[str, BackgroundJob] = {}
 
     def run_command_schema(self) -> dict[str, Any]:
         return {
@@ -35,7 +61,12 @@ class ShellTools:
 
     def _shell_command(self, command: str) -> tuple[str, list[str]]:
         if sys.platform == "win32":
-            comspec = os.environ.get("ComSpec", "cmd.exe")
+            # Prefer PowerShell when available for richer command support, then
+            # fall back to cmd.exe.
+            pwsh = shutil.which("pwsh") or shutil.which("powershell")
+            if pwsh:
+                return pwsh, ["-NoProfile", "-NonInteractive", "-Command", command]
+            comspec = os.environ.get("COMSPEC", "cmd.exe")
             return comspec, ["/c", command]
         return "sh", ["-c", command]
 
@@ -74,3 +105,131 @@ class ShellTools:
             )
         except Exception as e:
             return json.dumps({"command": command, "error": str(e)})
+
+    def bgjobs_schema(self) -> dict[str, Any]:
+        return {
+            "description": (
+                "Manage background shell jobs. action=start launches a command, "
+                "list shows all jobs, status/output reads one, kill terminates it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["start", "list", "status", "kill"],
+                    },
+                    "command": {"type": "string", "description": "Command (for action=start)"},
+                    "job_id": {"type": "string", "description": "Job id (status/kill)"},
+                },
+                "required": ["action"],
+            },
+        }
+
+    async def bgjobs(
+        self,
+        action: str,
+        command: str | None = None,
+        job_id: str | None = None,
+    ) -> str:
+        if action == "start":
+            if not command:
+                return json.dumps({"error": "command required for action=start"})
+            return await self._start_job(command)
+        if action == "list":
+            return json.dumps({"jobs": [job.status() for job in self._jobs.values()]})
+        if action in ("status", "output"):
+            job = self._jobs.get(job_id or "")
+            if not job:
+                return json.dumps({"error": f"job not found: {job_id}"})
+            return json.dumps(job.status())
+        if action == "kill":
+            job = self._jobs.get(job_id or "")
+            if not job:
+                return json.dumps({"error": f"job not found: {job_id}"})
+            if job.proc and not job.done:
+                job.proc.kill()
+            return json.dumps({"job_id": job.job_id, "killed": True})
+        return json.dumps({"error": f"unknown action: {action}"})
+
+    async def _start_job(self, command: str) -> str:
+        executable, args = self._shell_command(command)
+        job_id = uuid.uuid4().hex[:8]
+        job = BackgroundJob(job_id, command)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                executable,
+                *args,
+                cwd=self.working_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except Exception as exc:
+            return json.dumps({"error": str(exc), "command": command})
+        job.proc = proc
+        self._jobs[job_id] = job
+        asyncio.create_task(self._drain(job))
+        return json.dumps({"job_id": job_id, "command": command, "running": True})
+
+    async def _drain(self, job: BackgroundJob) -> None:
+        assert job.proc is not None
+        stdout, stderr = await job.proc.communicate()
+        job.stdout.extend(stdout)
+        job.stderr.extend(stderr)
+        job.exit_code = job.proc.returncode
+        job.done = True
+
+    def bash_output_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Read new output from a background job.",
+            "parameters": {
+                "type": "object",
+                "properties": {"job_id": {"type": "string"}},
+                "required": ["job_id"],
+            },
+        }
+
+    async def bash_output(self, job_id: str) -> str:
+        job = self._jobs.get(job_id)
+        if not job:
+            return json.dumps({"error": f"job not found: {job_id}"})
+        return json.dumps(job.status())
+
+    def kill_shell_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Terminate a background job.",
+            "parameters": {
+                "type": "object",
+                "properties": {"job_id": {"type": "string"}},
+                "required": ["job_id"],
+            },
+        }
+
+    async def kill_shell(self, job_id: str) -> str:
+        return await self.bgjobs("kill", job_id=job_id)
+
+    def wait_job_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Wait for a background job to finish.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string"},
+                    "timeout": {"type": "integer", "default": 120},
+                },
+                "required": ["job_id"],
+            },
+        }
+
+    async def wait_job(self, job_id: str, timeout: int = 120) -> str:
+        job = self._jobs.get(job_id)
+        if not job:
+            return json.dumps({"error": f"job not found: {job_id}"})
+        if job.done:
+            return json.dumps(job.status())
+        deadline = asyncio.get_running_loop().time() + float(timeout)
+        while not job.done:
+            if asyncio.get_running_loop().time() > deadline:
+                return json.dumps({"error": "timeout waiting for job", **job.status()})
+            await asyncio.sleep(0.2)
+        return json.dumps(job.status())

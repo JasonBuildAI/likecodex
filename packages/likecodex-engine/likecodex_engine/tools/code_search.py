@@ -10,11 +10,14 @@ from typing import Any
 
 import aiohttp
 
+from likecodex_engine.tools.codegraph import build_codegraph, load_or_build, save_codegraph
+
 
 class CodeSearchTools:
     def __init__(self, working_dir: str) -> None:
         self.working_dir = Path(working_dir).resolve()
         self.indexer_url = os.environ.get("LIKECODEX_INDEXER_URL", "http://127.0.0.1:8080/index/search")
+        self._gitignore_patterns: set[str] | None = None
 
     def index_search_schema(self) -> dict[str, Any]:
         return {
@@ -129,7 +132,128 @@ class CodeSearchTools:
         except Exception as e:
             return json.dumps({"error": str(e)})
 
-    def _should_skip(self, path: Path) -> bool:
-        parts = path.relative_to(self.working_dir).parts
+    def _load_gitignore(self) -> set[str]:
+        patterns: set[str] = set()
+        gi = self.working_dir / ".gitignore"
+        if gi.exists():
+            for line in gi.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    patterns.add(line.rstrip("/"))
+        return patterns
+
+    def _gitignore_skip(self, path: Path) -> bool:
+        rel = path.relative_to(self.working_dir)
+        parts = rel.parts
         skip_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".next", "target"}
-        return any(part in skip_dirs for part in parts)
+        if any(part in skip_dirs for part in parts):
+            return True
+        patterns = getattr(self, "_gitignore_patterns", None)
+        if patterns is None:
+            self._gitignore_patterns = self._load_gitignore()
+            patterns = self._gitignore_patterns
+        rel_str = str(rel).replace("\\", "/")
+        for pat in patterns:
+            if pat.endswith("/"):
+                if rel_str.startswith(pat) or f"/{pat}" in f"/{rel_str}/":
+                    return True
+            elif pat in rel_str or rel_str == pat:
+                return True
+        return False
+
+    def _should_skip(self, path: Path) -> bool:
+        return self._gitignore_skip(path)
+
+    def codegraph_search_schema(self) -> dict[str, Any]:
+        return {
+            "description": (
+                "Search the code graph for symbol definitions (functions, classes, structs, "
+                "interfaces, types) by exact or substring name. Faster and more precise than grep."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Symbol name or substring"},
+                    "kind": {"type": "string", "description": "Optional kind filter (function/class/...)"},
+                    "max_results": {"type": "integer", "default": 30},
+                },
+                "required": ["name"],
+            },
+        }
+
+    async def codegraph_search(self, name: str, kind: str | None = None, max_results: int = 30) -> str:
+        graph = load_or_build(self.working_dir)
+        lowered = name.lower()
+        results = []
+        for sym in graph.symbols:
+            if lowered not in sym.name.lower():
+                continue
+            if kind and sym.kind != kind:
+                continue
+            results.append({"name": sym.name, "kind": sym.kind, "path": sym.path, "line": sym.line})
+            if len(results) >= max_results:
+                break
+        results.sort(key=lambda r: (r["name"] != name, r["path"], r["line"]))
+        return json.dumps({"query": name, "results": results, "count": len(results)})
+
+    def codegraph_symbols_schema(self) -> dict[str, Any]:
+        return {
+            "description": "List all symbol definitions in a given file from the code graph.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative file path"},
+                },
+                "required": ["path"],
+            },
+        }
+
+    async def codegraph_symbols(self, path: str) -> str:
+        graph = load_or_build(self.working_dir)
+        norm = path.replace("\\", "/")
+        symbols = [
+            {"name": s.name, "kind": s.kind, "line": s.line}
+            for s in graph.symbols
+            if s.path.replace("\\", "/") == norm
+        ]
+        symbols.sort(key=lambda s: s["line"])
+        return json.dumps({"path": path, "symbols": symbols, "count": len(symbols)})
+
+    def codegraph_callers_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Find call/reference sites of a known symbol across the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Exact symbol name"},
+                    "max_results": {"type": "integer", "default": 50},
+                },
+                "required": ["name"],
+            },
+        }
+
+    async def codegraph_callers(self, name: str, max_results: int = 50) -> str:
+        graph = load_or_build(self.working_dir)
+        sites = graph.references.get(name, [])[:max_results]
+        callers = []
+        for site in sites:
+            file_part, _, line_part = site.rpartition(":")
+            callers.append({"path": file_part, "line": int(line_part) if line_part.isdigit() else 0})
+        return json.dumps({"symbol": name, "callers": callers, "count": len(callers)})
+
+    def codegraph_reindex_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Rebuild the code graph index for the workspace (use after large refactors).",
+            "parameters": {"type": "object", "properties": {}},
+        }
+
+    async def codegraph_reindex(self) -> str:
+        graph = build_codegraph(self.working_dir)
+        save_codegraph(graph)
+        return json.dumps(
+            {
+                "reindexed": True,
+                "symbols": len(graph.symbols),
+                "files": graph.file_count,
+            }
+        )
