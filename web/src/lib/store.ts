@@ -56,6 +56,7 @@ interface AppState {
   setCacheHitRate: (rate: number | null) => void;
   addMessage: (message: Message) => void;
   appendToLastMessage: (content: string) => void;
+  upsertToolDispatch: (call: ToolCall, partial: boolean) => void;
   setTasks: (tasks: Task[]) => void;
   updateTask: (taskId: string, update: Partial<Task>) => void;
   setCurrentTaskId: (id: string | null) => void;
@@ -96,6 +97,36 @@ export const useAppStore = create<AppState>((set) => ({
           content,
           timestamp: Date.now(),
         });
+      }
+      return { messages };
+    }),
+  upsertToolDispatch: (call, partial) =>
+    set((state) => {
+      const messages = [...state.messages];
+      const matchIndex = messages.findIndex(
+        (msg) =>
+          msg.eventType === 'tool_dispatch' &&
+          ((call.id && msg.toolCalls?.[0]?.id === call.id) ||
+            (!call.id && msg.toolCalls?.[0]?.name === call.name))
+      );
+      const content = partial
+        ? `Calling ${call.name}...`
+        : `[tool] ${call.name}(${JSON.stringify(call.arguments)})`;
+      const next: Message = {
+        id:
+          matchIndex >= 0
+            ? messages[matchIndex].id
+            : `tool-dispatch-${call.id || call.name}-${Date.now()}`,
+        role: 'tool',
+        content,
+        toolCalls: [call],
+        eventType: partial ? 'tool_dispatch' : 'tool_call',
+        timestamp: Date.now(),
+      };
+      if (matchIndex >= 0) {
+        messages[matchIndex] = next;
+      } else {
+        messages.push(next);
       }
       return { messages };
     }),

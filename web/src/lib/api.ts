@@ -9,6 +9,16 @@ import {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 
+export function formatRetryMessage(reason: string, attempt: number, max: number): string {
+  const label =
+    reason === 'provider'
+      ? 'Provider reconnect'
+      : reason === 'stream_recovery'
+        ? 'Stream interrupted'
+        : 'Retrying';
+  return `${label} — retrying (${attempt}/${max})`;
+}
+
 export interface RustEvent {
   type: string;
   payload: Record<string, unknown>;
@@ -23,6 +33,11 @@ export function parseRustEvent(data: RustEvent): {
   permission?: PermissionRequest;
   planStep?: PlanStep;
   message?: string;
+  retryAttempt?: number;
+  retryMax?: number;
+  retryReason?: string;
+  checkpointLabel?: string;
+  checkpointFiles?: string[];
 } {
   const payload = data.payload || {};
   const taskId = payload.task_id as string | undefined;
@@ -52,6 +67,37 @@ export function parseRustEvent(data: RustEvent): {
     }
     case 'stream_finished':
       return { kind: 'stream_finished', taskId };
+    case 'stream_retrying':
+      return {
+        kind: 'retrying',
+        taskId,
+        content: String(payload.message || ''),
+        retryAttempt: Number(payload.attempt || 1),
+        retryMax: Number(payload.max || 1),
+        retryReason: String(payload.reason || 'retry'),
+      };
+    case 'compaction_started':
+      return {
+        kind: 'compaction_started',
+        taskId,
+        content: String(payload.trigger || 'auto'),
+      };
+    case 'compaction_done':
+      return {
+        kind: 'compaction_done',
+        taskId,
+        content: String(payload.archive || payload.messages || ''),
+      };
+    case 'checkpoint_created':
+      return {
+        kind: 'checkpoint_created',
+        taskId,
+        content: String(payload.checkpoint_id || ''),
+        checkpointLabel: String(payload.label || ''),
+        checkpointFiles: Array.isArray(payload.files)
+          ? payload.files.map((f) => String(f))
+          : [],
+      };
     case 'tool_call_requested': {
       const call = payload.call as Record<string, unknown> | undefined;
       return {
@@ -88,6 +134,23 @@ export function parseRustEvent(data: RustEvent): {
           tool: String(parsed.tool || req?.action_type || ''),
           description: String(req?.description || parsed.reason || ''),
           arguments: (parsed.arguments as Record<string, unknown>) || {},
+        },
+      };
+    }
+    case 'permission_responded': {
+      const response = String(payload.response || '');
+      const approved =
+        response === 'allow' ||
+        response === 'allow_once' ||
+        response === 'AllowOnce' ||
+        response === 'Allow';
+      return {
+        kind: 'permission_responded',
+        taskId,
+        permission: {
+          requestId: String(payload.request_id || ''),
+          tool: '',
+          description: approved ? 'approved' : 'denied',
         },
       };
     }
@@ -174,8 +237,10 @@ export type EventHandler = {
   onTaskCompleted?: (taskId: string, failed: boolean) => void;
   onStreamFinished?: () => void;
   onPermission?: (req: PermissionRequest) => void;
+  onPermissionResponded?: (requestId: string, approved: boolean) => void;
   onPlanStep?: (step: PlanStep) => void;
   onToolCall?: (call: ToolCall) => void;
+  onUpsertToolDispatch?: (call: ToolCall, partial: boolean) => void;
   onDiff?: (before: string, after: string) => void;
   onError?: (error: Error) => void;
 };
@@ -189,8 +254,68 @@ export function subscribeEvents(handlers: EventHandler): () => void {
       const parsed = parseRustEvent(data);
 
       switch (parsed.kind) {
+        case 'retrying':
+          handlers.onMessage({
+            id: `retry-${Date.now()}`,
+            role: 'system',
+            content: formatRetryMessage(
+              parsed.retryReason || 'retry',
+              parsed.retryAttempt || 1,
+              parsed.retryMax || 1
+            ),
+            eventType: 'retrying',
+            timestamp: Date.now(),
+          });
+          break;
+        case 'compaction_started':
+          handlers.onMessage({
+            id: `compact-start-${Date.now()}`,
+            role: 'system',
+            content: `Compacting conversation (${parsed.content || 'auto'})…`,
+            eventType: 'compaction_started',
+            timestamp: Date.now(),
+          });
+          break;
+        case 'compaction_done':
+          handlers.onMessage({
+            id: `compact-done-${Date.now()}`,
+            role: 'system',
+            content: 'Context compacted.',
+            eventType: 'compaction_done',
+            timestamp: Date.now(),
+          });
+          break;
+        case 'checkpoint_created': {
+          const files = parsed.checkpointFiles?.length
+            ? ` (${parsed.checkpointFiles.join(', ')})`
+            : '';
+          handlers.onMessage({
+            id: `checkpoint-${Date.now()}`,
+            role: 'system',
+            content: `Checkpoint saved: ${parsed.checkpointLabel || 'write'} → ${parsed.content || '?'}${files}`,
+            eventType: 'checkpoint',
+            timestamp: Date.now(),
+          });
+          break;
+        }
         case 'stream_chunk':
-          if (parsed.content?.startsWith('[tool]')) {
+          if (parsed.content?.startsWith('[retrying]')) {
+            handlers.onMessage({
+              id: `retry-${Date.now()}`,
+              role: 'system',
+              content: parsed.content.replace(/^\[retrying\]\s*/, 'Stream interrupted — retrying: '),
+              eventType: 'retrying',
+              timestamp: Date.now(),
+            });
+          } else if (parsed.content?.startsWith('[usage]')) {
+            handlers.onMessage({
+              id: `usage-${Date.now()}`,
+              role: 'system',
+              content: parsed.content.replace(/^\[usage\]\s?/, ''),
+              eventType: 'usage',
+              timestamp: Date.now(),
+            });
+          } else if (parsed.content?.startsWith('[tool]')) {
             handlers.onMessage({
               id: `tool-${Date.now()}`,
               role: 'tool',
@@ -216,6 +341,22 @@ export function subscribeEvents(handlers: EventHandler): () => void {
           break;
         case 'tool_call':
           if (parsed.call) {
+            const isPartial = parsed.call.arguments?.partial === true;
+            if (handlers.onUpsertToolDispatch) {
+              handlers.onUpsertToolDispatch(parsed.call, isPartial);
+              break;
+            }
+            if (isPartial) {
+              handlers.onMessage({
+                id: `tool-dispatch-${parsed.call.id || parsed.call.name}-${Date.now()}`,
+                role: 'tool',
+                content: `Calling ${parsed.call.name}...`,
+                toolCalls: [parsed.call],
+                eventType: 'tool_dispatch',
+                timestamp: Date.now(),
+              });
+              break;
+            }
             handlers.onToolCall?.(parsed.call);
             handlers.onMessage({
               id: `tool-call-${parsed.call.id}`,
@@ -238,6 +379,14 @@ export function subscribeEvents(handlers: EventHandler): () => void {
           break;
         case 'permission':
           if (parsed.permission) handlers.onPermission?.(parsed.permission);
+          break;
+        case 'permission_responded':
+          if (parsed.permission?.requestId) {
+            handlers.onPermissionResponded?.(
+              parsed.permission.requestId,
+              parsed.permission.description === 'approved'
+            );
+          }
           break;
         case 'plan':
           if (parsed.planStep) handlers.onPlanStep?.(parsed.planStep);
