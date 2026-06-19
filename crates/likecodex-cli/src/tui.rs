@@ -18,6 +18,15 @@ use tokio::sync::mpsc;
 
 use crate::interaction;
 
+fn format_retry_message(reason: &str, attempt: i32, max: i32) -> String {
+    let label = match reason {
+        "provider" => "Provider reconnect",
+        "stream_recovery" => "Stream interrupted",
+        _ => "Retrying",
+    };
+    format!("{label} — retrying ({attempt}/{max})")
+}
+
 #[derive(Debug, Clone)]
 pub struct DisplayMessage {
     pub role: String,
@@ -33,10 +42,24 @@ enum AppEvent {
 #[derive(Debug, Clone)]
 enum EngineEvent {
     Assistant { content: String, event_type: String },
+    Delta { content: String },
+    Retrying {
+        attempt: i32,
+        max: i32,
+        reason: String,
+    },
     ToolCall { name: String },
     ToolResult { content: String },
     Plan { content: String },
     Permission { content: String },
+    CompactionStarted { trigger: String },
+    CompactionDone { info: String },
+    CheckpointCreated {
+        checkpoint_id: String,
+        label: String,
+        files: Vec<String>,
+    },
+    Notice { content: String },
     Error { content: String },
     CacheStats { hit_rate: f64, hit_tokens: u64, miss_tokens: u64 },
     Done,
@@ -78,6 +101,22 @@ impl App {
         self.messages.push(DisplayMessage {
             role: "user".to_string(),
             content: content.into(),
+        });
+    }
+
+    fn append_assistant_delta(&mut self, content: &str) {
+        if content.is_empty() {
+            return;
+        }
+        if let Some(last) = self.messages.last_mut() {
+            if last.role == "assistant" {
+                last.content.push_str(content);
+                return;
+            }
+        }
+        self.messages.push(DisplayMessage {
+            role: "assistant".to_string(),
+            content: content.to_string(),
         });
     }
 
@@ -133,14 +172,45 @@ impl App {
                 content,
                 event_type,
             } => {
-                self.push_assistant(&event_type, &content);
+                if event_type == "assistant" && !content.is_empty() {
+                    self.append_assistant_delta(&content);
+                } else {
+                    self.push_assistant(&event_type, &content);
+                }
             }
+            EngineEvent::Delta { content } => self.append_assistant_delta(&content),
+            EngineEvent::Retrying {
+                attempt,
+                max,
+                reason,
+            } => self.push_system(format_retry_message(&reason, attempt, max)),
             EngineEvent::ToolCall { name } => self.push_tool_call(&name),
             EngineEvent::ToolResult { content } => self.push_tool_result(&content),
             EngineEvent::Plan { content } => self.push_system(format!("[plan] {content}")),
             EngineEvent::Permission { content } => {
                 self.push_system(format!("[permission] {content}"))
             }
+            EngineEvent::CompactionStarted { trigger } => {
+                self.push_system(format!("[compaction] compacting conversation ({trigger})…"))
+            }
+            EngineEvent::CompactionDone { info } => {
+                self.push_system(format!("[compaction] context compacted: {info}"))
+            }
+            EngineEvent::CheckpointCreated {
+                checkpoint_id,
+                label,
+                files,
+            } => {
+                let file_list = if files.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", files.join(", "))
+                };
+                self.push_system(format!(
+                    "[checkpoint] {label} → {checkpoint_id}{file_list}"
+                ))
+            }
+            EngineEvent::Notice { content } => self.push_system(content),
             EngineEvent::Error { content } => self.push_system(format!("[error] {content}")),
             EngineEvent::CacheStats {
                 hit_rate,
@@ -253,6 +323,10 @@ async fn run_tui_loop<B: Backend>(
                         }
                         if !prompt.is_empty() && !app.is_streaming {
                             app.push_user(&prompt);
+                            app.messages.push(DisplayMessage {
+                                role: "assistant".to_string(),
+                                content: String::new(),
+                            });
                             app.input.clear();
                             app.is_streaming = true;
                             let _ = prompt_tx_for_input.send(prompt);
@@ -300,7 +374,6 @@ async fn run_tui_loop<B: Backend>(
                     app.apply_engine_event(engine_event);
                 }
             },
-            app.scroll = app.scroll.saturating_add(1);
         }
     }
 
@@ -365,10 +438,87 @@ async fn stream_engine_events(
             }
             let content = event["content"].as_str().unwrap_or("").to_string();
             let engine_event = match event_type {
+                "delta" => EngineEvent::Delta { content },
+                "retrying" => {
+                    let attempt = event
+                        .get("metadata")
+                        .and_then(|v| v.get("retry_attempt"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(1) as i32;
+                    let max = event
+                        .get("metadata")
+                        .and_then(|v| v.get("retry_max"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(1) as i32;
+                    let reason = event
+                        .get("metadata")
+                        .and_then(|v| v.get("reason"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("retry")
+                        .to_string();
+                    EngineEvent::Retrying {
+                        attempt,
+                        max,
+                        reason,
+                    }
+                }
+                "tool_dispatch" => {
+                    let partial = event
+                        .get("metadata")
+                        .and_then(|v| v.get("partial"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    if partial {
+                        continue;
+                    }
+                    let name = event
+                        .get("metadata")
+                        .and_then(|v| v.get("tool_name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("tool")
+                        .to_string();
+                    EngineEvent::ToolCall { name }
+                }
                 "tool_result" => EngineEvent::ToolResult { content },
                 "plan" => EngineEvent::Plan { content },
                 "permission" => EngineEvent::Permission { content },
+                "notice" => EngineEvent::Notice { content },
+                "usage" => EngineEvent::Notice { content },
+                "compaction_started" => {
+                    let trigger = serde_json::from_str::<serde_json::Value>(&content)
+                        .ok()
+                        .and_then(|v| v.get("trigger").and_then(|t| t.as_str()).map(str::to_string))
+                        .unwrap_or_else(|| "auto".to_string());
+                    EngineEvent::CompactionStarted { trigger }
+                }
+                "compaction_done" => EngineEvent::CompactionDone { info: content },
+                "checkpoint" => {
+                    let parsed = serde_json::from_str::<serde_json::Value>(&content).unwrap_or_default();
+                    let files = parsed
+                        .get("files")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    EngineEvent::CheckpointCreated {
+                        checkpoint_id: parsed
+                            .get("checkpoint_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        label: parsed
+                            .get("label")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("write")
+                            .to_string(),
+                        files,
+                    }
+                }
                 "error" => EngineEvent::Error { content },
+                "assistant" if content.is_empty() => continue,
                 _ => {
                     if let Some(tcs) = event["tool_calls"].as_array() {
                         for tc in tcs {

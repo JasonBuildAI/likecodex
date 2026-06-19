@@ -68,6 +68,14 @@ enum Commands {
         #[command(subcommand)]
         action: Option<SessionAction>,
     },
+    /// List checkpoints or roll back the workspace to one.
+    Rewind {
+        /// Checkpoint id to restore (defaults to the most recent).
+        id: Option<String>,
+        /// List checkpoints instead of rewinding.
+        #[arg(long)]
+        list: bool,
+    },
     /// Start the API server.
     Serve,
     /// Show current configuration.
@@ -178,6 +186,9 @@ async fn run_prompt(client: &Client, url: &str, prompt: &str) -> Result<()> {
                     }
                 }
             }
+            "retrying" | "tool_dispatch" | "compaction_started" | "compaction_done" | "notice" | "usage" => {
+                handle_stream_event(client, url, item).await?;
+            }
             "plan" => println!("[plan] {content}"),
             "permission" => handle_permission(client, url, content).await?,
             _ => {
@@ -198,6 +209,88 @@ async fn run_prompt(client: &Client, url: &str, prompt: &str) -> Result<()> {
         print_cache_summary(cache);
     }
 
+    Ok(())
+}
+
+async fn handle_stream_event(client: &Client, url: &str, event: &Value) -> Result<()> {
+    if event.get("cache").is_some() {
+        print_cache_summary(&event["cache"]);
+        return Ok(());
+    }
+    let event_type = event["type"].as_str().unwrap_or("assistant");
+    let content = event["content"].as_str().unwrap_or("");
+    match event_type {
+        "delta" | "assistant" => {
+            if !content.is_empty() {
+                print!("{content}");
+                std::io::Write::flush(&mut std::io::stdout())?;
+            }
+        }
+        "retrying" => {
+            let attempt = event
+                .get("metadata")
+                .and_then(|v| v.get("retry_attempt"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1);
+            let max = event
+                .get("metadata")
+                .and_then(|v| v.get("retry_max"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1);
+            let reason = event
+                .get("metadata")
+                .and_then(|v| v.get("reason"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("retry");
+            println!("\n[retrying:{reason}] ({attempt}/{max})");
+        }
+        "tool_dispatch" => {
+            let partial = event
+                .get("metadata")
+                .and_then(|v| v.get("partial"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            if !partial {
+                let name = event
+                    .get("metadata")
+                    .and_then(|v| v.get("tool_name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("tool");
+                println!("\n[tool] {name}");
+            }
+        }
+        "tool_result" => {}
+        "plan" => println!("\n[plan] {content}"),
+        "permission" => handle_permission(client, url, content).await?,
+        "compaction_started" => println!("\n[compaction] compacting conversation…"),
+        "compaction_done" => println!("\n[compaction] context compacted"),
+        "checkpoint" => {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
+                let id = parsed["checkpoint_id"].as_str().unwrap_or("?");
+                let label = parsed["label"].as_str().unwrap_or("write");
+                let files = parsed["files"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                println!("\n[checkpoint] {label} → {id} ({files})");
+            } else {
+                println!("\n[checkpoint] {content}");
+            }
+        }
+        "notice" => println!("\n[notice] {content}"),
+        "usage" => println!("\n{content}"),
+        "error" => println!("\n[error] {content}"),
+        _ => {
+            if !content.is_empty() {
+                println!("\n[{event_type}] {content}");
+            }
+        }
+    }
     Ok(())
 }
 
@@ -228,23 +321,7 @@ async fn chat_stream(client: &Client, url: &str, prompt: &str, no_tools: bool) -
                     return Ok(());
                 }
                 if let Ok(event) = serde_json::from_str::<Value>(data) {
-                    if event.get("cache").is_some() {
-                        print_cache_summary(&event["cache"]);
-                        continue;
-                    }
-                    let event_type = event["type"].as_str().unwrap_or("assistant");
-                    let content = event["content"].as_str().unwrap_or("");
-                    match event_type {
-                        "tool_result" => {}
-                        "plan" => println!("[plan] {content}"),
-                        "permission" => handle_permission(client, url, content).await?,
-                        _ => {
-                            if !content.is_empty() {
-                                print!("{content}");
-                                std::io::Write::flush(&mut std::io::stdout())?;
-                            }
-                        }
-                    }
+                    handle_stream_event(client, url, &event).await?;
                 }
             }
         }
@@ -282,6 +359,13 @@ async fn cmd_doctor(client: &Client, url: &str, security: bool) -> Result<()> {
         _ => println!("[warn] python not found in PATH"),
     }
 
+    match Command::new("git").arg("--version").output() {
+        Ok(out) if out.status.success() => {
+            println!("[ok] {}", String::from_utf8_lossy(&out.stdout).trim());
+        }
+        _ => println!("[warn] git not found in PATH (checkpoints/rewind still work without it)"),
+    }
+
     if std::env::var("DEEPSEEK_API_KEY").is_ok() || std::env::var("LIKECODEX_LLM_API_KEY").is_ok() {
         println!("[ok] DeepSeek API key configured");
     } else {
@@ -317,6 +401,44 @@ async fn cmd_stats(client: &Client, url: &str) -> Result<()> {
         .context("failed to reach engine /metrics")?;
     let body: Value = resp.json().await?;
     println!("{}", serde_json::to_string_pretty(&body)?);
+    Ok(())
+}
+
+async fn cmd_rewind(client: &Client, url: &str, id: Option<String>, list: bool) -> Result<()> {
+    if list {
+        let resp = client.get(format!("{url}/checkpoints")).send().await?;
+        let body: Value = resp.json().await?;
+        let empty: Vec<Value> = vec![];
+        let checkpoints = body["checkpoints"].as_array().unwrap_or(&empty);
+        if checkpoints.is_empty() {
+            println!("[info] no checkpoints recorded yet");
+        }
+        for cp in checkpoints {
+            let cp_id = cp["id"].as_str().unwrap_or("?");
+            let label = cp["label"].as_str().unwrap_or("");
+            let count = cp["files"].as_array().map(|f| f.len()).unwrap_or(0);
+            println!("{cp_id}  {label}  ({count} files)");
+        }
+        return Ok(());
+    }
+
+    let resp = client
+        .post(format!("{url}/checkpoints/rewind"))
+        .json(&serde_json::json!({ "checkpoint_id": id }))
+        .send()
+        .await
+        .context("failed to reach engine /checkpoints/rewind")?;
+    let body: Value = resp.json().await?;
+    if body["rewound"].as_bool().unwrap_or(false) {
+        let restored = body["restored"].as_array().map(|a| a.len()).unwrap_or(0);
+        let removed = body["removed"].as_array().map(|a| a.len()).unwrap_or(0);
+        println!(
+            "[ok] rewound to {} — restored {restored}, removed {removed}",
+            body["checkpoint_id"].as_str().unwrap_or("?")
+        );
+    } else {
+        println!("[warn] rewind failed: {}", body["reason"].as_str().unwrap_or("unknown"));
+    }
     Ok(())
 }
 
@@ -403,6 +525,7 @@ async fn main() -> Result<()> {
         Some(Commands::Doctor { security }) => cmd_doctor(&client, &engine_url, security).await,
         Some(Commands::Stats) => cmd_stats(&client, &engine_url).await,
         Some(Commands::Sessions { action }) => cmd_sessions(&client, &engine_url, action).await,
+        Some(Commands::Rewind { id, list }) => cmd_rewind(&client, &engine_url, id, list).await,
         Some(Commands::Serve) => {
             let status = Command::new("cargo")
                 .args(["run", "-p", "likecodex-server"])
