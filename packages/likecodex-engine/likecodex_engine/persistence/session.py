@@ -6,9 +6,12 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from likecodex_engine.llm.base import Message
+
+if TYPE_CHECKING:
+    from likecodex_engine.context.manager import ContextManager
 
 
 @dataclass
