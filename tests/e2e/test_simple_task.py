@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
+
 from likecodex_engine.server import create_app
 
 
@@ -21,7 +22,7 @@ async def test_create_and_run_python_script() -> None:
                 "api_key": None,
                 "base_url": None,
                 "working_dir": td,
-                "approval_mode": "full-access",
+                "approval_mode": "auto",
                 "enable_planner": "false",
             }
         )
@@ -45,7 +46,7 @@ async def test_chat_streaming() -> None:
                 "api_key": None,
                 "base_url": None,
                 "working_dir": td,
-                "approval_mode": "full-access",
+                "approval_mode": "auto",
                 "enable_planner": "false",
             }
         )
@@ -68,7 +69,7 @@ async def test_plan_task() -> None:
                 "api_key": None,
                 "base_url": None,
                 "working_dir": td,
-                "approval_mode": "full-access",
+                "approval_mode": "auto",
                 "enable_planner": "false",
             }
         )
