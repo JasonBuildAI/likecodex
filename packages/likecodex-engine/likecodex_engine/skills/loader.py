@@ -49,9 +49,11 @@ def discover_skills(working_dir: str | Path) -> list[Skill]:
     roots: list[Path] = []
     home = Path.home() / ".likecodex" / "skills"
     project = Path(working_dir) / ".likecodex" / "skills"
+    agents_home = Path.home() / ".agents" / "skills"
+    agents_project = Path(working_dir) / ".agents" / "skills"
     claude_home = Path.home() / ".claude" / "skills"
     claude_project = Path(working_dir) / ".claude" / "skills"
-    for root in (home, project, claude_home, claude_project):
+    for root in (project, agents_project, home, agents_home, claude_home, claude_project):
         if root.exists():
             roots.append(root)
 
@@ -72,11 +74,10 @@ def discover_skills(working_dir: str | Path) -> list[Skill]:
 
 
 def skills_prefix_block(skills: list[Skill]) -> str:
+    """Cache-stable index: names and descriptions only (bodies load on demand)."""
     if not skills:
         return ""
-    lines = ["The following skills are available:"]
+    lines = ["The following skills are available (invoke via run_skill):"]
     for skill in skills:
         lines.append(f"- **{skill.name}**: {skill.description} (runAs={skill.run_as})")
-        if skill.run_as == "inline" and skill.body:
-            lines.append(skill.body[:500])
     return "\n".join(lines)
