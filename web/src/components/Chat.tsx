@@ -1,10 +1,14 @@
 'use client';
 
+import type { Message } from '@/lib/store';
 import { useAppStore } from '@/lib/store';
+import { ToolCallCard } from '@/components/ToolCallCard';
 
-export function Chat() {
-  const messages = useAppStore((s) => s.messages);
+interface ChatMessagesProps {
+  messages: Message[];
+}
 
+export function ChatMessages({ messages }: ChatMessagesProps) {
   return (
     <div className="space-y-4">
       {messages.map((msg) => (
@@ -15,9 +19,21 @@ export function Chat() {
           }`}
         >
           <div className="text-xs text-muted mb-1 uppercase">{msg.role}</div>
-          <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
+          {msg.content ? (
+            <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
+          ) : null}
+          {msg.toolCalls?.map((call) => (
+            <div key={call.id || call.name} className="mt-2">
+              <ToolCallCard call={call} />
+            </div>
+          ))}
         </div>
       ))}
     </div>
   );
+}
+
+export function Chat() {
+  const messages = useAppStore((s) => s.messages);
+  return <ChatMessages messages={messages} />;
 }
