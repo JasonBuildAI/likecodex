@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from likecodex_engine.agent.loop import AgentLoop
 from likecodex_engine.context.manager import ContextManager
 from likecodex_engine.llm.base import LLMResponse, ToolCall

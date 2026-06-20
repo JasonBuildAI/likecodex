@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from likecodex_engine.agent.loop import AgentLoop
 from likecodex_engine.context.manager import ContextManager
 from likecodex_engine.llm.base import LLMResponse, ToolCall
@@ -90,6 +89,7 @@ async def test_emits_tool_dispatch_during_stream(tmp_path) -> None:
         ]
     )
     tools = ToolRegistry(str(tmp_path), register_defaults=False)
+
     async def read_file(**_) -> str:
         return '{"content":"hi"}'
 

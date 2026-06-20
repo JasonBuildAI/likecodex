@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-
 from likecodex_engine.agent.guards import (
     empty_final_notice,
     empty_final_retry_message,

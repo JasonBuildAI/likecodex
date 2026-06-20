@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from likecodex_engine.agent.coordinator import (
     Coordinator,
     build_planner_readonly_tool_names,

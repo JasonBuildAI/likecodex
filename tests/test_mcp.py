@@ -26,5 +26,8 @@ async def test_register_mcp_tools_empty_config(tmp_path):
     from likecodex_engine.mcp.loader import register_mcp_tools
 
     registry = ToolRegistry(str(tmp_path))
-    registered = await register_mcp_tools(registry, {"mcp_servers": {}})
+    registered = await register_mcp_tools(
+        registry,
+        {"mcp_servers": {}, "mcp_servers_path": str(tmp_path / "no-servers.json")},
+    )
     assert registered == []

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
-
 from likecodex_engine.agent.loop import AgentLoop
 from likecodex_engine.agent.output_limit import limit_tool_output
 from likecodex_engine.context.manager import ContextManager

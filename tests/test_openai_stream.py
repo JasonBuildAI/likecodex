@@ -5,7 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
 from likecodex_engine.llm.errors import StreamInterruptedError
 from likecodex_engine.llm.openai_stream import (
     complete_with_reconnect,
@@ -106,10 +105,7 @@ async def test_stream_reconnect_before_first_output() -> None:
 
         return ok()
 
-    events = [
-        event
-        async for event in stream_openai_chat_with_reconnect(create_stream, model="mock")
-    ]
+    events = [event async for event in stream_openai_chat_with_reconnect(create_stream, model="mock")]
     assert attempts["count"] == 2
     assert events[-1].content == "ok"
 

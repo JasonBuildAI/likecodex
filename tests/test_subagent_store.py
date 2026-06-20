@@ -3,10 +3,9 @@
 import json
 
 import pytest
-
+from likecodex_engine.agent.loop import AgentLoop
 from likecodex_engine.agent.subagent_store import SubagentSpec, SubagentStore
 from likecodex_engine.agent.task import TaskTool
-from likecodex_engine.agent.loop import AgentLoop
 from likecodex_engine.context.manager import ContextManager
 from likecodex_engine.llm.base import LLMResponse
 from likecodex_engine.llm.mock import MockProvider
@@ -59,7 +58,9 @@ def test_cleanup_stale_running_marks_interrupted(tmp_path):
 @pytest.mark.asyncio
 async def test_task_persists_subagent_ref(tmp_path):
     parent = ToolRegistry(str(tmp_path), register_defaults=False)
-    parent.register("read_file", {"description": "x", "parameters": {"type": "object", "properties": {}}}, lambda **_: "{}")
+    parent.register(
+        "read_file", {"description": "x", "parameters": {"type": "object", "properties": {}}}, lambda **_: "{}"
+    )
 
     def factory(wl, ms):
         sub = ToolRegistry(str(tmp_path), register_defaults=False)

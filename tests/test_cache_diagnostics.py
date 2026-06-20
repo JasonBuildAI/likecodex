@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from likecodex_engine.agent.loop import AgentLoop
 from likecodex_engine.context.cache_first import CacheFirstContext
 from likecodex_engine.context.cache_shape import (

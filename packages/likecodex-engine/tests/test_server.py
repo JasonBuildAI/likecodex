@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-
 from likecodex_engine.server import create_app
 
 
@@ -40,7 +39,7 @@ async def test_run_task() -> None:
                 "api_key": None,
                 "base_url": None,
                 "working_dir": td,
-                "approval_mode": "auto",
+                "approval_mode": "full-access",
             }
         )
         async with TestClient(TestServer(app)) as client:

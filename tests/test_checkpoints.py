@@ -35,9 +35,7 @@ async def test_complete_step_requires_evidence() -> None:
     res = json.loads(await tools.complete_step("1", "done", []))
     assert res["accepted"] is False
 
-    res = json.loads(
-        await tools.complete_step("1", "done", [{"kind": "bogus", "summary": "x"}])
-    )
+    res = json.loads(await tools.complete_step("1", "done", [{"kind": "bogus", "summary": "x"}]))
     assert res["accepted"] is False
 
 

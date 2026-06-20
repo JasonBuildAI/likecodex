@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
-
 from likecodex_engine.agent.guards import finish_reason_notice
 from likecodex_engine.agent.loop import AgentLoop
 from likecodex_engine.agent.output_limit import MAX_TOOL_OUTPUT_BYTES, limit_tool_output

@@ -9,10 +9,7 @@ from likecodex_engine.tools.shell import ShellTools
 @pytest.mark.asyncio
 async def test_bash_output_and_kill(tmp_path):
     shell = ShellTools(str(tmp_path))
-    if __import__("sys").platform == "win32":
-        cmd = "echo hello"
-    else:
-        cmd = "echo hello"
+    cmd = "echo hello"
     started = json.loads(await shell.bgjobs("start", command=cmd))
     job_id = started["job_id"]
     import asyncio

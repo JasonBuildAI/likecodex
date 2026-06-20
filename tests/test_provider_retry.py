@@ -5,7 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
 from likecodex_engine.agent.streaming import stream_model_turn
 from likecodex_engine.llm.base import LLMResponse
 from likecodex_engine.llm.mock import MockProvider
