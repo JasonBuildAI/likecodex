@@ -1,0 +1,26 @@
+{
+  "generated_at": "2026-06-20T19:15:00Z",
+  "platform": "win32",
+  "status": "resolved",
+  "results": {
+    "python_ruff": "All checks passed",
+    "python_pytest": "194 passed, 1 skipped, 6 deselected",
+    "web_vitest": "11 passed",
+    "web_typecheck": "passed",
+    "web_lint": "passed",
+    "web_build": "passed",
+    "cache_benchmark": "94.12% hit rate, prefix stable",
+    "agent_benchmark": "--check ok"
+  },
+  "fixes": [
+    "web: ChatMessages export, TaskTimeline props, DiffViewer before/after aliases",
+    "web: eslint-config-next + .eslintrc.json",
+    "python: factory.py DeepSeek provider, server AppKey, ruff lint cleanup",
+    "tests: full-access approval, MCP isolation, agent_loop permissions",
+    "scripts: dev.ps1 MSVC toolchain + check-prerequisites.ps1"
+  ],
+  "remaining_environmental": {
+    "rust_local": "Requires MSVC link.exe (Visual Studio Build Tools). Run scripts/check-prerequisites.ps1 -InstallMsvc",
+    "docker_daemon": "Start Docker Desktop for sandbox image build/runtime tests"
+  }
+}
