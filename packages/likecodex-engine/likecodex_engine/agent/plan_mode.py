@@ -63,10 +63,7 @@ def is_safe_plan_bash(command: str) -> bool:
     for meta in PLAN_MODE_BASH_METACHARS:
         if meta in cmd:
             return False
-    for prefix in PLAN_MODE_SAFE_BASH_PREFIXES:
-        if lower == prefix or lower.startswith(prefix + " "):
-            return True
-    return False
+    return any(lower == prefix or lower.startswith(prefix + " ") for prefix in PLAN_MODE_SAFE_BASH_PREFIXES)
 
 
 def plan_mode_block_reason(tool_name: str, arguments: dict[str, Any]) -> str | None:

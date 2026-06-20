@@ -58,9 +58,7 @@ class OpenAIProvider(LLMProvider):
             params["tools"] = tools
             params["tool_choice"] = "auto"
 
-        resp = await complete_with_reconnect(
-            lambda: self.client.chat.completions.create(**params)
-        )
+        resp = await complete_with_reconnect(lambda: self.client.chat.completions.create(**params))
         choice = resp.choices[0]
         tool_calls = []
         if choice.message.tool_calls:

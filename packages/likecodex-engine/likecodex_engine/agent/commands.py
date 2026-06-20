@@ -80,11 +80,7 @@ def _expand_at_references(prompt: str, working_dir: Path) -> list[str]:
         if not target.exists():
             continue
         if target.is_dir():
-            entries = sorted(
-                p.name + ("/" if p.is_dir() else "")
-                for p in target.iterdir()
-                if p.name not in _SKIP_DIRS
-            )
+            entries = sorted(p.name + ("/" if p.is_dir() else "") for p in target.iterdir() if p.name not in _SKIP_DIRS)
             blocks.append(f"@{ref} (directory):\n" + "\n".join(entries))
         else:
             try:
@@ -120,8 +116,7 @@ def expand_prompt(prompt: str, working_dir: str | Path) -> ExpandedPrompt:
             prompt="Enter plan mode: explore read-only, then produce an execution plan.",
             plan_mode_enter=True,
             direct_reply=(
-                "Plan mode enabled. Write tools and risky shell commands are blocked "
-                "until you exit plan mode."
+                "Plan mode enabled. Write tools and risky shell commands are blocked until you exit plan mode."
             ),
         )
 
@@ -138,8 +133,7 @@ def expand_prompt(prompt: str, working_dir: str | Path) -> ExpandedPrompt:
             prompt=plan_text or "Submit plan for approval before exiting plan mode.",
             plan_mode_exit_request=True,
             direct_reply=(
-                "Plan exit requested. Review the plan summary, then send `/exit_plan approve` "
-                "to leave plan mode."
+                "Plan exit requested. Review the plan summary, then send `/exit_plan approve` to leave plan mode."
             ),
         )
 

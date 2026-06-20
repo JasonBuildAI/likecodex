@@ -10,9 +10,7 @@ from typing import Any
 from likecodex_engine.context.utils import stable_json_dumps
 from likecodex_engine.llm.base import LLMResponse, Message, Role, ToolCall
 
-INTERRUPTED_TOOL_RESULT = (
-    "[no result: the previous turn was interrupted before this tool call completed]"
-)
+INTERRUPTED_TOOL_RESULT = "[no result: the previous turn was interrupted before this tool call completed]"
 
 
 def flatten_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -233,9 +231,7 @@ def _repair_tool_call_dicts(calls: list[dict[str, Any]]) -> list[dict[str, Any]]
     return repaired
 
 
-def _backfill_tool_call_names(
-    calls: list[dict[str, Any]], results: list[Message]
-) -> list[dict[str, Any]]:
+def _backfill_tool_call_names(calls: list[dict[str, Any]], results: list[Message]) -> list[dict[str, Any]]:
     if not any(not _tool_call_name(tc) for tc in calls):
         return calls
     out = [dict(tc) for tc in calls]
@@ -298,10 +294,11 @@ def sanitize_tool_pairing(messages: list[Message]) -> list[Message]:
             j = i + 1
             while j < len(messages) and messages[j].role == Role.TOOL:
                 j += 1
-            if message.raw_tool_calls:
-                calls = json.loads(message.raw_tool_calls)
-            else:
-                calls = list(message.tool_calls)
+            calls = (
+                json.loads(message.raw_tool_calls)
+                if message.raw_tool_calls
+                else list(message.tool_calls)
+            )
             calls = _backfill_tool_call_names(calls, messages[i + 1 : j])
             calls = _repair_tool_call_dicts(calls)
             assistant = message.model_copy(update={"tool_calls": calls})

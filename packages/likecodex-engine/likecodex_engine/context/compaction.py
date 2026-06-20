@@ -142,11 +142,16 @@ class CacheFirstCompactor:
         foldable: list[Message] = []
         for m in log:
             if m.role == Role.USER:
-                if SUMMARY_TAG_OPEN in m.content or (
-                    len(m.content) <= MAX_PINNED_USER_CHARS
-                    and not m.content.startswith("[Plan]\n")
-                    and not m.content.startswith(CONTEXT_PREFIX)
-                ) or m.content.startswith(CONTEXT_PREFIX) and SUMMARY_TAG_OPEN in m.content:
+                if (
+                    SUMMARY_TAG_OPEN in m.content
+                    or (
+                        len(m.content) <= MAX_PINNED_USER_CHARS
+                        and not m.content.startswith("[Plan]\n")
+                        and not m.content.startswith(CONTEXT_PREFIX)
+                    )
+                    or m.content.startswith(CONTEXT_PREFIX)
+                    and SUMMARY_TAG_OPEN in m.content
+                ):
                     pinned.append(m)
                 else:
                     foldable.append(m)

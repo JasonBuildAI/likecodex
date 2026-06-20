@@ -9,8 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from likecodex_engine.context.compaction import CacheFirstCompactor
 from likecodex_engine.context.cache_shape import PrefixShape, capture_prefix_shape
+from likecodex_engine.context.compaction import CacheFirstCompactor
 from likecodex_engine.context.prune import prune_stale_tool_results
 from likecodex_engine.context.utils import CONTEXT_PREFIX, DEFAULT_SYSTEM_PROMPT_PATH, stable_tool_calls_json
 from likecodex_engine.llm.base import Message, Role
@@ -218,10 +218,9 @@ class CacheFirstContext:
         out: list[Message] = [Message(role=Role.SYSTEM, content=self.prefix.combined)]
         for message in sanitize_tool_pairing(self._log):
             if message.role == Role.ASSISTANT and message.tool_calls:
-                if message.raw_tool_calls:
-                    tool_calls = json.loads(message.raw_tool_calls)
-                else:
-                    tool_calls = message.tool_calls
+                tool_calls = (
+                    json.loads(message.raw_tool_calls) if message.raw_tool_calls else message.tool_calls
+                )
                 out.append(
                     Message(
                         role=message.role,

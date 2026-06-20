@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import secrets
-import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path

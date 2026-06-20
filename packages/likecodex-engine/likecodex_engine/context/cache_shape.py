@@ -125,6 +125,4 @@ def format_usage_line(usage: dict[str, Any] | None, diagnostics: CacheDiagnostic
         reasons = "+".join(diagnostics.prefix_change_reasons) or "unknown"
         churn = f" · cache prefix changed: {reasons}"
 
-    return (
-        f"  · {total} tok · in {prompt}{cache_col} · out {completion}{reasoning_col}{churn}"
-    )
+    return f"  · {total} tok · in {prompt}{cache_col} · out {completion}{reasoning_col}{churn}"

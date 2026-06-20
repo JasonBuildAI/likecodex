@@ -29,9 +29,7 @@ class WebSearchTools:
         return await self._duckduckgo_search(query, max_results)
 
     async def _duckduckgo_search(self, query: str, max_results: int) -> str:
-        url = "https://api.duckduckgo.com/?" + urllib.parse.urlencode(
-            {"q": query, "format": "json", "no_html": 1}
-        )
+        url = "https://api.duckduckgo.com/?" + urllib.parse.urlencode({"q": query, "format": "json", "no_html": 1})
         try:
             with urllib.request.urlopen(url, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -57,5 +55,12 @@ class WebSearchTools:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
             return json.dumps({"error": str(exc), "query": query})
-        results = [{"title": r.get("title"), "url": r.get("url"), "content": r.get("content", "")[:300]} for r in data.get("results", [])]
+        results = [
+            {
+                "title": r.get("title"),
+                "url": r.get("url"),
+                "content": r.get("content", "")[:300],
+            }
+            for r in data.get("results", [])
+        ]
         return json.dumps({"engine": "tavily", "query": query, "results": results})

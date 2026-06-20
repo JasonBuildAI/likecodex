@@ -110,9 +110,7 @@ class LspTools:
                 {"path": path, "language": lang, "checked": False, "reason": "checker timed out", "diagnostics": []}
             )
         except Exception as exc:
-            return json.dumps(
-                {"path": path, "language": lang, "checked": False, "reason": str(exc), "diagnostics": []}
-            )
+            return json.dumps({"path": path, "language": lang, "checked": False, "reason": str(exc), "diagnostics": []})
 
         out = stdout.decode("utf-8", errors="replace")
         err = stderr.decode("utf-8", errors="replace")

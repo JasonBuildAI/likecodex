@@ -59,9 +59,7 @@ class GitTools:
             "description": "Get recent git commit log.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "count": {"type": "integer", "default": 10, "description": "Number of commits to show"}
-                },
+                "properties": {"count": {"type": "integer", "default": 10, "description": "Number of commits to show"}},
             },
         }
 

@@ -40,8 +40,7 @@ def prune_stale_tool_results(log: list[Message], *, tail_keep: int = 8) -> tuple
         if _is_error_message(content):
             continue
         placeholder = (
-            f"{PRUNED_MARKER}{len(content)} bytes dropped to save context; "
-            "re-run the tool if the data is needed again]"
+            f"{PRUNED_MARKER}{len(content)} bytes dropped to save context; re-run the tool if the data is needed again]"
         )
         stats.saved_chars += len(content) - len(placeholder)
         next_log[idx] = Message(

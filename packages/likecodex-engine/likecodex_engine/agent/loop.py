@@ -16,6 +16,8 @@ from likecodex_engine.agent.coordinator import EXECUTOR_HANDOFF_MARKER, should_p
 from likecodex_engine.agent.dispatch import execute_tool_calls_parallel
 from likecodex_engine.agent.evidence import EvidenceLedger
 from likecodex_engine.agent.guards import (
+    MAX_EMPTY_FINAL_BLOCKS,
+    MAX_EXECUTOR_HANDOFF_NUDGES,
     LoopGuard,
     RepeatSuccessGuard,
     StormBreaker,
@@ -25,8 +27,6 @@ from likecodex_engine.agent.guards import (
     empty_final_retry_message,
     finish_reason_notice,
     has_visible_final_answer,
-    MAX_EMPTY_FINAL_BLOCKS,
-    MAX_EXECUTOR_HANDOFF_NUDGES,
 )
 from likecodex_engine.agent.output_limit import limit_tool_output
 from likecodex_engine.agent.plan_mode import plan_mode_block_reason, plan_mode_tool_result
@@ -296,9 +296,7 @@ class AgentLoop:
 
             response = merge_tool_calls(response)
             if response.tool_calls:
-                response = response.model_copy(
-                    update={"tool_calls": ensure_tool_call_ids(response.tool_calls)}
-                )
+                response = response.model_copy(update={"tool_calls": ensure_tool_call_ids(response.tool_calls)})
             global_cache_metrics().record(response.usage)
             usage_event = self._usage_event(
                 response.usage,
@@ -364,9 +362,7 @@ class AgentLoop:
 
             finish_notice = finish_reason_notice(response.usage)
             if finish_notice:
-                yield self._emit(
-                    LLMResponse(content=finish_notice, model="system", event_type="notice")
-                )
+                yield self._emit(LLMResponse(content=finish_notice, model="system", event_type="notice"))
 
             if not response.tool_calls:
                 if (
@@ -392,8 +388,7 @@ class AgentLoop:
                         yield self._emit(
                             LLMResponse(
                                 content=(
-                                    f"Model finished without a visible final answer "
-                                    f"{self._empty_final_blocks} times."
+                                    f"Model finished without a visible final answer {self._empty_final_blocks} times."
                                 ),
                                 model="system",
                                 event_type="error",
@@ -422,9 +417,7 @@ class AgentLoop:
                             "Complete remaining todos or run verification commands, then try again."
                         )
                         self.context.add_context_block(notice)
-                        yield self._emit(
-                            LLMResponse(content=notice, model="system", event_type="notice")
-                        )
+                        yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
                         continue
                 break
 
@@ -459,9 +452,7 @@ class AgentLoop:
                 tool_call_id, new_output, notice = storm
                 self.context.update_tool_result(tool_call_id, new_output)
                 self._turn_outcomes[0].output = new_output
-                yield self._emit(
-                    LLMResponse(content=notice, model="system", event_type="notice")
-                )
+                yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
         else:
             yield self._emit(
                 LLMResponse(
@@ -490,9 +481,7 @@ class AgentLoop:
                     )
                 )
                 self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
-                yield self._emit(
-                    LLMResponse(content=result, model="tool-result", event_type="tool_result")
-                )
+                yield self._emit(LLMResponse(content=result, model="tool-result", event_type="tool_result"))
                 return
 
         pre_hook = await fire_hooks(
@@ -554,9 +543,7 @@ class AgentLoop:
                     )
                 )
                 self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
-                yield self._emit(
-                    LLMResponse(content=result, model="tool-result", event_type="tool_result")
-                )
+                yield self._emit(LLMResponse(content=result, model="tool-result", event_type="tool_result"))
                 return
             if prefetched_result is not None and decision.execution_mode == ExecutionMode.LOCAL:
                 result = prefetched_result
@@ -591,15 +578,15 @@ class AgentLoop:
                 result = await self._execute_in_sandbox(tool_call.name, tool_call.arguments)
                 result = self._tag_result(result, "sandbox")
             else:
-                result = prefetched_result if prefetched_result is not None else await self.tools.execute(
-                    tool_call.name, tool_call.arguments
+                result = (
+                    prefetched_result
+                    if prefetched_result is not None
+                    else await self.tools.execute(tool_call.name, tool_call.arguments)
                 )
 
         result, trunc_notice = limit_tool_output(result)
         if trunc_notice:
-            yield self._emit(
-                LLMResponse(content=trunc_notice, model="system", event_type="notice")
-            )
+            yield self._emit(LLMResponse(content=trunc_notice, model="system", event_type="notice"))
         success = not self.loop_guard.is_error_result(result)
         step = ""
         if tool_call.name == "complete_step" and success:
@@ -623,9 +610,7 @@ class AgentLoop:
             err = self.loop_guard.extract_error(result)
             if self.loop_guard.record_failure(tool_call.name, tool_call.arguments, err):
                 result = self.loop_guard.guard_message(tool_call.name, tool_call.arguments, err)
-                yield self._emit(
-                    LLMResponse(content=result[:500], model="system", event_type="notice")
-                )
+                yield self._emit(LLMResponse(content=result[:500], model="system", event_type="notice"))
         else:
             self.loop_guard.record_success(tool_call.name, tool_call.arguments)
 

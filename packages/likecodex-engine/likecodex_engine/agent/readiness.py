@@ -30,9 +30,7 @@ def final_readiness_check(
     missing_parts: list[str] = []
     incomplete = ledger.incomplete_todos()
     if not incomplete and external_todos:
-        incomplete = [
-            t for t in external_todos if str(t.get("status", "")).lower() not in {"completed", "cancelled"}
-        ]
+        incomplete = [t for t in external_todos if str(t.get("status", "")).lower() not in {"completed", "cancelled"}]
     if incomplete:
         labels = ", ".join(str(t.get("content", t.get("id", "?"))) for t in incomplete[:5])
         missing_parts.append(f"incomplete todos: {labels}")

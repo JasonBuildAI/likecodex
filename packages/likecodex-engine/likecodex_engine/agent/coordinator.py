@@ -42,9 +42,7 @@ def should_plan(prompt: str, auto_plan: bool = True) -> bool:
         return False
     if len(text) < 20 and GREETING_PATTERNS.match(text):
         return False
-    return not (
-        text.endswith("?") and len(text) < 80 and "file" not in text.lower() and "code" not in text.lower()
-    )
+    return not (text.endswith("?") and len(text) < 80 and "file" not in text.lower() and "code" not in text.lower())
 
 
 def build_planner_readonly_tool_names(all_tools: list[str]) -> list[str]:
@@ -123,9 +121,7 @@ class Coordinator:
         self.planner_max_steps = planner_max_steps
         self.should_plan = should_plan_fn
         self.executor.executor_handoff_guard = True
-        self._planner_context = ContextManager(
-            system_prompt=planner_prompt_with_context(planning_context)
-        )
+        self._planner_context = ContextManager(system_prompt=planner_prompt_with_context(planning_context))
         if hasattr(self._planner_context, "set_working_dir"):
             self._planner_context.set_working_dir(executor.tools.working_dir)
 
@@ -145,9 +141,7 @@ class Coordinator:
         planning_context = ""
         if self._planner_context.prefix.project_memories:
             planning_context = self._planner_context.prefix.project_memories
-        self._planner_context = ContextManager(
-            system_prompt=planner_prompt_with_context(planning_context)
-        )
+        self._planner_context = ContextManager(system_prompt=planner_prompt_with_context(planning_context))
         if hasattr(self._planner_context, "set_working_dir"):
             self._planner_context.set_working_dir(self.executor.tools.working_dir)
 

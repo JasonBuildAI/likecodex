@@ -50,7 +50,7 @@ class McpClient:
             if proc.returncode != 0:
                 return {"error": stderr.decode("utf-8", errors="replace")}
             return json.loads(stdout.decode("utf-8", errors="replace"))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
             return {"error": "MCP request timed out"}

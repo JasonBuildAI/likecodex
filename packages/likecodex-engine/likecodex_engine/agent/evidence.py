@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
-
-from likecodex_engine.context.utils import stable_json_dumps
 
 WRITE_TOOLS = frozenset(
     {
@@ -89,8 +86,7 @@ class EvidenceLedger:
     def has_successful_command(self, command: str) -> bool:
         command = command.strip()
         return any(
-            r.success and r.tool_name == "run_command" and command_matches(command, r.command)
-            for r in self._receipts
+            r.success and r.tool_name == "run_command" and command_matches(command, r.command) for r in self._receipts
         )
 
     def has_successful_command_after(self, command: str, after_index: int) -> bool:

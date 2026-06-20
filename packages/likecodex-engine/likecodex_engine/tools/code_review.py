@@ -162,7 +162,7 @@ class CodeReviewTools:
                 msg = "Wildcard dependency version detected"
                 findings.append(self._finding(0, "warning", "dependencies", msg))
         elif name == "pyproject.toml":
-            has_deps = 'dependencies = [' in content or "[project.dependencies]" in content
+            has_deps = "dependencies = [" in content or "[project.dependencies]" in content
             if has_deps and "==" not in content:
                 msg = "Project dependencies may not be pinned"
                 findings.append(self._finding(0, "info", "dependencies", msg))

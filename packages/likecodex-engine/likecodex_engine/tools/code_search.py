@@ -212,9 +212,7 @@ class CodeSearchTools:
         graph = load_or_build(self.working_dir)
         norm = path.replace("\\", "/")
         symbols = [
-            {"name": s.name, "kind": s.kind, "line": s.line}
-            for s in graph.symbols
-            if s.path.replace("\\", "/") == norm
+            {"name": s.name, "kind": s.kind, "line": s.line} for s in graph.symbols if s.path.replace("\\", "/") == norm
         ]
         symbols.sort(key=lambda s: s["line"])
         return json.dumps({"path": path, "symbols": symbols, "count": len(symbols)})

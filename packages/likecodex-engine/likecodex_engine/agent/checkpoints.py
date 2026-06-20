@@ -45,9 +45,7 @@ class Checkpoint:
             "id": self.id,
             "label": self.label,
             "created_at": self.created_at,
-            "files": [
-                {"path": f.path, "existed": f.existed, "blob": f.blob} for f in self.files
-            ],
+            "files": [{"path": f.path, "existed": f.existed, "blob": f.blob} for f in self.files],
         }
 
     @classmethod

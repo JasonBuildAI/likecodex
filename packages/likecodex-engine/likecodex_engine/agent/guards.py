@@ -141,10 +141,7 @@ class StormBreaker:
             "write less in one call and split the work into several smaller calls; otherwise fix the "
             "arguments, use a different tool, or explain the blocker in your final answer."
         )
-        notice = (
-            f"loop guard: {short} failed {self.storm_count}× the same way — "
-            "nudging the model to change approach"
-        )
+        notice = f"loop guard: {short} failed {self.storm_count}× the same way — nudging the model to change approach"
         return first.tool_call_id, first.output + appended, notice
 
 
