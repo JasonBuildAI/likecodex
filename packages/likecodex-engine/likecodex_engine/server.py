@@ -22,8 +22,8 @@ from likecodex_engine.context.manager import ContextManager
 from likecodex_engine.context.project_memory import load_project_memory
 from likecodex_engine.context.session_cache import SessionContextCache
 from likecodex_engine.context.session_resolver import session_id_for_dir
-from likecodex_engine.llm.cache_metrics import global_cache_metrics
 from likecodex_engine.llm.base import LLMResponse
+from likecodex_engine.llm.cache_metrics import global_cache_metrics
 from likecodex_engine.llm.factory import create_provider
 from likecodex_engine.mcp.loader import register_mcp_tools
 from likecodex_engine.memory.vector import VectorMemory
@@ -32,6 +32,10 @@ from likecodex_engine.permissions.policy import Policy
 from likecodex_engine.persistence.session import SessionEvent, SessionStore
 from likecodex_engine.skills.loader import discover_skills, skills_prefix_block
 from likecodex_engine.tools.registry import ToolRegistry
+
+APP_CONFIG = web.AppKey("config", dict)
+
+APP_CONFIG = web.AppKey("config", dict)
 
 _ACTIVE_LOOPS: dict[str, AgentLoop] = {}
 _ACTIVE_COORDINATORS: dict[str, Coordinator] = {}
@@ -174,13 +178,17 @@ def _make_agent(
     if enable_planner is None:
         enable_planner = str(cfg.get("enable_planner", "false")).lower() in ("1", "true", "yes")
     planner_model = cfg.get("planner_model") or "deepseek-v4-pro"
-    planner_llm = create_provider(
-        cfg.get("provider", "deepseek"),
-        planner_model,
-        cfg.get("api_key"),
-        cfg.get("base_url"),
-        thinking=bool(cfg.get("thinking", False)),
-    ) if enable_planner else None
+    planner_llm = (
+        create_provider(
+            cfg.get("provider", "deepseek"),
+            planner_model,
+            cfg.get("api_key"),
+            cfg.get("base_url"),
+            thinking=bool(cfg.get("thinking", False)),
+        )
+        if enable_planner
+        else None
+    )
 
     store = _session_store()
     sid = session_id or session_id_for_dir(working_dir)
@@ -278,7 +286,7 @@ async def chat(request: web.Request) -> web.StreamResponse:
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
     no_tools = bool(data.get("no_tools", False))
-    cfg = _resolve_config(request.app["config"])
+    cfg = _resolve_config(request.app[APP_CONFIG])
     working_dir = cfg.get("working_dir", ".")
 
     sid = session_id or session_id_for_dir(working_dir)
@@ -341,7 +349,7 @@ async def run_task(request: web.Request) -> web.Response:
     data = await request.json()
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
-    cfg = _resolve_config(request.app["config"])
+    cfg = _resolve_config(request.app[APP_CONFIG])
     working_dir = cfg.get("working_dir", ".")
 
     sid = session_id or session_id_for_dir(working_dir)
@@ -375,7 +383,7 @@ async def run_task(request: web.Request) -> web.Response:
 async def plan_task(request: web.Request) -> web.Response:
     data = await request.json()
     prompt = data.get("prompt", "")
-    cfg = _resolve_config(request.app["config"])
+    cfg = _resolve_config(request.app[APP_CONFIG])
 
     llm = create_provider(
         cfg.get("provider", "deepseek"),
@@ -408,7 +416,7 @@ async def create_task(request: web.Request) -> web.Response:
     data = await request.json()
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
-    cfg = _resolve_config(request.app["config"])
+    cfg = _resolve_config(request.app[APP_CONFIG])
     task_id = session_id or session_id_for_dir(cfg.get("working_dir", "."))
 
     store = _session_store()
@@ -499,14 +507,14 @@ async def respond_permission(request: web.Request) -> web.Response:
 
 
 async def list_checkpoints(request: web.Request) -> web.Response:
-    cfg = _resolve_config(request.app["config"])
+    cfg = _resolve_config(request.app[APP_CONFIG])
     manager = CheckpointManager(cfg.get("working_dir", "."))
     return web.json_response({"checkpoints": [c.to_dict() for c in manager.list_checkpoints()]})
 
 
 async def codegraph_search(request: web.Request) -> web.Response:
     pattern = request.query.get("pattern", "")
-    cfg = _resolve_config(request.app["config"])
+    cfg = _resolve_config(request.app[APP_CONFIG])
     working_dir = cfg.get("working_dir", ".")
     from likecodex_engine.tools.codegraph import load_or_build
 
@@ -524,15 +532,13 @@ async def codegraph_search(request: web.Request) -> web.Response:
             )
             if len(results) >= 50:
                 break
-    return web.json_response(
-        {"pattern": pattern, "results": results, "files": graph.file_count}
-    )
+    return web.json_response({"pattern": pattern, "results": results, "files": graph.file_count})
 
 
 async def rewind_checkpoint(request: web.Request) -> web.Response:
     data = await request.json()
     checkpoint_id = data.get("checkpoint_id")
-    cfg = _resolve_config(request.app["config"])
+    cfg = _resolve_config(request.app[APP_CONFIG])
     manager = CheckpointManager(cfg.get("working_dir", "."))
     result = manager.rewind(checkpoint_id)
     status = 200 if result.get("rewound") else 400
@@ -567,7 +573,7 @@ async def get_session_events(request: web.Request) -> web.Response:
 
 def create_app(config: dict | None = None) -> web.Application:
     app = web.Application()
-    app["config"] = config or {}
+    app[APP_CONFIG] = config or {}
     app.router.add_get("/health", health)
     app.router.add_get("/metrics", metrics)
     app.router.add_post("/chat", chat)
