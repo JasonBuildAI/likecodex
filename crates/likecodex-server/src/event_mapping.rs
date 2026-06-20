@@ -1,7 +1,7 @@
+use likecodex_core::events::Event;
 use likecodex_core::{
     Message, PermissionRequest, Plan, PlanStep, Role, StepStatus, Task, ToolCall, ToolResult,
 };
-use likecodex_core::events::Event;
 use serde_json::Value;
 
 /// Map a Python engine output object to a structured LikeCodex event.
@@ -192,7 +192,11 @@ pub fn map_engine_output(task_id: &str, output: &Value) -> Event {
         "compaction_started" => {
             let trigger = serde_json::from_str::<Value>(&content)
                 .ok()
-                .and_then(|v| v.get("trigger").and_then(|t| t.as_str()).map(str::to_string))
+                .and_then(|v| {
+                    v.get("trigger")
+                        .and_then(|t| t.as_str())
+                        .map(str::to_string)
+                })
                 .unwrap_or_else(|| "auto".to_string());
             Event::CompactionStarted {
                 task_id: task_id.to_string(),
@@ -202,7 +206,11 @@ pub fn map_engine_output(task_id: &str, output: &Value) -> Event {
         "compaction" if content.contains("\"trigger\"") || content.contains("\"phase\"") => {
             let trigger = serde_json::from_str::<Value>(&content)
                 .ok()
-                .and_then(|v| v.get("trigger").and_then(|t| t.as_str()).map(str::to_string))
+                .and_then(|v| {
+                    v.get("trigger")
+                        .and_then(|t| t.as_str())
+                        .map(str::to_string)
+                })
                 .unwrap_or_else(|| "auto".to_string());
             Event::CompactionStarted {
                 task_id: task_id.to_string(),
@@ -294,10 +302,7 @@ mod tests {
 
     #[test]
     fn maps_stream_chunk() {
-        let event = map_engine_output(
-            "t1",
-            &json!({"type": "assistant", "content": "hello"}),
-        );
+        let event = map_engine_output("t1", &json!({"type": "assistant", "content": "hello"}));
         match event {
             Event::StreamChunk { content, .. } => assert_eq!(content, "hello"),
             _ => panic!("expected stream chunk"),
@@ -306,10 +311,7 @@ mod tests {
 
     #[test]
     fn maps_delta_chunk() {
-        let event = map_engine_output(
-            "t1",
-            &json!({"type": "delta", "content": "partial"}),
-        );
+        let event = map_engine_output("t1", &json!({"type": "delta", "content": "partial"}));
         match event {
             Event::StreamChunk { content, .. } => assert_eq!(content, "partial"),
             _ => panic!("expected stream chunk"),

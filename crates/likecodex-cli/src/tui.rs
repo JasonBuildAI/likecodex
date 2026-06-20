@@ -41,27 +41,52 @@ enum AppEvent {
 
 #[derive(Debug, Clone)]
 enum EngineEvent {
-    Assistant { content: String, event_type: String },
-    Delta { content: String },
+    Assistant {
+        content: String,
+        event_type: String,
+    },
+    Delta {
+        content: String,
+    },
     Retrying {
         attempt: i32,
         max: i32,
         reason: String,
     },
-    ToolCall { name: String },
-    ToolResult { content: String },
-    Plan { content: String },
-    Permission { content: String },
-    CompactionStarted { trigger: String },
-    CompactionDone { info: String },
+    ToolCall {
+        name: String,
+    },
+    ToolResult {
+        content: String,
+    },
+    Plan {
+        content: String,
+    },
+    Permission {
+        content: String,
+    },
+    CompactionStarted {
+        trigger: String,
+    },
+    CompactionDone {
+        info: String,
+    },
     CheckpointCreated {
         checkpoint_id: String,
         label: String,
         files: Vec<String>,
     },
-    Notice { content: String },
-    Error { content: String },
-    CacheStats { hit_rate: f64, hit_tokens: u64, miss_tokens: u64 },
+    Notice {
+        content: String,
+    },
+    Error {
+        content: String,
+    },
+    CacheStats {
+        hit_rate: f64,
+        hit_tokens: u64,
+        miss_tokens: u64,
+    },
     Done,
 }
 
@@ -206,9 +231,7 @@ impl App {
                 } else {
                     format!(" ({})", files.join(", "))
                 };
-                self.push_system(format!(
-                    "[checkpoint] {label} → {checkpoint_id}{file_list}"
-                ))
+                self.push_system(format!("[checkpoint] {label} → {checkpoint_id}{file_list}"))
             }
             EngineEvent::Notice { content } => self.push_system(content),
             EngineEvent::Error { content } => self.push_system(format!("[error] {content}")),
@@ -357,9 +380,7 @@ async fn run_tui_loop<B: Backend>(
                                 interaction::request_permission(&format!("Allow {tool}?"), None)?;
                             crossterm::terminal::enable_raw_mode()?;
                             let resp = client
-                                .post(format!(
-                                    "{engine_url}/permissions/{request_id}/respond"
-                                ))
+                                .post(format!("{engine_url}/permissions/{request_id}/respond"))
                                 .json(&serde_json::json!({ "approved": approved }))
                                 .send()
                                 .await;
@@ -487,13 +508,18 @@ async fn stream_engine_events(
                 "compaction_started" => {
                     let trigger = serde_json::from_str::<serde_json::Value>(&content)
                         .ok()
-                        .and_then(|v| v.get("trigger").and_then(|t| t.as_str()).map(str::to_string))
+                        .and_then(|v| {
+                            v.get("trigger")
+                                .and_then(|t| t.as_str())
+                                .map(str::to_string)
+                        })
                         .unwrap_or_else(|| "auto".to_string());
                     EngineEvent::CompactionStarted { trigger }
                 }
                 "compaction_done" => EngineEvent::CompactionDone { info: content },
                 "checkpoint" => {
-                    let parsed = serde_json::from_str::<serde_json::Value>(&content).unwrap_or_default();
+                    let parsed =
+                        serde_json::from_str::<serde_json::Value>(&content).unwrap_or_default();
                     let files = parsed
                         .get("files")
                         .and_then(|v| v.as_array())

@@ -123,7 +123,11 @@ fn apply_approval_override(approval: Option<&str>) {
     }
 }
 
-async fn ensure_engine(cli: &Cli, client: &Client, url: &str) -> Result<Option<engine::EngineSupervisor>> {
+async fn ensure_engine(
+    cli: &Cli,
+    client: &Client,
+    url: &str,
+) -> Result<Option<engine::EngineSupervisor>> {
     if !cli.auto_engine {
         return Ok(None);
     }
@@ -132,7 +136,12 @@ async fn ensure_engine(cli: &Cli, client: &Client, url: &str) -> Result<Option<e
     Ok(Some(supervisor))
 }
 
-async fn respond_permission(client: &Client, url: &str, request_id: &str, approved: bool) -> Result<()> {
+async fn respond_permission(
+    client: &Client,
+    url: &str,
+    request_id: &str,
+    approved: bool,
+) -> Result<()> {
     let resp = client
         .post(format!("{url}/permissions/{request_id}/respond"))
         .json(&serde_json::json!({ "approved": approved }))
@@ -170,7 +179,10 @@ async fn run_prompt(client: &Client, url: &str, prompt: &str) -> Result<()> {
         anyhow::bail!("engine error: {text}");
     }
 
-    let body: Value = resp.json().await.context("failed to parse engine response")?;
+    let body: Value = resp
+        .json()
+        .await
+        .context("failed to parse engine response")?;
     let outputs = body["outputs"].as_array().cloned().unwrap_or_default();
 
     for item in outputs {
@@ -186,7 +198,8 @@ async fn run_prompt(client: &Client, url: &str, prompt: &str) -> Result<()> {
                     }
                 }
             }
-            "retrying" | "tool_dispatch" | "compaction_started" | "compaction_done" | "notice" | "usage" => {
+            "retrying" | "tool_dispatch" | "compaction_started" | "compaction_done" | "notice"
+            | "usage" => {
                 handle_stream_event(client, url, item).await?;
             }
             "plan" => println!("[plan] {content}"),
@@ -354,7 +367,10 @@ async fn cmd_doctor(client: &Client, url: &str, security: bool) -> Result<()> {
 
     match Command::new("python").arg("--version").output() {
         Ok(out) if out.status.success() => {
-            println!("[ok] python {}", String::from_utf8_lossy(&out.stdout).trim());
+            println!(
+                "[ok] python {}",
+                String::from_utf8_lossy(&out.stdout).trim()
+            );
         }
         _ => println!("[warn] python not found in PATH"),
     }
@@ -387,7 +403,10 @@ async fn cmd_doctor(client: &Client, url: &str, security: bool) -> Result<()> {
                 "[warn] sandbox image missing — run: docker build -t likecodex/sandbox:latest docker/sandbox"
             ),
         }
-        println!("[info] approval mode: {}", env::var("LIKECODEX_APPROVAL_MODE").unwrap_or_else(|_| "auto".into()));
+        println!(
+            "[info] approval mode: {}",
+            env::var("LIKECODEX_APPROVAL_MODE").unwrap_or_else(|_| "auto".into())
+        );
     }
 
     Ok(())
@@ -437,7 +456,10 @@ async fn cmd_rewind(client: &Client, url: &str, id: Option<String>, list: bool) 
             body["checkpoint_id"].as_str().unwrap_or("?")
         );
     } else {
-        println!("[warn] rewind failed: {}", body["reason"].as_str().unwrap_or("unknown"));
+        println!(
+            "[warn] rewind failed: {}",
+            body["reason"].as_str().unwrap_or("unknown")
+        );
     }
     Ok(())
 }
@@ -457,8 +479,14 @@ async fn cmd_sessions(client: &Client, url: &str, action: Option<SessionAction>)
             }
         }
         SessionAction::Events { id } => {
-            let resp = client.get(format!("{url}/sessions/{id}/events")).send().await?;
-            println!("{}", serde_json::to_string_pretty(&resp.json::<Value>().await?)?);
+            let resp = client
+                .get(format!("{url}/sessions/{id}/events"))
+                .send()
+                .await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&resp.json::<Value>().await?)?
+            );
         }
     }
     Ok(())

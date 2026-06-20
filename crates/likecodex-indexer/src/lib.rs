@@ -188,13 +188,25 @@ pub fn extract_symbols(path: &Path, content: &str) -> Vec<SymbolEntry> {
                 let rest = trimmed
                     .trim_start_matches("pub ")
                     .trim_start_matches("async ");
-                if let Some(name) = rest.strip_prefix("fn ").and_then(|s| s.split(['(', '<']).next()) {
+                if let Some(name) = rest
+                    .strip_prefix("fn ")
+                    .and_then(|s| s.split(['(', '<']).next())
+                {
                     push(name, "function");
-                } else if let Some(name) = rest.strip_prefix("struct ").and_then(|s| s.split([' ', '<', '{', '(', ';']).next()) {
+                } else if let Some(name) = rest
+                    .strip_prefix("struct ")
+                    .and_then(|s| s.split([' ', '<', '{', '(', ';']).next())
+                {
                     push(name, "struct");
-                } else if let Some(name) = rest.strip_prefix("enum ").and_then(|s| s.split([' ', '<', '{']).next()) {
+                } else if let Some(name) = rest
+                    .strip_prefix("enum ")
+                    .and_then(|s| s.split([' ', '<', '{']).next())
+                {
                     push(name, "enum");
-                } else if let Some(name) = rest.strip_prefix("trait ").and_then(|s| s.split([' ', '<', '{']).next()) {
+                } else if let Some(name) = rest
+                    .strip_prefix("trait ")
+                    .and_then(|s| s.split([' ', '<', '{']).next())
+                {
                     push(name, "trait");
                 }
             }
@@ -203,13 +215,25 @@ pub fn extract_symbols(path: &Path, content: &str) -> Vec<SymbolEntry> {
                     .trim_start_matches("export ")
                     .trim_start_matches("default ")
                     .trim_start_matches("async ");
-                if let Some(name) = rest.strip_prefix("function ").and_then(|s| s.split(['(', '<', ' ']).next()) {
+                if let Some(name) = rest
+                    .strip_prefix("function ")
+                    .and_then(|s| s.split(['(', '<', ' ']).next())
+                {
                     push(name, "function");
-                } else if let Some(name) = rest.strip_prefix("class ").and_then(|s| s.split([' ', '<', '{']).next()) {
+                } else if let Some(name) = rest
+                    .strip_prefix("class ")
+                    .and_then(|s| s.split([' ', '<', '{']).next())
+                {
                     push(name, "class");
-                } else if let Some(name) = rest.strip_prefix("interface ").and_then(|s| s.split([' ', '<', '{']).next()) {
+                } else if let Some(name) = rest
+                    .strip_prefix("interface ")
+                    .and_then(|s| s.split([' ', '<', '{']).next())
+                {
                     push(name, "interface");
-                } else if let Some(name) = rest.strip_prefix("type ").and_then(|s| s.split([' ', '=', '<']).next()) {
+                } else if let Some(name) = rest
+                    .strip_prefix("type ")
+                    .and_then(|s| s.split([' ', '=', '<']).next())
+                {
                     push(name, "type");
                 }
             }
@@ -321,17 +345,22 @@ impl CodeGraph {
             for (idx, line) in content.lines().enumerate() {
                 for name in call_idents(line) {
                     if defined.contains(&name) {
-                        self.references
-                            .entry(name)
-                            .or_default()
-                            .push(format!("{}:{}", rel, idx + 1));
+                        self.references.entry(name).or_default().push(format!(
+                            "{}:{}",
+                            rel,
+                            idx + 1
+                        ));
                     }
                 }
             }
         }
 
         self.file_count = files.len();
-        debug!(symbols = self.symbols.len(), files = self.file_count, "code graph built");
+        debug!(
+            symbols = self.symbols.len(),
+            files = self.file_count,
+            "code graph built"
+        );
         Ok(())
     }
 

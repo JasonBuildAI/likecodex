@@ -80,22 +80,24 @@ fn authorize_execute(headers: &HeaderMap, config: &Config) -> Result<(), (Status
     if token == expected {
         Ok(())
     } else {
-        Err((StatusCode::UNAUTHORIZED, "invalid or missing API token".to_string()))
+        Err((
+            StatusCode::UNAUTHORIZED,
+            "invalid or missing API token".to_string(),
+        ))
     }
 }
 
 fn resolve_working_dir(requested: Option<String>) -> Result<PathBuf, (StatusCode, String)> {
-    let cwd = std::env::current_dir()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let dir = requested
-        .map(PathBuf::from)
-        .unwrap_or_else(|| cwd.clone());
-    let canonical = dir
-        .canonicalize()
-        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid working directory".to_string()))?;
-    let cwd_canonical = cwd
-        .canonicalize()
-        .unwrap_or(cwd);
+    let cwd =
+        std::env::current_dir().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let dir = requested.map(PathBuf::from).unwrap_or_else(|| cwd.clone());
+    let canonical = dir.canonicalize().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid working directory".to_string(),
+        )
+    })?;
+    let cwd_canonical = cwd.canonicalize().unwrap_or(cwd);
     if !canonical.starts_with(&cwd_canonical) {
         return Err((
             StatusCode::FORBIDDEN,
@@ -178,7 +180,9 @@ async fn get_config(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
     Json(serde_json::to_value(state.config.redacted()).unwrap_or_default())
 }
 
-async fn get_metrics(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+async fn get_metrics(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     state
         .engine_bridge
         .get("/metrics")
@@ -192,19 +196,11 @@ async fn execute_command(
     headers: HeaderMap,
     Json(req): Json<ExecuteRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    authorize_execute(&headers, &state.config).map_err(|(code, msg)| {
-        (
-            code,
-            Json(serde_json::json!({ "error": msg })),
-        )
-    })?;
+    authorize_execute(&headers, &state.config)
+        .map_err(|(code, msg)| (code, Json(serde_json::json!({ "error": msg }))))?;
 
-    let working_dir = resolve_working_dir(req.working_dir).map_err(|(code, msg)| {
-        (
-            code,
-            Json(serde_json::json!({ "error": msg })),
-        )
-    })?;
+    let working_dir = resolve_working_dir(req.working_dir)
+        .map_err(|(code, msg)| (code, Json(serde_json::json!({ "error": msg }))))?;
 
     let mut sandbox_config = state.config.sandbox.clone();
     if state.config.approval.mode == "sandbox-required" {
@@ -274,7 +270,9 @@ async fn create_task(
                     .and_then(|body| body["status"].as_str().map(|s| s.to_string()))
                     .unwrap_or_else(|| "completed".to_string());
 
-                let _ = bus.emit(map_task_status(&task_id, &prompt, &final_status)).ok();
+                let _ = bus
+                    .emit(map_task_status(&task_id, &prompt, &final_status))
+                    .ok();
                 let _ = bus.emit(Event::StreamFinished {
                     task_id: task_id.clone(),
                 });
@@ -305,11 +303,7 @@ async fn chat_stream(
     let bus = state.event_bus.clone();
 
     let initial = match bridge
-        .chat_stream(
-            &req.prompt,
-            req.session_id.as_deref(),
-            req.no_tools,
-        )
+        .chat_stream(&req.prompt, req.session_id.as_deref(), req.no_tools)
         .await
     {
         Ok(stream) => Some(stream),
@@ -335,7 +329,8 @@ async fn chat_stream(
                             let line = line.trim();
                             if let Some(data) = line.strip_prefix("data: ") {
                                 if data != "[DONE]" {
-                                    if let Ok(output) = serde_json::from_str::<serde_json::Value>(data)
+                                    if let Ok(output) =
+                                        serde_json::from_str::<serde_json::Value>(data)
                                     {
                                         let event = map_engine_output(&task_id, &output);
                                         let _ = bus.emit(event.clone()).ok();
@@ -351,10 +346,7 @@ async fn chat_stream(
                                 }
                             }
                         }
-                        Some((
-                            Ok(SseEvent::default().data(chunk)),
-                            Some(stream),
-                        ))
+                        Some((Ok(SseEvent::default().data(chunk)), Some(stream)))
                     }
                     Some(Err(e)) => {
                         let _ = bus.emit(Event::Error {
@@ -454,9 +446,7 @@ async fn get_session_events(
     Ok(Json(body))
 }
 
-async fn index_search(
-    Query(query): Query<IndexSearchQuery>,
-) -> Json<serde_json::Value> {
+async fn index_search(Query(query): Query<IndexSearchQuery>) -> Json<serde_json::Value> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut index = FileIndex::new();
     let results = match index.index(&cwd) {

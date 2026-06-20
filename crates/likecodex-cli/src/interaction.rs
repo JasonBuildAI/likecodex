@@ -16,7 +16,9 @@ pub fn confirm(question: &str, default: bool) -> Result<bool> {
     io::stdout().flush().context("failed to flush stdout")?;
 
     let mut input = String::new();
-    io::stdin().read_line(&mut input).context("failed to read input")?;
+    io::stdin()
+        .read_line(&mut input)
+        .context("failed to read input")?;
     let trimmed = input.trim().to_lowercase();
 
     if trimmed.is_empty() {
@@ -35,11 +37,10 @@ pub fn choose(question: &str, options: &[&str]) -> Result<usize> {
     io::stdout().flush().context("failed to flush stdout")?;
 
     let mut input = String::new();
-    io::stdin().read_line(&mut input).context("failed to read input")?;
-    let choice: usize = input
-        .trim()
-        .parse()
-        .context("invalid selection")?;
+    io::stdin()
+        .read_line(&mut input)
+        .context("failed to read input")?;
+    let choice: usize = input.trim().parse().context("invalid selection")?;
 
     if choice == 0 || choice > options.len() {
         anyhow::bail!("selection out of range");

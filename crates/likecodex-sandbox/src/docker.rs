@@ -83,14 +83,21 @@ impl DockerExecutor {
         command: &str,
         working_dir: impl AsRef<Path>,
     ) -> Result<ExecutionResult> {
-        let working_dir = working_dir.as_ref().canonicalize().unwrap_or_else(|_| working_dir.as_ref().to_path_buf());
+        let working_dir = working_dir
+            .as_ref()
+            .canonicalize()
+            .unwrap_or_else(|_| working_dir.as_ref().to_path_buf());
         let start = std::time::Instant::now();
 
         let mut docker_args = vec![
             "run".to_string(),
             "--rm".to_string(),
             "--network".to_string(),
-            if self.policy.allow_network { "bridge".to_string() } else { "none".to_string() },
+            if self.policy.allow_network {
+                "bridge".to_string()
+            } else {
+                "none".to_string()
+            },
         ];
 
         if let Some(mem) = self.policy.memory_mb {

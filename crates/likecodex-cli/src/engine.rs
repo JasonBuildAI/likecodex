@@ -24,9 +24,7 @@ impl EngineSupervisor {
         for _ in 0..30 {
             sleep(Duration::from_millis(500)).await;
             if health_ok(client, url).await {
-                return Ok(Self {
-                    child: Some(child),
-                });
+                return Ok(Self { child: Some(child) });
             }
         }
         let _ = child.kill();
@@ -54,7 +52,9 @@ async fn health_ok(client: &Client, url: &str) -> bool {
 
 fn parse_host_port(url: &str) -> (String, String) {
     let trimmed = url.trim_end_matches('/');
-    let rest = trimmed.strip_prefix("http://").or_else(|| trimmed.strip_prefix("https://"));
+    let rest = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"));
     match rest {
         Some(host_port) if host_port.contains(':') => {
             let mut parts = host_port.splitn(2, ':');
@@ -92,7 +92,8 @@ fn spawn_engine(project_root: &Path, host_port: &(String, String)) -> Result<Chi
         cmd.env("LIKECODEX_LLM_API_KEY", key);
     }
 
-    cmd.spawn().with_context(|| format!("failed to spawn engine via {uv}"))
+    cmd.spawn()
+        .with_context(|| format!("failed to spawn engine via {uv}"))
 }
 
 fn which_uv() -> String {
