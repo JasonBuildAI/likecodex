@@ -6,6 +6,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Prefer MSVC toolchain on Windows (GNU linker fails on non-ASCII user profile paths).
+if ($env:RUSTUP_TOOLCHAIN -eq $null -or $env:RUSTUP_TOOLCHAIN -eq "") {
+    $env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-msvc"
+}
+
+if (-not (Get-Command link.exe -ErrorAction SilentlyContinue)) {
+    Write-Host "[warn] MSVC link.exe not found. Run: .\scripts\check-prerequisites.ps1 -InstallMsvc" -ForegroundColor Yellow
+}
+
 # Build Rust workspace first so the server/CLI binaries exist.
 Write-Host "==> Building Rust workspace..." -ForegroundColor Cyan
 cargo build
