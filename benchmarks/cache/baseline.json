@@ -1,84 +1,84 @@
 {
   "turns": 10,
   "simulate_cache": true,
-  "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16",
+  "prefix_hash": "1295d8d911691f49c2b23078a3342b3acfd8c82027b0b4d63174105aae0b5abe",
   "prefix_hash_stable": true,
   "overall_hit_rate": 0.9412,
   "turn_stats": [
     {
       "turn": 1,
-      "hit_tokens": 0,
-      "miss_tokens": 0,
-      "hit_rate": 0.0,
-      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+      "hit_tokens": 800,
+      "miss_tokens": 50,
+      "hit_rate": 0.9412,
+      "prefix_hash": "1295d8d911691f49c2b23078a3342b3acfd8c82027b0b4d63174105aae0b5abe"
     },
     {
       "turn": 2,
       "hit_tokens": 800,
       "miss_tokens": 50,
       "hit_rate": 0.9412,
-      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+      "prefix_hash": "1295d8d911691f49c2b23078a3342b3acfd8c82027b0b4d63174105aae0b5abe"
     },
     {
       "turn": 3,
       "hit_tokens": 800,
       "miss_tokens": 50,
       "hit_rate": 0.9412,
-      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+      "prefix_hash": "1295d8d911691f49c2b23078a3342b3acfd8c82027b0b4d63174105aae0b5abe"
     },
     {
       "turn": 4,
       "hit_tokens": 800,
       "miss_tokens": 50,
       "hit_rate": 0.9412,
-      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+      "prefix_hash": "1295d8d911691f49c2b23078a3342b3acfd8c82027b0b4d63174105aae0b5abe"
     },
     {
       "turn": 5,
       "hit_tokens": 800,
       "miss_tokens": 50,
       "hit_rate": 0.9412,
-      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+      "prefix_hash": "1295d8d911691f49c2b23078a3342b3acfd8c82027b0b4d63174105aae0b5abe"
     },
     {
       "turn": 6,
       "hit_tokens": 800,
       "miss_tokens": 50,
       "hit_rate": 0.9412,
-      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+      "prefix_hash": "1295d8d911691f49c2b23078a3342b3acfd8c82027b0b4d63174105aae0b5abe"
     },
     {
       "turn": 7,
       "hit_tokens": 800,
       "miss_tokens": 50,
       "hit_rate": 0.9412,
-      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+      "prefix_hash": "1295d8d911691f49c2b23078a3342b3acfd8c82027b0b4d63174105aae0b5abe"
     },
     {
       "turn": 8,
       "hit_tokens": 800,
       "miss_tokens": 50,
       "hit_rate": 0.9412,
-      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+      "prefix_hash": "1295d8d911691f49c2b23078a3342b3acfd8c82027b0b4d63174105aae0b5abe"
     },
     {
       "turn": 9,
       "hit_tokens": 800,
       "miss_tokens": 50,
       "hit_rate": 0.9412,
-      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+      "prefix_hash": "1295d8d911691f49c2b23078a3342b3acfd8c82027b0b4d63174105aae0b5abe"
     },
     {
       "turn": 10,
       "hit_tokens": 800,
       "miss_tokens": 50,
       "hit_rate": 0.9412,
-      "prefix_hash": "18643b16cafa48d89106ddb241fffd7f3248458fed3aff3be7e9e8eb2e124f16"
+      "prefix_hash": "1295d8d911691f49c2b23078a3342b3acfd8c82027b0b4d63174105aae0b5abe"
     }
   ],
-  "total_hit_tokens": 7200,
-  "total_miss_tokens": 450,
-  "estimated_cost_usd": 8.3e-05,
-  "estimated_cost_without_cache_usd": 0.001071,
+  "total_hit_tokens": 8000,
+  "total_miss_tokens": 500,
+  "estimated_cost_usd": 9.2e-05,
+  "estimated_cost_without_cache_usd": 0.00119,
   "savings_pct": 92.24
 }
