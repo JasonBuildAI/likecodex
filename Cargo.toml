@@ -9,6 +9,7 @@ members = [
     "crates/likecodex-sandbox",
     "crates/likecodex-indexer",
     "crates/likecodex-desktop",
+    "crates/likecodex-acp",
 ]
 
 [workspace.dependencies]
