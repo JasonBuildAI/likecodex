@@ -70,5 +70,13 @@ Maps in-scope Reasonix capabilities to LikeCodex implementation and tests.
 | 66 | TUI/CLI skip partial tool_dispatch | `tui.rs` + `main.rs` | manual |
 | 24 | Agent task benchmark | `benchmarks/agent/` | CI job |
 | 25 | Cache benchmark | `benchmarks/cache/run.py` | CI job |
+| 67 | Unified entrypoints (/chat /run /tasks) | `server_turn.py` + `server.py` | `tests/test_entrypoint_parity.py` |
+| 68 | ask tool + SSE | `tools/ask.py` + `loop.py` | manual |
+| 69 | Goal / AutoResearch | `agent/goal.py` + `autoresearch.py` | `tests/test_entrypoint_parity.py` |
+| 70 | Full rewind modes | `agent/rewind.py` | manual |
+| 71 | Permission grant scopes | `permissions/policy.py` + Web modal | manual |
+| 72 | Web /chat SSE primary path | `web/src/lib/api.ts` | `web/src/lib/api.test.ts` |
+| 73 | IM Bot adapter | `services/imbot/` | manual |
+| 74 | Tauri Desktop shell | `crates/likecodex-desktop/` | manual |
 
 **DoD:** All rows implemented with passing tests; agent benchmark within ±20% steps vs mock baseline.

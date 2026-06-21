@@ -101,7 +101,7 @@ Compaction emits `compaction_started` / `compaction_done` SSE events and increme
 
 ## 9. Non-goals (this spec)
 
-- Goal / AutoResearch modes
-- Branch fork at checkpoints
-- Multi-provider LLM
+- Multi-provider LLM (DeepSeek-first by design)
 - Token-level LLM streaming in loop (implemented: delta + tool_dispatch + recovery)
+
+Implemented beyond prior non-goals: Goal / AutoResearch, checkpoint fork/rewind modes, ask tool.

@@ -23,6 +23,18 @@
       "steps": 3,
       "tool_failures": 0,
       "compactions": 2
+    },
+    {
+      "scenario": "goal_continuation",
+      "steps": 2,
+      "tool_failures": 0,
+      "compactions": 0
+    },
+    {
+      "scenario": "plan_execution_window",
+      "steps": 5,
+      "tool_failures": 0,
+      "compactions": 0
     }
   ]
 }

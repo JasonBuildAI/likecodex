@@ -1,18 +1,19 @@
-# LikeCodex task benchmarks (lightweight τ-bench subset)
+# LikeCodex E2E task benchmarks (Reasonix parity subset)
 
-Run scripted agent tasks and record success rate:
+Ported scenarios from Reasonix `benchmarks/e2e/tasks/`:
+
+| Task | Description | Verify |
+|------|-------------|--------|
+| fix-add-bug | Fix off-by-one in `add()` | `verify.sh` runs pytest-style assert |
+| fizzbuzz | Implement classic FizzBuzz | output assert |
+| palindrome | Fix palindrome checker | assert |
+| compaction | Agent triggers context compaction | archive file exists |
+| subagent-delegation | Delegates via task/subagent | subagent artifact exists |
+
+Run a single task after agent completes in `workspace/`:
 
 ```bash
-uv run pytest tests/e2e/test_simple_task.py -v
-uv run python benchmarks/cache/run.py --turns 10 --simulate-cache
+bash benchmarks/tasks/fix-add-bug/verify.sh
 ```
 
-## Scenarios
-
-| Task | Description | Target |
-|------|-------------|--------|
-| bugfix | Fix failing Python test | pass pytest |
-| refactor | Rename symbol across files | grep clean |
-| testgen | Add unit test for utility | coverage +1 |
-
-See `tests/e2e/` for executable scenarios.
+Agent harness mock regression remains in `benchmarks/agent/run.py` (CI `agent-parity` job).

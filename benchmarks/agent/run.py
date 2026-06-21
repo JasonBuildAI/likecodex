@@ -11,7 +11,9 @@ import tempfile
 from pathlib import Path
 
 from likecodex_engine.agent.coordinator import format_handoff
+from likecodex_engine.agent.goal import GoalState
 from likecodex_engine.agent.loop import AgentLoop
+from likecodex_engine.agent.plan_state import PlanState
 from likecodex_engine.context.cache_first import CacheFirstContext
 from likecodex_engine.context.manager import ContextManager
 from likecodex_engine.llm.base import LLMResponse, ToolCall
@@ -101,6 +103,65 @@ def check_regression(current: list[dict], baseline: list[dict]) -> list[str]:
     return errors
 
 
+async def run_goal_scenario() -> dict:
+    with tempfile.TemporaryDirectory() as tmp:
+        tools = ToolRegistry(tmp)
+        goal = GoalState(max_continuations=5)
+        goal.start("ship feature")
+        loop = AgentLoop(
+            MockProvider(
+                responses=[
+                    LLMResponse(content="Step one done. [goal:continue]"),
+                    LLMResponse(content="All done. [goal:complete]"),
+                ]
+            ),
+            tools,
+            ContextManager(system_prompt="benchmark"),
+            permission_evaluator=PermissionEvaluator(ApprovalMode.FULL_ACCESS),
+            goal_state=goal,
+        )
+        steps = 0
+        async for _ in loop.run("benchmark goal"):
+            steps += 1
+        return {"scenario": "goal_continuation", "steps": steps, "tool_failures": 0, "compactions": 0}
+
+
+async def run_plan_window_scenario() -> dict:
+    with tempfile.TemporaryDirectory() as tmp:
+        tools = ToolRegistry(tmp)
+        plan = PlanState()
+        plan.approve_exit()
+        loop = AgentLoop(
+            MockProvider(
+                responses=[
+                    LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(id="1", name="write_file", arguments={"path": "a.txt", "content": "x"})
+                        ],
+                    ),
+                    LLMResponse(content="Written during execution window."),
+                ]
+            ),
+            tools,
+            ContextManager(system_prompt="benchmark"),
+            permission_evaluator=PermissionEvaluator(ApprovalMode.ASK),
+            plan_state=plan,
+        )
+        steps = 0
+        tool_failures = 0
+        async for resp in loop.run("execute approved plan"):
+            steps += 1
+            if resp.event_type == "tool_result" and '"error"' in (resp.content or "")[:200]:
+                tool_failures += 1
+        return {
+            "scenario": "plan_execution_window",
+            "steps": steps,
+            "tool_failures": tool_failures,
+            "compactions": 0,
+        }
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default=str(DEFAULT_BASELINE))
@@ -149,6 +210,8 @@ async def main() -> None:
     for name, responses in scenarios:
         results.append(await run_scenario(name, responses, handoff=name == "handoff_guard"))
     results.append(await run_compaction_scenario())
+    results.append(await run_goal_scenario())
+    results.append(await run_plan_window_scenario())
 
     payload = {"results": results}
     out = Path(args.output)

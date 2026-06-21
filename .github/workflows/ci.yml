@@ -56,7 +56,7 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --all-packages --extra dev
       - name: Agent parity tests
-        run: uv run pytest tests/test_agent_guards.py tests/test_plan_mode.py tests/test_plan_state.py tests/test_compact_loop.py tests/test_complete_step.py tests/test_task_tool.py tests/test_parallel_tasks.py tests/test_permissions.py tests/test_evidence.py tests/test_readiness.py tests/test_repeat_guard.py tests/test_prune.py tests/test_harness_integration.py tests/test_coordinator.py tests/test_subagent_store.py tests/test_handoff_guard.py -v
+        run: uv run pytest tests/test_agent_guards.py tests/test_plan_mode.py tests/test_plan_state.py tests/test_compact_loop.py tests/test_complete_step.py tests/test_task_tool.py tests/test_parallel_tasks.py tests/test_permissions.py tests/test_evidence.py tests/test_readiness.py tests/test_repeat_guard.py tests/test_prune.py tests/test_harness_integration.py tests/test_coordinator.py tests/test_subagent_store.py tests/test_handoff_guard.py tests/test_entrypoint_parity.py -v
       - name: Agent task benchmark
         run: uv run python benchmarks/agent/run.py
       - name: Agent benchmark regression gate
