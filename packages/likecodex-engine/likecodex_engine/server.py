@@ -18,6 +18,7 @@ from likecodex_engine.agent.loop import AgentLoop, build_subagent_loop
 from likecodex_engine.agent.plan_state import PlanState
 from likecodex_engine.agent.planner import Planner
 from likecodex_engine.context.manager import ContextManager
+from likecodex_engine.context.instruction import load_host_checks_from_dir
 from likecodex_engine.context.project_memory import load_project_memory
 from likecodex_engine.context.session_cache import SessionContextCache
 from likecodex_engine.context.session_resolver import session_id_for_dir
@@ -141,6 +142,7 @@ def _make_agent(
         cfg.get("api_key"),
         cfg.get("base_url"),
         thinking=bool(cfg.get("thinking", False)),
+        reasoning_effort=str(cfg.get("reasoning_effort", "")),
     )
     tools = ToolRegistry(working_dir, config=cfg)
     memory = VectorMemory(cfg.get("memory_path", ".likecodex/memory.jsonl"))
@@ -158,6 +160,7 @@ def _make_agent(
             cfg.get("api_key"),
             cfg.get("base_url"),
             thinking=bool(cfg.get("thinking", False)),
+            reasoning_effort=str(cfg.get("reasoning_effort", "")),
         )
         if enable_planner
         else None
@@ -225,7 +228,7 @@ def _make_agent(
         llm,
         tools,
         context,
-        max_iterations=int(cfg.get("max_steps", 50)),
+        max_iterations=int(cfg.get("max_steps", 0)),
         planner=planner,
         permission_evaluator=evaluator,
         sandbox_executor_url=cfg.get("sandbox_executor_url"),
@@ -241,14 +244,39 @@ def _make_agent(
     tools.set_agent_factory(agent_factory)
     tools.set_session_log_provider(lambda: loop.context.messages)
     tools.set_session_id(sid)
+
+    # Inject project_checks from LIKECODEX.md / AGENTS.md
+    host_checks = load_host_checks_from_dir(Path(working_dir))
+    if host_checks:
+        loop.project_checks = [
+            {"command": check.command, "source_path": check.source_path, "line": check.line}
+            for check in host_checks
+        ]
+
     _ACTIVE_LOOPS[sid] = loop
     if enable_planner and planner_llm is not None:
         planning_context = context.prefix.project_memories if hasattr(context, "prefix") else ""
+        
+        # Create classifier LLM if auto_plan_classifier is configured
+        classifier_llm = None
+        auto_plan_classifier_model = cfg.get("auto_plan_classifier")
+        if auto_plan_classifier_model:
+            from likecodex_engine.llm.factory import create_provider
+            classifier_llm = create_provider(
+                cfg.get("provider", "deepseek"),
+                auto_plan_classifier_model,
+                cfg.get("api_key"),
+                cfg.get("base_url"),
+                thinking=False,
+            )
+        
         coordinator = Coordinator(
             loop,
             planner_llm,
             planner_max_steps=int(cfg.get("planner_max_steps", 20)),
             planning_context=planning_context,
+            auto_plan=cfg.get("auto_plan", "off"),
+            auto_plan_classifier=classifier_llm,
         )
         _ACTIVE_COORDINATORS[sid] = coordinator
     return loop
@@ -622,6 +650,155 @@ async def get_session_events(request: web.Request) -> web.Response:
     )
 
 
+# ── New ACP-compatible handler functions ───────────────────────────
+
+async def toggle_plan_mode(request: web.Request) -> web.Response:
+    """Toggle plan mode for a session."""
+    data = await request.json()
+    session_id = data.get("session_id", "")
+    loop = _resolve_loop(session_id)
+    if loop is None:
+        return web.json_response({"error": "Session not found"}, status=404)
+    if hasattr(loop, "plan_state"):
+        loop.plan_state.active = not loop.plan_state.active
+        return web.json_response({
+            "ok": True,
+            "active": loop.plan_state.active,
+            "session_id": session_id,
+        })
+    return web.json_response({"error": "Plan mode not supported"}, status=400)
+
+
+async def compact_context(request: web.Request) -> web.Response:
+    """Trigger context compaction for a session."""
+    data = await request.json()
+    session_id = data.get("session_id", "")
+    focus = data.get("focus")
+    loop = _resolve_loop(session_id)
+    if loop is None:
+        return web.json_response({"error": "Session not found"}, status=404)
+    # Trigger compaction via the agent's context manager
+    if hasattr(loop, "context") and hasattr(loop.context, "compact"):
+        loop.context.compact(trigger="manual", focus=focus)
+        return web.json_response({"ok": True, "session_id": session_id})
+    return web.json_response({"error": "Compaction not supported"}, status=400)
+
+
+async def new_session(request: web.Request) -> web.Response:
+    """Create a new empty session."""
+    data = await request.json()
+    cwd = data.get("cwd", ".")
+    session_id = str(uuid.uuid4())
+    store = _session_store()
+    store.create_session(session_id, {"working_dir": cwd, "status": "active"})
+    _CONTEXT_CACHE.pop(session_id)
+    return web.json_response({"ok": True, "session_id": session_id, "cwd": cwd})
+
+
+async def fork_session(request: web.Request) -> web.Response:
+    """Fork a session at the current point."""
+    data = await request.json()
+    session_id = data.get("session_id", "")
+    label = data.get("label", "fork")
+    store = _session_store()
+    new_id = str(uuid.uuid4())
+    events = store.list_events(session_id)
+    if not events:
+        return web.json_response({"error": "Source session not found"}, status=404)
+    store.create_session(new_id, {
+        "working_dir": ".",
+        "status": "active",
+        "forked_from": session_id,
+        "label": label,
+    })
+    for e in events:
+        store.append_event(new_id, e)
+    return web.json_response({"ok": True, "session_id": new_id, "forked_from": session_id})
+
+
+async def summarize_session(request: web.Request) -> web.Response:
+    """Generate a summary of a session."""
+    data = await request.json()
+    session_id = data.get("session_id", "")
+    store = _session_store()
+    events = store.list_events(session_id)
+    if not events:
+        return web.json_response({"error": "Session not found"}, status=404)
+    user_messages = [e.content for e in events if e.event_type == "user"]
+    assistant_messages = [e.content for e in events if e.event_type == "assistant"]
+    summary = {
+        "session_id": session_id,
+        "message_count": len(events),
+        "user_turns": len(user_messages),
+        "assistant_turns": len(assistant_messages),
+        "first_user_message": user_messages[0] if user_messages else None,
+        "last_assistant_message": assistant_messages[-1] if assistant_messages else None,
+    }
+    return web.json_response(summary)
+
+
+async def set_approval_mode(request: web.Request) -> web.Response:
+    """Set the tool approval mode for a session."""
+    data = await request.json()
+    session_id = data.get("session_id", "")
+    mode = data.get("mode", "auto")
+    loop = _resolve_loop(session_id)
+    if loop is None:
+        return web.json_response({"error": "Session not found"}, status=404)
+    valid_modes = {"read-only", "auto", "auto-approve", "full-access", "yolo", "sandbox-required"}
+    if mode not in valid_modes:
+        return web.json_response({"error": f"Invalid mode: {mode}. Valid: {sorted(valid_modes)}"}, status=400)
+    if hasattr(loop, "permission_evaluator"):
+        loop.permission_evaluator.mode = ApprovalMode(mode)
+        return web.json_response({"ok": True, "session_id": session_id, "mode": mode})
+    return web.json_response({"error": "Approval mode not supported"}, status=400)
+
+
+async def resume_session(request: web.Request) -> web.Response:
+    """Resume a saved session."""
+    data = await request.json()
+    session_id = data.get("session_id", "")
+    store = _session_store()
+    events = store.list_events(session_id)
+    if not events:
+        return web.json_response({"error": "Session not found"}, status=404)
+    metadata = store.get_session_metadata(session_id) or {}
+    return web.json_response({
+        "ok": True,
+        "session_id": session_id,
+        "event_count": len(events),
+        "metadata": metadata,
+    })
+
+
+async def delete_session(request: web.Request) -> web.Response:
+    """Delete a session."""
+    data = await request.json()
+    session_id = data.get("session_id", "")
+    store = _session_store()
+    metadata = store.get_session_metadata(session_id)
+    if not metadata:
+        return web.json_response({"error": "Session not found"}, status=404)
+    store.delete_session(session_id)
+    _CONTEXT_CACHE.pop(session_id)
+    _ACTIVE_LOOPS.pop(session_id, None)
+    _ACTIVE_COORDINATORS.pop(session_id, None)
+    return web.json_response({"ok": True, "session_id": session_id})
+
+
+async def list_skills(request: web.Request) -> web.Response:
+    """List available skills."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    skills = discover_skills(working_dir)
+    return web.json_response({
+        "skills": [
+            {"name": s.name, "description": s.description, "source": s.source}
+            for s in skills
+        ]
+    })
+
+
 def create_app(config: dict | None = None) -> web.Application:
     app = web.Application()
     app[APP_CONFIG] = config or {}
@@ -641,6 +818,16 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_get("/checkpoints", list_checkpoints)
     app.router.add_post("/checkpoints/rewind", rewind_checkpoint)
     app.router.add_get("/codegraph/search", codegraph_search)
+    # ── New ACP-compatible endpoints ──────────────────────────
+    app.router.add_post("/plan/toggle", toggle_plan_mode)
+    app.router.add_post("/compact", compact_context)
+    app.router.add_post("/new", new_session)
+    app.router.add_post("/fork", fork_session)
+    app.router.add_post("/summarize", summarize_session)
+    app.router.add_post("/tool-approval-mode", set_approval_mode)
+    app.router.add_post("/resume", resume_session)
+    app.router.add_post("/sessions/delete", delete_session)
+    app.router.add_get("/skills", list_skills)
     return app
 
 
