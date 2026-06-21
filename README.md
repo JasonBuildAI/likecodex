@@ -527,6 +527,7 @@ likecodex/
 | [docs/SPEC-CACHE.md](docs/SPEC-CACHE.md) | Cache-first context specification |
 | [docs/SPEC-AGENT.md](docs/SPEC-AGENT.md) | Agent harness specification |
 | [docs/API.md](docs/API.md) | HTTP API reference |
+| [docs/ACP.md](docs/ACP.md) | ACP v1 protocol specification |
 | [docs/EVENTS.md](docs/EVENTS.md) | SSE event schema |
 | [docs/USAGE.md](docs/USAGE.md) | Detailed usage guide |
 | [docs/PARITY-CHECKLIST.md](docs/PARITY-CHECKLIST.md) | Feature ↔ test mapping |

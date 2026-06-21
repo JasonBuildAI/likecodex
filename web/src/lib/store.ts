@@ -70,6 +70,13 @@ interface AppState {
   planModePendingExit: boolean;
   collaborationMode: 'normal' | 'plan' | 'goal';
   reasoningContent: string;
+  // UI settings
+  settingsOpen: boolean;
+  apiKey: string;
+  selectedModel: 'deepseek-v4-flash' | 'deepseek-v4-pro';
+  setSettingsOpen: (open: boolean) => void;
+  setApiKey: (key: string) => void;
+  setSelectedModel: (model: 'deepseek-v4-flash' | 'deepseek-v4-pro') => void;
   setCacheHitRate: (rate: number | null) => void;
   addMessage: (message: Message) => void;
   appendToLastMessage: (content: string) => void;
@@ -113,6 +120,18 @@ export const useAppStore = create<AppState>((set) => ({
   planModePendingExit: false,
   collaborationMode: 'normal',
   reasoningContent: '',
+  settingsOpen: false,
+  apiKey: typeof window !== 'undefined' ? localStorage.getItem('likecodex_api_key') || '' : '',
+  selectedModel: (typeof window !== 'undefined' ? (localStorage.getItem('likecodex_model') as 'deepseek-v4-flash' | 'deepseek-v4-pro') : null) || 'deepseek-v4-flash',
+  setSettingsOpen: (open) => set({ settingsOpen: open }),
+  setApiKey: (key) => {
+    if (typeof window !== 'undefined') localStorage.setItem('likecodex_api_key', key);
+    set({ apiKey: key });
+  },
+  setSelectedModel: (model) => {
+    if (typeof window !== 'undefined') localStorage.setItem('likecodex_model', model);
+    set({ selectedModel: model });
+  },
   addMessage: (message) =>
     set((state) => ({ messages: [...state.messages, message] })),
   appendToLastMessage: (content) =>

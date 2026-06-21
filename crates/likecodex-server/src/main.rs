@@ -408,6 +408,7 @@ async fn create_task(
 
 async fn chat_stream(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<CreateTaskRequest>,
 ) -> Sse<Pin<Box<dyn tokio_stream::Stream<Item = Result<SseEvent, std::convert::Infallible>> + Send>>>
 {
@@ -418,8 +419,18 @@ async fn chat_stream(
     let bridge = state.engine_bridge.clone();
     let bus = state.event_bus.clone();
 
+    // Extract optional API key and model from headers
+    let api_key = headers
+        .get("X-LikeCodex-Api-Key")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty());
+    let model = headers
+        .get("X-LikeCodex-Model")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty());
+
     let initial = match bridge
-        .chat_stream(&req.prompt, req.session_id.as_deref(), req.no_tools)
+        .chat_stream(&req.prompt, req.session_id.as_deref(), req.no_tools, api_key, model)
         .await
     {
         Ok(stream) => Some(stream),

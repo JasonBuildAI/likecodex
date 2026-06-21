@@ -65,6 +65,18 @@ def _resolve_config(app_config: dict) -> dict:
     }
 
 
+def _merge_request_config(cfg: dict, data: dict) -> dict:
+    """Override config with api_key and model from request body (if present)."""
+    merged = dict(cfg)
+    api_key = data.get("api_key") or cfg.get("api_key")
+    model = data.get("model") or cfg.get("model")
+    if api_key and api_key != cfg.get("api_key"):
+        merged["api_key"] = api_key
+    if model and model != cfg.get("model"):
+        merged["model"] = model
+    return merged
+
+
 async def health(request: web.Request) -> web.Response:
     metrics = global_cache_metrics().to_dict()
     return web.json_response({"status": "ok", "provider": "deepseek", "cache": metrics})
@@ -297,6 +309,7 @@ async def chat(request: web.Request) -> web.StreamResponse:
     session_id = data.get("session_id")
     no_tools = bool(data.get("no_tools", False))
     cfg = _resolve_config(request.app[APP_CONFIG])
+    cfg = _merge_request_config(cfg, data)
     working_dir = cfg.get("working_dir", ".")
 
     sid = session_id or session_id_for_dir(working_dir)
@@ -358,6 +371,7 @@ async def run_task(request: web.Request) -> web.Response:
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
     cfg = _resolve_config(request.app[APP_CONFIG])
+    cfg = _merge_request_config(cfg, data)
     working_dir = cfg.get("working_dir", ".")
 
     sid = session_id or session_id_for_dir(working_dir)
@@ -430,6 +444,7 @@ async def create_task(request: web.Request) -> web.Response:
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
     cfg = _resolve_config(request.app[APP_CONFIG])
+    cfg = _merge_request_config(cfg, data)
     working_dir = cfg.get("working_dir", ".")
     task_id = session_id or session_id_for_dir(working_dir)
 

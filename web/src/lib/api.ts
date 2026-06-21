@@ -10,6 +10,18 @@ import {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 
+/** Build headers with optional API key and model selection from the store. */
+function buildHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (typeof window !== 'undefined') {
+    const apiKey = localStorage.getItem('likecodex_api_key');
+    const model = localStorage.getItem('likecodex_model');
+    if (apiKey) headers['X-LikeCodex-Api-Key'] = apiKey;
+    if (model) headers['X-LikeCodex-Model'] = model;
+  }
+  return headers;
+}
+
 export function formatRetryMessage(reason: string, attempt: number, max: number): string {
   const label =
     reason === 'provider'
@@ -220,7 +232,7 @@ export function parseRustEvent(data: RustEvent): {
 export async function createTask(prompt: string, sessionId?: string | null): Promise<Task> {
   const resp = await fetch(`${API_BASE}/tasks`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({
       prompt,
       ...(sessionId ? { session_id: sessionId } : {}),
@@ -427,7 +439,7 @@ export async function streamChat(
 ): Promise<void> {
   const resp = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({
       prompt,
       ...(sessionId ? { session_id: sessionId } : {}),
@@ -505,7 +517,7 @@ export async function rewindCheckpoint(
 ): Promise<Record<string, unknown>> {
   const resp = await fetch(`${API_BASE}/checkpoints/rewind`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({ checkpoint_id: checkpointId, mode }),
   });
   return resp.json();
@@ -517,7 +529,7 @@ export async function respondAsk(
 ): Promise<void> {
   const resp = await fetch(`${API_BASE}/ask/${requestId}/respond`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({ answers }),
   });
   if (!resp.ok) {
@@ -594,7 +606,7 @@ export async function respondPermission(
 ): Promise<void> {
   const resp = await fetch(`${API_BASE}/permissions/${requestId}/respond`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildHeaders(),
     body: JSON.stringify({ approved, grant_scope: grantScope }),
   });
   if (!resp.ok) {

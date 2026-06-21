@@ -8,6 +8,7 @@ import { AskModal } from '@/components/AskModal';
 import { CheckpointPanel } from '@/components/CheckpointPanel';
 import { SetupBanner } from '@/components/SetupBanner';
 import { TaskTimeline } from '@/components/TaskTimeline';
+import { SettingsPanel } from '@/components/SettingsPanel';
 import {
   fetchCacheMetrics,
   fetchConfig,
@@ -57,6 +58,8 @@ export default function Home() {
   const currentSessionId = useAppStore((s) => s.currentSessionId);
   const setCurrentSessionId = useAppStore((s) => s.setCurrentSessionId);
   const setMessages = useAppStore((s) => s.setMessages);
+  const selectedModel = useAppStore((s) => s.selectedModel);
+  const apiKey = useAppStore((s) => s.apiKey);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -226,7 +229,8 @@ export default function Home() {
           >
             Toggle plan
           </button>
-          <span>{model}</span>
+          <span>{selectedModel}</span>
+          <span className={`inline-block h-2 w-2 rounded-full ${apiKey ? 'bg-green-500' : 'bg-amber-500'}`} title={apiKey ? 'API Key configured' : 'API Key not set'} />
           <span>{cacheLabel}</span>
           <span>{approvalMode}</span>
         </div>
@@ -295,6 +299,7 @@ export default function Home() {
         onResponded={removePendingPermission}
       />
       <AskModal requests={pendingAskRequests} onResponded={removePendingAsk} />
+      <SettingsPanel />
     </main>
   );
 }
