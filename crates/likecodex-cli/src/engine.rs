@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use tokio::time::sleep;
 
@@ -28,7 +28,9 @@ impl EngineSupervisor {
             }
         }
         let _ = child.kill();
-        anyhow::bail!("engine failed to start at {url}")
+        bail!(
+            "engine failed to start at {url}. Run `likecodex setup` or set LIKECODEX_ENGINE_ROOT"
+        )
     }
 }
 
@@ -65,12 +67,14 @@ fn parse_host_port(url: &str) -> (String, String) {
         }
         Some(host) => (host.to_string(), "9090".to_string()),
         None => ("127.0.0.1".to_string(), "9090".to_string()),
-    }
+    )
 }
 
 fn spawn_engine(project_root: &Path, host_port: &(String, String)) -> Result<Child> {
     let (host, port) = host_port;
-    let cwd = find_engine_root(project_root);
+    let cwd = find_engine_root(project_root).with_context(|| {
+        "could not locate LikeCodex engine sources. Run `likecodex setup` first".to_string()
+    })?;
 
     let uv = which_uv();
     let mut cmd = Command::new(&uv);
@@ -85,30 +89,74 @@ fn spawn_engine(project_root: &Path, host_port: &(String, String)) -> Result<Chi
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
-        cmd.env("DEEPSEEK_API_KEY", key);
-    }
-    if let Ok(key) = std::env::var("LIKECODEX_LLM_API_KEY") {
-        cmd.env("LIKECODEX_LLM_API_KEY", key);
-    }
+    propagate_engine_env(&mut cmd);
 
     cmd.spawn()
         .with_context(|| format!("failed to spawn engine via {uv}"))
+}
+
+pub fn propagate_engine_env(cmd: &mut Command) {
+    for key in [
+        "DEEPSEEK_API_KEY",
+        "LIKECODEX_LLM_API_KEY",
+        "LIKECODEX_LLM_PROVIDER",
+        "LIKECODEX_LLM_MODEL",
+        "LIKECODEX_LLM_BASE_URL",
+        "LIKECODEX_APPROVAL_MODE",
+        "LIKECODEX_ENABLE_PLANNER",
+        "LIKECODEX_PLANNER_MODEL",
+        "LIKECODEX_COMPACT_RATIO",
+        "LIKECODEX_ENABLE_MCP",
+        "LIKECODEX_TOKEN_MODE",
+    ] {
+        if let Ok(val) = std::env::var(key) {
+            cmd.env(key, val);
+        }
+    }
 }
 
 fn which_uv() -> String {
     std::env::var("LIKECODEX_UV").unwrap_or_else(|_| "uv".to_string())
 }
 
-fn find_engine_root(start: &Path) -> PathBuf {
+/// Resolve the directory containing the Python engine package / pyproject workspace.
+pub fn find_engine_root(start: &Path) -> Option<PathBuf> {
+    if let Ok(root) = std::env::var("LIKECODEX_ENGINE_ROOT") {
+        let path = PathBuf::from(root);
+        if path.join("packages/likecodex-engine").exists() || path.join("pyproject.toml").exists()
+        {
+            return Some(path);
+        }
+    }
+
+    if let Ok(home) = std::env::var("LIKECODEX_HOME") {
+        let install = PathBuf::from(home).join("install");
+        if install.join("packages/likecodex-engine").exists() {
+            return Some(install);
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let install = home.join(".likecodex").join("install");
+        if install.join("packages/likecodex-engine").exists() {
+            return Some(install);
+        }
+    }
+
     let mut dir = start.to_path_buf();
-    for _ in 0..8 {
+    for _ in 0..12 {
         if dir.join("packages/likecodex-engine").exists() {
-            return dir;
+            return Some(dir);
         }
         if !dir.pop() {
             break;
         }
     }
-    start.to_path_buf()
+
+    None
+}
+
+/// Repo root for web assets and dev workflows.
+pub fn find_repo_root(start: &Path) -> PathBuf {
+    find_engine_root(start).unwrap_or_else(|| start.to_path_buf())
 }
