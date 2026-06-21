@@ -47,6 +47,9 @@ def _load_skill_file(path: Path) -> Skill | None:
 
 def discover_skills(working_dir: str | Path) -> list[Skill]:
     roots: list[Path] = []
+    builtins = Path(__file__).resolve().parent / "builtins"
+    if builtins.exists():
+        roots.append(builtins)
     home = Path.home() / ".likecodex" / "skills"
     project = Path(working_dir) / ".likecodex" / "skills"
     agents_home = Path.home() / ".agents" / "skills"
@@ -59,6 +62,12 @@ def discover_skills(working_dir: str | Path) -> list[Skill]:
 
     skills: dict[str, Skill] = {}
     for root in roots:
+        if root.name == "builtins":
+            for path in sorted(root.glob("*.md")):
+                skill = _load_skill_file(path)
+                if skill:
+                    skills[skill.name] = skill
+            continue
         for path in sorted(root.rglob("*.md")):
             if path.name.upper() == "SKILL.MD" or path.parent.name != "skills":
                 skill = _load_skill_file(path)
