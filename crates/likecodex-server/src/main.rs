@@ -47,11 +47,6 @@ struct PlanRequest {
 }
 
 #[derive(serde::Deserialize)]
-struct RewindCheckpointRequest {
-    checkpoint_id: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
 struct ExecuteRequest {
     command: String,
     #[serde(default)]
@@ -61,6 +56,22 @@ struct ExecuteRequest {
 #[derive(serde::Deserialize)]
 struct PermissionRespondRequest {
     approved: bool,
+    #[serde(default)]
+    grant_scope: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct AskRespondRequest {
+    answers: serde_json::Value,
+}
+
+#[derive(serde::Deserialize)]
+struct RewindCheckpointRequest {
+    checkpoint_id: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -162,6 +173,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/events", get(events_stream))
         .route("/permissions/pending", get(list_pending_permissions))
         .route("/permissions/:id/respond", post(respond_permission))
+        .route("/ask/pending", get(proxy_list_pending_asks))
+        .route("/ask/:id/respond", post(proxy_respond_ask))
         .route("/sessions", get(list_sessions))
         .route("/sessions/:id/events", get(get_session_events))
         .route("/index/search", get(index_search))
@@ -430,7 +443,10 @@ async fn respond_permission(
         .engine_bridge
         .post(
             &format!("/permissions/{id}/respond"),
-            &serde_json::json!({ "approved": req.approved }),
+            &serde_json::json!({
+                "approved": req.approved,
+                "grant_scope": req.grant_scope.unwrap_or_else(|| "once".to_string()),
+            }),
         )
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
@@ -597,7 +613,38 @@ async fn proxy_rewind_checkpoint(
         .engine_bridge
         .post(
             "/checkpoints/rewind",
-            &serde_json::json!({ "checkpoint_id": req.checkpoint_id }),
+            &serde_json::json!({
+                "checkpoint_id": req.checkpoint_id,
+                "mode": req.mode.unwrap_or_else(|| "code".to_string()),
+                "session_id": req.session_id,
+            }),
+        )
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(Json(body))
+}
+
+async fn proxy_list_pending_asks(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let body = state
+        .engine_bridge
+        .get("/ask/pending")
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(Json(body))
+}
+
+async fn proxy_respond_ask(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<AskRespondRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let body = state
+        .engine_bridge
+        .post(
+            &format!("/ask/{id}/respond"),
+            &serde_json::json!({ "answers": req.answers }),
         )
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;

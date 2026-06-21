@@ -261,6 +261,55 @@ pub fn map_engine_output(task_id: &str, output: &Value) -> Event {
                 files,
             }
         }
+        "plan_mode_changed" => {
+            let meta = output.get("metadata").cloned().unwrap_or(Value::Null);
+            Event::PlanModeChanged {
+                task_id: task_id.to_string(),
+                active: meta
+                    .get("active")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                pending_exit: meta
+                    .get("pending_exit")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                reason: meta
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            }
+        }
+        "ask" => {
+            let parsed = serde_json::from_str::<Value>(&content).unwrap_or(Value::Null);
+            Event::AskRequested {
+                task_id: task_id.to_string(),
+                request_id: parsed
+                    .get("request_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                questions: parsed
+                    .get("questions")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!([])),
+            }
+        }
+        "ask_responded" => {
+            let parsed = serde_json::from_str::<Value>(&content).unwrap_or(Value::Null);
+            Event::AskResponded {
+                task_id: task_id.to_string(),
+                request_id: parsed
+                    .get("request_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                answers: parsed
+                    .get("answers")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!([])),
+            }
+        }
         "error" => Event::Error {
             task_id: Some(task_id.to_string()),
             message: content,

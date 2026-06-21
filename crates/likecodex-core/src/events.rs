@@ -63,6 +63,22 @@ pub enum Event {
         label: String,
         files: Vec<String>,
     },
+    PlanModeChanged {
+        task_id: String,
+        active: bool,
+        pending_exit: bool,
+        reason: String,
+    },
+    AskRequested {
+        task_id: String,
+        request_id: String,
+        questions: serde_json::Value,
+    },
+    AskResponded {
+        task_id: String,
+        request_id: String,
+        answers: serde_json::Value,
+    },
     Error {
         task_id: Option<String>,
         message: String,
