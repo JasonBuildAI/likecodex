@@ -6,7 +6,9 @@
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![Node.js 20+](https://img.shields.io/badge/node.js-20+-green.svg)](https://nodejs.org/)
 
-**LikeCodex** 是一个由 **DeepSeek V4** 驱动的开源编程 Agent。它采用 **Rust 控制平面**（CLI、HTTP API、沙箱执行）+ **Python Agent 引擎**（LLM 循环、工具、规划、记忆）+ **Next.js Web 界面** 的混合架构，并针对 **DeepSeek 上下文缓存命中率** 做了专门优化，以降低多轮工具循环的 API 成本。
+**LikeCodex** 是一个由 **DeepSeek V4** 驱动的开源**编程 Agent**。你用自然语言描述任务，Agent 会阅读代码库、执行命令、修改文件并汇报结果；对高风险操作还可选择**人工审批**。
+
+不同于简单的 LLM 封装或单体 Python 应用，LikeCodex 采用**刻意拆分**的架构：Rust 负责控制与安全 I/O，Python 负责 Agent 智能，Next.js 提供富交互 Web 界面。全系统针对 **DeepSeek 前缀缓存** 优化，使多轮工具循环既快又省。
 
 **[English README](README.md)**
 
@@ -14,579 +16,476 @@
 
 ## 目录
 
-- [LikeCodex 是什么？](#likecodex-是什么)
-- [系统架构](#系统架构)
-  - [设计理念](#设计理念)
-  - [四层模型](#四层模型)
-  - [运行时拓扑](#运行时拓扑)
-  - [组件地图](#组件地图)
-  - [端到端请求流程](#端到端请求流程)
-  - [Agent 循环（Python 引擎）](#agent-循环python-引擎)
-  - [事件协议（SSE）](#事件协议sse)
-  - [缓存优先的上下文模型](#缓存优先的上下文模型)
-  - [安全与执行路由](#安全与执行路由)
-- [功能特性](#功能特性)
-- [环境要求](#环境要求)
-- [安装](#安装)
+- [LikeCodex 解决什么问题？](#likecodex-解决什么问题)
+- [核心设计原则](#核心设计原则)
+- [架构总览](#架构总览)
+- [四层架构详解](#四层架构详解)
+- [一次任务如何跑完](#一次任务如何跑完)
+- [Agent 循环（系统心脏）](#agent-循环系统心脏)
+- [缓存优先的上下文（LikeCodex 的差异化）](#缓存优先的上下文likecodex-的差异化)
+- [规划、子 Agent 与 Skills](#规划子-agent-与-skills)
+- [安全与执行路由](#安全与执行路由)
+- [事件协议（所有客户端共享一条流）](#事件协议所有客户端共享一条流)
 - [快速开始](#快速开始)
-- [使用指南](#使用指南)
-- [内置工具](#内置工具)
 - [配置说明](#配置说明)
-- [本地开发](#本地开发)
-- [测试](#测试)
+- [内置工具](#内置工具)
 - [项目结构](#项目结构)
 - [文档索引](#文档索引)
-- [路线图](#路线图)
-- [贡献与许可证](#贡献与许可证)
+- [许可证](#许可证)
 
 ---
 
-## LikeCodex 是什么？
+## LikeCodex 解决什么问题？
 
-LikeCodex 让你用**自然语言**完成代码编辑、运行和理解：你描述任务，Agent 会读文件、执行命令、写入补丁并汇报结果；对高风险操作还可选择**人工审批**。
+编程 Agent 需要同时做好三件难事：
 
-市面上常见的编程 Agent 通常属于两类：
+1. **推理** — 把模糊需求拆成步骤，调用工具，从错误中恢复。
+2. **安全执行** — 读写文件、跑 shell，但不破坏你的机器。
+3. **好用** — 终端和浏览器都能流式看进度，该问权限就问，会话能续聊。
 
-- **LLM API 的薄 CLI 封装** — 功能简单，难以扩展安全与 UI；
-- **单体 Python 应用** — UI、安全、Agent 逻辑耦合，迭代和部署都较重。
+LikeCodex 按职责分层，而不是把所有逻辑堆在一起：
 
-LikeCodex **刻意拆分职责**：
+| 关注点 | 层级 | 语言 | 为何放这里 |
+|--------|------|------|-----------|
+| 用户界面 | CLI、TUI、Web | Rust + TypeScript | 启动快、体验好 |
+| HTTP 桥接、SSE、沙箱网关 | 控制平面 | Rust | 安全 I/O、统一事件总线 |
+| LLM 循环、工具、规划、记忆 | Agent 引擎 | Python | Agent 逻辑迭代快 |
+| Shell/Git 执行、Docker 隔离 | 执行层 | Rust | 路径约束、低开销 |
 
-| 关注点 | 所在层 | 原因 |
-|--------|--------|------|
-| 快速、安全的 shell/git 执行 | Rust | 路径约束、沙箱路由、低开销 |
-| Agent 逻辑快速迭代 | Python | 工具循环、LLM、规划、压缩 |
-| CLI 与 Web 统一体验 | Rust 服务 + SSE 事件 | 一套事件协议服务所有客户端 |
-| 富交互浏览器界面 | Next.js | 聊天、Diff、权限、会话历史 |
-
-**默认 LLM：** DeepSeek V4（`deepseek-v4-flash` 或 `deepseek-v4-pro`），通过 OpenAI 兼容 API 调用。
-
----
-
-## 系统架构
-
-### 设计理念
-
-1. **控制与智能分离** — Rust 负责 I/O、HTTP、权限广播、命令执行；Python 负责推理与工具编排。
-2. **所有客户端共享一条事件流** — CLI、TUI、Web 都订阅 `likecodex-server` 发出的统一 SSE 事件。
-3. **缓存稳定性是一等公民** — 上下文结构为 DeepSeek 前缀缓存服务，工具循环多轮对话仍保持高命中率（见 [缓存优先的上下文模型](#缓存优先的上下文模型)）。
-4. **纵深防御** — 路径约束、命令风险分级、用户审批、可选 Docker 沙箱。
+**默认模型：** `deepseek-v4-flash`，通过 [DeepSeek OpenAI 兼容 API](https://api.deepseek.com) 调用。可选规划模型：`deepseek-v4-pro`。
 
 ---
 
-### 四层模型
+## 核心设计原则
+
+### 1. 控制与智能分离
+
+Rust 不直接调 LLM；Python 不绕过权限检查随意 spawn Docker。各层职责清晰：
+
+- **Rust** — HTTP、SSE 广播、会话代理、本地/沙箱执行、配置加载。
+- **Python** — `AgentLoop`、工具注册表、上下文组装、压缩、LLM 流式。
+
+改 Agent 行为（Python）不必重写安全边界（Rust）。
+
+### 2. 所有客户端共享一条事件流
+
+CLI、TUI、Web 都消费 `likecodex-server` 发出的**同一套 SSE 事件**。Python 输出原始 chunk，Rust 在 `event_mapping.rs` 中规范化。你在任何界面看到的工具卡片、权限弹窗、重试提示都是一致的。
+
+### 3. 缓存稳定性是一等公民
+
+DeepSeek **自动上下文缓存** 只有在 prompt 前缀（从 token 0 起）**字节级完全一致** 时才会命中。LikeCodex 把每段对话结构化为：
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│ 第 1 层 — 交互层（你如何与 LikeCodex 对话）                              │
-│   • likecodex-cli     单次任务 / REPL / Ratatui TUI                     │
-│   • web/              Next.js 三栏 UI（:3000）                          │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │  HTTP + SSE
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ 第 2 层 — 控制平面（likecodex-server，:8080）                            │
-│   • 转发 /tasks、/chat、/run、/plan 到 Python 引擎                       │
-│   • GET /events 广播规范化 SSE 事件                                      │
-│   • 权限 API + 会话持久化代理                                            │
-│   • POST /execute → Docker 沙箱或本地执行器                              │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │  HTTP（引擎桥接）
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ 第 3 层 — Agent 引擎（likecodex-engine，:9090）                          │
-│   • AgentLoop — 多轮 LLM ↔ 工具循环                                     │
-│   • ToolRegistry — 文件、shell、git、搜索、MCP 等                         │
-│   • ContextManager — 缓存优先的提示词组装 + 历史压缩                      │
-│   • Permissions — 策略规则 + 审批模式                                    │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │  工具调用
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ 第 4 层 — 执行层（Rust）                                                 │
-│   • likecodex-executor   工作目录内的本地 shell/git                       │
-│   • likecodex-sandbox    Docker 隔离执行                                 │
-│   • likecodex-indexer    文件名 / 代码图搜索辅助                          │
-└─────────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-                    DeepSeek V4 API（OpenAI 兼容）
+┌─────────────────────────────────────┐
+│ 不可变前缀（会话内不重写）            │  system.md + skills + 工具 schema
+├─────────────────────────────────────┤
+│ 只追加日志（向前增长）                │  user → assistant → tool → …
+├─────────────────────────────────────┤
+│ 易失草稿（不上送 API）                │  调试信息、规划器原始输出
+└─────────────────────────────────────┘
 ```
+
+这不是事后优化，而是会话、压缩、规划器隔离、工具 JSON 序列化的设计基础。详见 [缓存优先的上下文](#缓存优先的上下文likecodex-的差异化)。
+
+### 4. 纵深防御
+
+文件工具限制在工作区内；Shell 命令按风险分级；审批模式控制写入与执行；高风险命令可走 **Docker 沙箱**；写入前 **Checkpoint** 快照，支持回滚。
 
 ---
 
-### 运行时拓扑
+## 架构总览
 
-运行 `scripts/dev.sh` 或 `scripts/dev.ps1` 后，会启动三个进程：
+```mermaid
+flowchart TB
+  subgraph L1 [第 1 层 — 交互层]
+    CLI["likecodex-cli\n单次 / TUI"]
+    WEB["Next.js Web UI\n:3000"]
+  end
 
-| 进程 | 端口 | 包名 | 职责 |
-|------|------|------|------|
-| Python 引擎 | **9090** | `likecodex-engine` | Agent 大脑 — 循环、工具、LLM |
-| Rust API 服务 | **8080** | `likecodex-server` | 桥接、SSE 总线、沙箱网关 |
-| Next.js 开发服务 | **3000** | `web/` | 浏览器 UI（开发环境代理 API） |
+  subgraph L2 [第 2 层 — 控制平面 :8080]
+    SRV["likecodex-server\nAxum HTTP + SSE"]
+    EXEC["likecodex-executor"]
+    SBX["likecodex-sandbox"]
+    IDX["likecodex-indexer"]
+  end
 
-**健康检查：**
+  subgraph L3 [第 3 层 — Agent 引擎 :9090]
+    LOOP["AgentLoop"]
+    TOOLS["ToolRegistry"]
+    CTX["ContextManager\n缓存优先"]
+    PERM["PermissionEvaluator"]
+  end
+
+  subgraph L4 [外部服务]
+    DS["DeepSeek V4 API"]
+    MCP["MCP 插件服务器"]
+  end
+
+  CLI -->|HTTP 直连或经桥接| SRV
+  WEB -->|"/api" 代理| SRV
+  SRV -->|转发 /tasks /chat| LOOP
+  SRV --> EXEC
+  SRV --> SBX
+  SRV --> IDX
+  LOOP --> TOOLS
+  LOOP --> CTX
+  LOOP --> PERM
+  LOOP -->|流式 + 工具| DS
+  TOOLS --> MCP
+  TOOLS --> EXEC
+  TOOLS --> SBX
+```
+
+**日常启动（推荐）：**
 
 ```bash
-curl http://127.0.0.1:9090/health   # Python 引擎
-curl http://127.0.0.1:8080/health   # Rust 服务
+likecodex setup          # 首次：API Key、配置、LIKECODEX.md
+likecodex start --web    # 引擎 :9090 + 服务 :8080 + Web :3000
+likecodex code           # 纯终端 TUI
 ```
 
-CLI 可以**直连** Python 引擎（`--engine-url`），也可以走 Rust 服务（与 Web 相同路径）。
+开发者仍可用 `scripts/dev.sh` / `scripts/dev.ps1` 做热重载开发。
 
 ---
 
-### 组件地图
+## 四层架构详解
 
-#### Rust 工作区（`crates/`）
+### 第 1 层 — 交互层
+
+| 组件 | 入口 | 职责 |
+|------|------|------|
+| **likecodex-cli** | `likecodex`、`likecodex code`、`likecodex start` | 单次任务、Ratatui TUI、栈编排、`setup` / `doctor` |
+| **web/** | http://127.0.0.1:3000 | 三栏 UI：会话 / 对话 / Diff；权限弹窗；会话续聊 |
+
+CLI 可**直连** Python 引擎（`--engine-url http://127.0.0.1:9090`），也可走 Rust 服务（与 Web 相同路径）。
+
+### 第 2 层 — 控制平面（`likecodex-server`）
+
+Rust Axum 服务，默认 **8080 端口**：
+
+- **引擎桥接** — 转发 `POST /tasks`、`/chat`、`/run`、`/plan` 到 Python `:9090`。
+- **事件总线** — `GET /events` SSE 流，服务所有客户端。
+- **权限 API** — `GET /permissions/pending`、`POST /permissions/{id}/respond`。
+- **执行网关** — `POST /execute` → 本地执行器或 Docker 沙箱。
+- **健康与诊断** — `/health`、`/doctor`、`/config`、`/metrics`（代理引擎指标）。
+
+核心 Crate：
 
 | Crate | 职责 |
 |-------|------|
-| **likecodex-core** | 共享类型：`Config`、`Event`、`Task`、权限模型、事件总线 |
-| **likecodex-cli** | 终端入口：单次任务、REPL、Ratatui TUI、可选自动启动引擎 |
-| **likecodex-server** | Axum HTTP 服务：引擎桥接、SSE `/events`、`/execute`、会话 API |
-| **likecodex-executor** | 在配置的工作目录内本地执行 shell/git |
-| **likecodex-sandbox** | 为高风险命令启动 Docker 容器 |
-| **likecodex-indexer** | 文件索引与代码图搜索（计划集成 Tree-sitter） |
+| `likecodex-core` | 共享 `Config`、`Event`、`Task`、事件总线类型 |
+| `likecodex-server` | HTTP 服务 + 引擎桥接 + SSE 映射 |
+| `likecodex-executor` | 工作目录内的本地 shell/git |
+| `likecodex-sandbox` | Docker 隔离执行 |
+| `likecodex-indexer` | 文件索引 + CodeGraph 搜索 |
 
-#### Python 引擎（`packages/likecodex-engine/`）
+### 第 3 层 — Agent 引擎（`likecodex-engine`）
+
+Python aiohttp 服务，**9090 端口**，系统**大脑**：
 
 | 模块 | 职责 |
 |------|------|
-| **agent/loop.py** | 核心 Agent 循环：流式 LLM → 解析 tool_calls → 执行 → 重复 |
-| **agent/planner.py** | 可选：执行前先产出分步计划 |
-| **agent/coordinator.py** | 双模型协作（Pro 规划 → Flash 执行） |
-| **agent/subagent*.py** | 子 Agent：委派独立子任务 |
-| **agent/guards.py** | 循环/风暴/重复成功守卫、空回答保护 |
-| **agent/plan_mode.py** | 规划模式下限制写入类工具 |
-| **tools/** | 内置工具：文件系统、shell、git、grep、LSP、审查、MCP 等 |
-| **llm/deepseek.py** | DeepSeek V4 提供商 + 缓存用量指标 |
-| **context/** | 缓存优先的上下文组装、压缩、裁剪 |
-| **permissions/** | 审批模式、策略规则、风险分级 |
-| **persistence/** | SQLite 会话 + JSONL 事件历史 |
-| **memory/** | 可选向量记忆（`.likecodex/memory.jsonl`） |
+| `agent/loop.py` | 核心循环：LLM → 工具调用 → 结果 → 重复 |
+| `agent/coordinator.py` | 双模型：Pro 规划会话 → Flash 执行会话 |
+| `agent/planner.py` | 可选 JSON 步骤规划器 |
+| `agent/guards.py` | 循环/风暴/重复 guard、空回答保护 |
+| `agent/plan_mode.py` | 只读规划模式：批准前禁止写入 |
+| `agent/checkpoints.py` | 写入前快照；支持 rewind |
+| `tools/registry.py` | 40+ 内置工具 + MCP + economy 模式 |
+| `context/cache_first.py` | 不可变前缀 + 只追加日志 |
+| `context/compaction.py` | 上下文接近上限时压缩尾部 |
+| `llm/deepseek.py` | 流式、缓存 token 指标、thinking 模式 |
+| `permissions/` | 审批模式 + allow/ask/deny 策略 |
+| `persistence/` | SQLite 会话 + JSONL 事件历史 |
+| `mcp/` | 持久 stdio MCP 客户端、`.mcp.json` 发现 |
+| `skills/` | Markdown 剧本（`explore`、`review` 等） |
 
-#### Web 界面（`web/`）
+### 第 4 层 — 外部服务
 
-| 区域 | 职责 |
-|------|------|
-| **src/app/page.tsx** | 三栏布局：时间线 / 聊天 / Diff |
-| **src/lib/api.ts** | HTTP 客户端 + SSE 解析（`parseRustEvent`） |
-| **src/lib/store.ts** | Zustand 状态：消息、任务、权限、Diff |
+- **DeepSeek V4** — LLM 推理（OpenAI 兼容 `/chat/completions`）。
+- **MCP 服务器** — 可选插件（fetch、filesystem、自定义工具），stdio JSON-RPC。
+- **Docker** — 可选沙箱镜像 `likecodex/sandbox:latest`。
 
 ---
 
-### 端到端请求流程
+## 一次任务如何跑完
 
-示例：用户在 Web UI 输入 *「为 utils.py 添加单元测试」*。
+示例：在 Web UI 发送 *「给 `utils.py` 写单元测试并运行」*。
 
 ```text
-  浏览器                 Rust 服务 (:8080)           Python 引擎 (:9090)          DeepSeek API
-     │                          │                            │                          │
-     │  POST /tasks             │                            │                          │
-     │ ───────────────────────► │  POST /tasks（转发）        │                          │
-     │                          │ ─────────────────────────► │                          │
-     │                          │                            │  AgentLoop.run()         │
-     │                          │                            │ ────────────────────────►│
-     │                          │                            │ ◄────────────────────────│ tool_calls
-     │                          │                            │                          │
-     │                          │                            │  read_file / write_file  │
-     │                          │                            │  run_command（可能）      │
-     │                          │ ◄── 引擎 SSE 片段 ──────── │                          │
-     │                          │  map_engine_output()       │                          │
-     │  GET /events (SSE)       │  EventBus.emit()           │                          │
-     │ ◄─────────────────────── │                            │                          │
-     │  stream_chunk            │                            │                          │
-     │  tool_call_requested     │                            │                          │
-     │  permission_requested?   │                            │                          │
-     │  task_completed          │                            │                          │
+ 浏览器           Rust 服务 :8080        Python 引擎 :9090         DeepSeek
+    │                    │                       │                      │
+    │ POST /tasks        │                       │                      │
+    │───────────────────►│ POST /tasks（转发）    │                      │
+    │                    │──────────────────────►│ AgentLoop.run()      │
+    │                    │                       │─────────────────────►│
+    │                    │                       │◄─────────────────────│ tool_calls
+    │                    │                       │ read_file, edit_file │
+    │                    │                       │ run_command          │
+    │                    │◄── 流式 chunk ────────│                      │
+    │                    │ 映射 → EventBus       │                      │
+    │ GET /events (SSE)  │                       │                      │
+    │◄───────────────────│ stream_chunk          │                      │
+    │                    │ tool_call_requested   │                      │
+    │                    │ permission_requested? │                      │
+    │                    │ task_completed        │                      │
 ```
 
 **步骤说明：**
 
-1. **Web/CLI** 向 Rust 服务发送 `POST /tasks` 或 `POST /chat`，携带 `{ "prompt": "...", "session_id": "..." }`。
-2. **Rust 服务** 生成客户端可见的 `task_id`，发出 `task_started`，并转发至 Python `/tasks` 或 `/chat`。
-3. **Python 引擎** 运行 `AgentLoop`：
-   - 从缓存优先上下文组装消息（静态 SYSTEM 前缀 + 历史）。
-   - 携带工具 schema 调用 DeepSeek。
-   - 执行工具（只读工具可并行）。
-   - 流式输出 assistant 片段与工具事件。
-4. **高风险 shell**（`run_command`）可能经 Rust `POST /execute` 路由到 Docker 沙箱（取决于审批模式）。
-5. **Rust 服务** 将 Python 扁平输出对象映射为 typed `Event`，经 `/events` 广播。
-6. **Web/CLI** 渲染流式文本、工具卡片、权限弹窗与文件 Diff。
+1. 客户端向 Rust `POST /tasks` 发送 `{ "prompt": "...", "session_id": "..." }`（CLI 同步任务可用 Python `POST /run`）。
+2. Rust 创建客户端可见的 `task_id`，发出 `task_started`，转发给 Python。
+3. Python **AgentLoop** 构建缓存优先上下文，带排序后的工具 schema 调用 DeepSeek。
+4. 模型返回 tool calls → **权限检查** → 执行（只读工具可并行）。
+5. 工具结果追加到历史 → 循环直到模型返回纯文本最终答案。
+6. Rust 将 Python 输出映射为类型化 SSE 事件 → 所有订阅客户端实时更新。
+7. `auto` 模式下如需审批，客户端调用 `POST /permissions/{id}/respond`，引擎继续执行。
 
-在 `auto` 审批模式下，客户端通过 `POST /permissions/{id}/respond` 批准或拒绝；引擎恢复被阻塞的工具调用。
+复用 `session_id` 可保持不可变前缀「热」着，提高缓存命中率。
 
 ---
 
-### Agent 循环（Python 引擎）
+## Agent 循环（系统心脏）
 
-LikeCodex 的核心是 `packages/likecodex-engine/likecodex_engine/agent/loop.py` 中的 `AgentLoop`：
+`AgentLoop`（`packages/likecodex-engine/likecodex_engine/agent/loop.py`）流程：
 
 ```text
-┌──────────────┐
-│ 用户提示词    │
-└──────┬───────┘
-       ▼
-┌──────────────────────────────────────┐
-│ 组装上下文（CacheFirstContext）       │
-│   SYSTEM 前缀 + 历史 + [Context]     │
-└──────┬───────────────────────────────┘
-       ▼
-┌──────────────────────────────────────┐
-│ LLM.complete / stream（DeepSeek V4） │
-└──────┬───────────────────────────────┘
-       │
-       ├── 纯文本 ──► 最终回答 ──► 结束
-       │
-       └── tool_calls ──► 权限检查
-                │
-                ├── 拒绝 ──► 错误回传模型 ──► 继续循环
-                │
-                └── 允许 ──► 执行工具（本地 / 沙箱）
-                         │
-                         └── 追加 tool 结果 ──► 再次循环
+         ┌─────────────┐
+         │  用户 prompt │
+         └──────┬──────┘
+                ▼
+    ┌───────────────────────────┐
+    │ 构建上下文（缓存优先）      │
+    └─────────────┬─────────────┘
+                  ▼
+    ┌───────────────────────────┐
+    │ 流式 LLM 回合（DeepSeek）  │
+    └─────────────┬─────────────┘
+                  │
+      ┌───────────┴───────────┐
+      │                       │
+   纯文本                 tool_calls
+      │                       │
+      ▼                       ▼
+  最终回答               权限闸门
+ （+ 就绪检查）                │
+                         允许 → 写入前 checkpoint
+                              → 执行工具
+                              → 追加结果
+                              → 循环（默认最多 50 步）
 ```
 
-**重要机制：**
+**关键机制：**
 
-- **守卫（Guards）** — 检测死循环、连续失败、工具调用风暴。
-- **压缩（Compaction）** — 上下文接近 token 上限时摘要尾部，**不修改** SYSTEM 前缀。
-- **子 Agent** — `task` 工具在独立上下文中运行子任务。
-- **检查点（Checkpoints）** — 写文件前快照；`/rewind` 可回滚。
-- **规划模式（Plan mode）** — 限制变更类工具，直到退出规划。
+| 机制 | 作用 |
+|------|------|
+| **并行调度** | 连续只读工具并发执行 |
+| **Guard** | 检测死循环、工具风暴、重复成功 |
+| **流恢复** | SSE 中断时重试一次，保留部分 assistant 文本 |
+| **压缩** | 上下文超约 80% 窗口时摘要尾部，前缀不变 |
+| **Evidence 账本** | 跟踪 todo/步骤完成与验证命令 |
+| **Checkpoint** | `write_file` / `edit_file` 前快照；`likecodex rewind` 回滚 |
+| **Plan 模式** | 规划阶段仅只读工具，批准后才可写入 |
 
 ---
 
-### 事件协议（SSE）
+## 缓存优先的上下文（LikeCodex 的差异化）
 
-所有客户端通过 `GET /events` 消费**邻接标签 JSON**（adjacently tagged）：
+多数 Agent 把 prompt 当作不断变长的聊天记录。LikeCodex 把它当作**结构化文档**，分区严格（[完整规范](docs/SPEC-CACHE.md)）。
+
+**为何重要：** 20 轮工具循环若不缓存，每轮都重发 system prompt + 工具 schema。DeepSeek 前缀缓存命中后，第 2–N 轮复用缓存 token，成本大幅下降——但前提是字节 0…N 不变。
+
+**LikeCodex 的实现手段：**
+
+| 手段 | 效果 |
+|------|------|
+| 版本化 `system.md`（>1024 token） | 稳定的 SYSTEM 消息 |
+| 确定性排序的工具 JSON schema | 稳定的 API `tools` 参数 |
+| Skills 索引在前缀、正文按需加载 | 稳定 skill 列表 |
+| `LIKECODEX.md` / 项目记忆在前缀 | 项目上下文，会话内不重写 |
+| 尾部 `[Context]` USER 块 | 动态信息不碰前缀 |
+| 规划器独立会话 | Pro 规划不污染 Flash 执行器缓存 |
+| 原始 tool call JSON 持久化 | 回合间无重序列化漂移 |
+| 仅压缩尾部 | 修剪历史，永不重写 SYSTEM |
+
+**查看缓存健康度：**
+
+```bash
+curl http://127.0.0.1:9090/metrics   # 引擎
+curl http://127.0.0.1:8080/metrics   # 服务代理
+likecodex stats
+```
+
+Web UI 顶栏显示实时缓存命中率。
+
+---
+
+## 规划、子 Agent 与 Skills
+
+### 双模型协调器
+
+复杂任务可跑**两个隔离会话**：
+
+1. **规划器**（`deepseek-v4-pro`）— 只读工具，产出结构化计划。
+2. **执行器**（`deepseek-v4-flash`）— 全量工具，落实计划。
+
+会话隔离使执行器前缀缓存稳定，规划器可自由探索。
+
+启用：`LIKECODEX_ENABLE_PLANNER=true`，或由 `coordinator.py` 自动判断。
+
+### 子 Agent（`task` 工具）
+
+把聚焦子任务委派给独立 Agent 运行，支持 `continue_from` / `fork_from` 复用 transcript。子 Agent 不含 `task` / `parallel_tasks` 等元工具，防止递归风暴。
+
+### Skills
+
+`.likecodex/skills/` 或内置（`explore`、`review`、`test-after-edit`）的 Markdown 剧本，通过 `run_skill` 调用；索引折叠进缓存稳定前缀。
+
+### MCP 插件
+
+通过 [Model Context Protocol](https://modelcontextprotocol.io) 扩展外部工具。配置在 `~/.likecodex/config.toml` 或项目 `.mcp.json`。持久 stdio 会话；工具名 `mcp__<server>__<tool>`。
+
+### Token 经济模式
+
+设置 `[agent] token_mode = "economy"` 可默认隐藏 MCP、LSP、skills、子 Agent 等可选工具的 schema。模型调用 `connect_tool_source(source)` 按需启用——长会话保持前缀精简。
+
+---
+
+## 安全与执行路由
+
+| 审批模式 | 读取 | 写入 | Shell（中风险） | Shell（高风险） |
+|----------|------|------|-----------------|-----------------|
+| `read-only` | ✓ | ✗ | ✗ | ✗ |
+| `auto`（默认） | ✓ | 询问 | 询问 | Docker 沙箱 |
+| `full-access` | ✓ | ✓ | ✓ | 本地 |
+| `sandbox-required` | ✓ | 沙箱 | 沙箱 | 沙箱 |
+
+**防护层次：**
+
+1. **路径约束** — 文件/git 工具不能逃出 `LIKECODEX_WORKING_DIR`。
+2. **风险分类** — shell 命令标记为 read / medium / high。
+3. **策略规则** — 配置中 per-tool 的 allow / ask / deny。
+4. **用户审批** — SSE `permission_requested` → 客户端响应。
+5. **Docker 沙箱** — 隔离容器，CPU/内存限制。
+6. **API Token** — `POST /execute` 可选 Bearer 认证。
+7. **配置脱敏** — `/config` 不返回密钥。
+
+详情：[SECURITY.md](SECURITY.md)
+
+---
+
+## 事件协议（所有客户端共享一条流）
+
+所有客户端订阅 Rust 服务的 `GET /events`。事件为邻接 JSON 标签格式：
 
 ```json
 {"type":"stream_chunk","payload":{"task_id":"…","content":"部分文本"}}
-{"type":"tool_call_requested","payload":{"task_id":"…","call":{"id":"…","name":"read_file","arguments":{…}}}}
+{"type":"tool_call_requested","payload":{"task_id":"…","call":{"name":"read_file",…}}}
 {"type":"permission_requested","payload":{"task_id":"…","request":{…}}}
+{"type":"stream_retrying","payload":{"task_id":"…","reason":"provider","attempt":1}}
 {"type":"task_completed","payload":{"id":"…","status":"completed"}}
 ```
 
-Python 引擎输出扁平对象，如 `{"type":"assistant","content":"…"}`；**`likecodex-server`** 通过 `event_mapping.rs` 映射为结构化 `Event`，保证 CLI、TUI、Web 行为一致。
+Python 输出较扁平的对象；`likecodex-server/src/event_mapping.rs` 规范化后，CLI、TUI、Web 渲染一致。
 
 完整 schema：[docs/EVENTS.md](docs/EVENTS.md)
 
 ---
 
-### 缓存优先的上下文模型
+## 快速开始
 
-DeepSeek **自动上下文缓存**要求从第 0 个 token 起的提示词前缀**字节级一致**。LikeCodex 将缓存稳定性作为设计不变量。
+### 环境要求
 
-```text
-┌─────────────────────────────────────────┐
-│ 不可变前缀（会话内不修改）                │
-│   system.md + skills + 项目记忆          │
-│   + 排序后的工具 JSON schema             │
-├─────────────────────────────────────────┤
-│ 只追加日志（Append-Only Log）            │
-│   user → assistant → tool → …           │
-├─────────────────────────────────────────┤
-│ 易失暂存区（不发送给 API）               │
-│   规划器原始输出、调试 trace             │
-└─────────────────────────────────────────┘
-```
-
-| 策略 | 作用 |
+| 工具 | 版本 |
 |------|------|
-| 版本化 `system.md`（>1024 tokens） | 稳定的 SYSTEM 消息 |
-| 工具 schema 按 key 排序 | 确定性的 `tools` 参数 |
-| 动态记忆放在尾部 `[Context]` USER 消息 | 不污染前缀 |
-| 同一 `session_id` 复用 `ContextManager` | 跨 HTTP 请求保持前缀 |
-| 仅裁剪尾部历史（Compaction） | 压缩时不改 SYSTEM 块 |
+| Rust | 1.70+ |
+| Python | 3.11+ |
+| uv | 最新 |
+| Node.js | 20+（Web UI） |
+| Docker | 可选（沙箱） |
 
-监控缓存指标：
-
-```bash
-curl http://127.0.0.1:9090/metrics
-curl http://127.0.0.1:8080/metrics
-```
-
-Web UI 顶栏显示实时 cache hit %。完整规范：[docs/SPEC-CACHE.md](docs/SPEC-CACHE.md)
-
----
-
-### 安全与执行路由
-
-| 审批模式 | 只读工具 | 写入 / 中等 shell | 高风险 shell | 说明 |
-|----------|----------|-------------------|--------------|------|
-| `read-only` | 允许 | 禁止 | 禁止 | 安全分析 |
-| `auto` | 自动 | 需用户确认 | Docker 沙箱 | 默认；Docker 不可用时可回退 |
-| `full-access` | 自动 | 自动 | 本地执行 | 仅可信环境 |
-| `sandbox-required` | 自动 | 仅沙箱 | 仅沙箱 | CI / 不可信提示词 |
-
-**防护层次：**
-
-- **路径约束** — 文件/Git 工具无法越出 `LIKECODEX_WORKING_DIR`。
-- **风险分级** — shell 命令分为只读 / 中等 / 高。
-- **策略规则** — 配置中对工具 allow / ask / deny。
-- **Docker 沙箱** — 隔离容器 + 资源限制。
-- **API Token** — 可选保护 `POST /execute`。
-- **配置脱敏** — `/config` 不返回明文密钥。
-
-详见 [SECURITY.md](SECURITY.md)
-
----
-
-## 功能特性
-
-### 多种交互方式
-
-| 方式 | 命令 / 地址 | 适用场景 |
-|------|-------------|----------|
-| 单次 CLI | `cargo run -p likecodex-cli -- "提示词"` | 脚本、CI、快速任务 |
-| 交互 REPL | `likecodex interactive` | 轻量终端对话 |
-| Ratatui TUI | `likecodex --tui` | 富文本终端界面 |
-| Web UI | http://localhost:3000 | 聊天、Diff、权限、会话 |
-
-### Agent 能力
-
-- 多轮 **工具调用循环**，结构化结果回传
-- 可选 **任务规划器**（`LIKECODEX_ENABLE_PLANNER=true`）
-- **子 Agent 编排**，委派子任务
-- **MCP 集成**，接入外部工具服务
-- **会话持久化**（SQLite + JSONL 事件）
-- **向量记忆**（可选 `.likecodex/memory.jsonl`）
-- **检查点与回滚**（写文件前快照）
-- **斜杠命令**（`/compact`、`/init` 等）
-
-### 模型（DeepSeek V4）
-
-| 模型 | 配置值 | 说明 |
-|------|--------|------|
-| `deepseek-v4-flash` | 默认 | 速度快、成本低、缓存最省 |
-| `deepseek-v4-pro` | 规划 / 复杂任务 | 质量更高 |
-
-API Key：`DEEPSEEK_API_KEY` 或 `LIKECODEX_LLM_API_KEY`。Thinking 模式：`LIKECODEX_DEEPSEEK_THINKING=true`。
-
----
-
-## 环境要求
-
-| 工具 | 版本 | 用途 |
-|------|------|------|
-| [Rust](https://rustup.rs/) | 1.70+ | CLI、服务、沙箱、执行器 |
-| [Python](https://www.python.org/) | 3.11+ | Agent 引擎 |
-| [uv](https://github.com/astral-sh/uv) | 最新 | Python 依赖管理 |
-| [Node.js](https://nodejs.org/) | 20+ | Web 前端 |
-| [Docker](https://www.docker.com/products/docker-desktop/) | 可选 | 沙箱执行 |
-
-**平台说明：**
-
-- **Windows**：使用 `scripts/dev.ps1`；Rust 需 **MSVC Build Tools** — 运行 `.\scripts\check-prerequisites.ps1`
-- **macOS / Linux**：使用 `scripts/dev.sh`
-- **沙箱**：`docker build -t likecodex/sandbox:latest docker/sandbox`
-
----
-
-## 安装
+### 安装
 
 ```bash
 git clone https://github.com/JasonBuildAI/likecodex.git
 cd likecodex
-
 uv sync --all-packages --extra dev
 cd web && npm install --legacy-peer-deps && cd ..
 cargo build --workspace
-
-cp .env.example .env
-# 在 .env 中填入 DEEPSEEK_API_KEY
 ```
 
-创建用户配置 `~/.likecodex/config.toml`（见 [配置说明](#配置说明)）。
-
----
-
-## 快速开始
-
-### 1. 配置 LLM
-
-编辑 `~/.likecodex/config.toml`：
-
-```toml
-[llm]
-provider = "deepseek"
-model = "deepseek-v4-flash"
-api_key = "..."               # 或在 .env 中设置 DEEPSEEK_API_KEY
-base_url = "https://api.deepseek.com"
-
-[deepseek]
-thinking = false
-
-[approval]
-mode = "auto"
-
-[sandbox]
-enabled = true
-image = "likecodex/sandbox:latest"
-allow_fallback = true
-
-[server]
-host = "127.0.0.1"
-port = 8080
-engine_url = "http://127.0.0.1:9090"
-```
-
-### 2. 启动开发环境
+### 配置与运行
 
 ```bash
-# macOS / Linux
-./scripts/dev.sh
+likecodex setup                    # 交互式向导
+likecodex start --web              # 全栈启动
+likecodex doctor                   # 健康检查（含修复建议）
 
-# Windows PowerShell
-.\scripts\dev.ps1
-
-# 仅引擎 + 服务（不启动 Web）
-.\scripts\dev.ps1 -SkipWeb
+# 或纯终端：
+likecodex code
+likecodex "修复 src/ 里失败的测试"
 ```
 
-### 3. 运行第一个任务
-
-```bash
-cargo run -p likecodex-cli -- "创建一个打印 1 到 10 的 Python 脚本并运行"
-cargo run -p likecodex-cli -- --tui
-# 或在浏览器打开 http://localhost:3000
-```
-
----
-
-## 使用指南
-
-### CLI 与 TUI
-
-```bash
-cargo run -p likecodex-cli -- "重构登录模块"
-cargo run -p likecodex-cli -- run "修复失败的测试"
-cargo run -p likecodex-cli -- interactive
-cargo run -p likecodex-cli -- --tui
-cargo run -p likecodex-cli -- serve
-cargo run -p likecodex-cli -- config
-
-# 参数覆盖
-cargo run -p likecodex-cli -- --approval read-only "分析此仓库"
-cargo run -p likecodex-cli -- --engine-url http://127.0.0.1:9090 "提示词"
-```
-
-### Web 界面
-
-三栏布局：**会话与任务** | **流式聊天** | **文件 Diff**。
-
-功能：权限弹窗、实时 SSE、顶栏 cache hit %、会话历史。
-
-### HTTP API
-
-**Rust 服务（`:8080`）** — Web 与外部集成的主入口：
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/health` | 健康检查 |
-| GET | `/config` | 脱敏配置 |
-| POST | `/tasks` | 创建后台 Agent 任务 |
-| POST | `/chat` | 流式聊天（SSE） |
-| GET | `/events` | 全局 SSE 事件流 |
-| GET/POST | `/permissions/*` | 审批流程 |
-| POST | `/execute` | 沙箱命令 |
-| GET | `/sessions` | 会话列表 |
-
-**Python 引擎（`:9090`）** — CLI 直连或通过 Rust 桥接：
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/run` | 同步执行 |
-| POST | `/chat` | 流式 SSE |
-| POST | `/plan` | 仅生成计划 |
-| POST | `/tasks` | 后台任务 |
-| GET | `/metrics` | 缓存指标 |
-
-示例：
-
-```bash
-curl -X POST http://127.0.0.1:8080/tasks \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "列出项目中所有 Python 文件"}'
-
-curl -N http://127.0.0.1:8080/events
-```
-
-完整参考：[docs/API.md](docs/API.md)
-
----
-
-## 内置工具
-
-| 分类 | 工具 |
-|------|------|
-| 文件系统 | `read_file`、`write_file`、`list_dir`、`search_files`、`edit_file` |
-| Shell | `run_command`、后台任务相关 |
-| 搜索 | `grep_files`、`find_symbol`、`index_search`、LSP 工具 |
-| Git | `git_status`、`git_diff`、`git_log`、`git_branch`、`git_commit` |
-| 审查 | `review_file`、`review_diff`、`check_dependencies` |
-| Agent | `task`、`parallel_tasks`、`remember`/`forget`、`todo` |
-
-启用 MCP：设置 `LIKECODEX_ENABLE_MCP=true` 并在 `config.toml` 中配置 `[mcp.servers.*]`。
+Windows：先安装 MSVC Build Tools — `.\scripts\check-prerequisites.ps1`
 
 ---
 
 ## 配置说明
 
-配置合并优先级（后者覆盖前者）：代码默认值 → `~/.likecodex/config.toml` → 环境变量 → CLI 参数。
+**合并优先级**（低 → 高）：
 
-主要环境变量 — 见 [.env.example](.env.example)：
+```text
+默认值 → ~/.likecodex/config.toml → 祖先目录 likecodex.toml → 当前目录 likecodex.toml → 环境变量 → CLI 参数
+```
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `DEEPSEEK_API_KEY` | — | API Key |
-| `LIKECODEX_LLM_MODEL` | `deepseek-v4-flash` | 模型 |
-| `LIKECODEX_WORKING_DIR` | `.` | Agent 工作目录 |
-| `LIKECODEX_APPROVAL_MODE` | `auto` | 审批模式 |
-| `LIKECODEX_ENABLE_PLANNER` | `false` | 任务规划器 |
-| `LIKECODEX_SESSION_DB` | `.likecodex/sessions.db` | 会话数据库 |
+示例 `~/.likecodex/config.toml`：
+
+```toml
+[llm]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+api_key = "..."                    # 或 DEEPSEEK_API_KEY 环境变量
+base_url = "https://api.deepseek.com"
+
+[approval]
+mode = "auto"
+
+[agent]
+enable_planner = false
+token_mode = "full"                # 或 "economy"
+
+[mcp]
+enabled = false
+startup = "lazy"                   # 或 "eager"
+
+[server]
+port = 8080
+
+[sandbox]
+enabled = true
+image = "likecodex/sandbox:latest"
+allow_fallback = true
+```
+
+项目级覆盖：在仓库根目录创建 `./likecodex.toml`。
+
+详见 [docs/USAGE.md](docs/USAGE.md) 与 [.env.example](.env.example)。
 
 ---
 
-## 本地开发
+## 内置工具
 
-```bash
-cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
-uv run ruff check packages/likecodex-engine tests
-cd web && npm run lint && npm run type-check
-
-# 单独启动各服务
-uv run python -m likecodex_engine.server    # :9090
-cargo run -p likecodex-server                # :8080
-cd web && npm run dev                          # :3000
-```
-
-PR 规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
----
-
-## 测试
-
-```bash
-# Rust
-cargo test --workspace
-
-# Python（无 Rust 时可排除 integration）
-uv sync --all-packages --extra dev
-uv run pytest packages/likecodex-engine/tests tests -m "not integration" -v
-
-# 全栈 E2E（需 cargo build -p likecodex-server）
-uv run pytest tests/e2e/test_full_stack.py -m integration -v
-uv run python scripts/smoke_test.py
-
-# Web
-cd web && npm run test && npm run build
-
-# 基准
-uv run python benchmarks/cache/run.py --turns 10 --simulate-cache
-uv run python benchmarks/agent/run.py --check
-```
-
-每次 push 触发 CI — 见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+| 类别 | 工具 |
+|------|------|
+| 文件系统 | `read_file`、`write_file`、`edit_file`、`multi_edit`、`glob`、`ls`、`move_file` |
+| Shell | `run_command`、`bgjobs`、`bash_output`、`kill_shell`、`wait_job` |
+| 搜索 | `grep_files`、`codegraph_*`、`code_index`、LSP 工具 |
+| Git | `git_status`、`git_diff`、`git_log`、`git_branch`、`git_commit` |
+| 网络 | `web_search`、`web_fetch` |
+| Agent 元 | `task`、`parallel_tasks`、`run_skill`、`todo_write`、`complete_step` |
+| 记忆 | `remember`、`forget`、`memory_search`、`history` |
+| 经济模式 | `connect_tool_source`（`token_mode = "economy"` 时） |
+| MCP | `mcp__<server>__<tool>`（配置后） |
 
 ---
 
@@ -594,20 +493,26 @@ uv run python benchmarks/agent/run.py --check
 
 ```text
 likecodex/
-├── crates/                    # Rust 工作区
-│   ├── likecodex-core/        # 共享类型、配置、事件
-│   ├── likecodex-cli/         # CLI + TUI
-│   ├── likecodex-server/      # HTTP/SSE 桥接
-│   ├── likecodex-executor/    # 本地执行
-│   ├── likecodex-sandbox/     # Docker 沙箱
-│   └── likecodex-indexer/     # 文件/代码搜索
-├── packages/likecodex-engine/ # Python Agent 核心
-├── web/                       # Next.js 前端
-├── tests/                     # 集成与安全测试
-├── scripts/                   # dev.sh、dev.ps1、smoke_test.py
-├── benchmarks/                # 缓存与 Agent 回归门
-├── docs/                      # 架构、API、事件、缓存规范
-└── docker/                    # 沙箱与服务镜像
+├── crates/                      # Rust 工作区
+│   ├── likecodex-core/          # 配置、事件、共享类型
+│   ├── likecodex-cli/           # CLI、TUI、start/setup/doctor
+│   ├── likecodex-server/        # HTTP/SSE 控制平面
+│   ├── likecodex-executor/      # 本地命令执行
+│   ├── likecodex-sandbox/       # Docker 沙箱
+│   └── likecodex-indexer/       # 文件 + CodeGraph 索引
+├── packages/likecodex-engine/   # Python Agent 引擎
+│   └── likecodex_engine/
+│       ├── agent/               # 循环、guard、规划器、协调器
+│       ├── tools/               # 工具注册表 + 内置工具
+│       ├── context/             # 缓存优先上下文 + 压缩
+│       ├── llm/                 # DeepSeek 提供商 + 流式
+│       ├── mcp/                 # MCP 客户端 + 加载器
+│       └── skills/              # Skill 发现 + 内置包
+├── web/                         # Next.js 三栏 UI
+├── docs/                        # 架构、API、事件、缓存规范
+├── tests/                       # 集成 + E2E
+├── benchmarks/                  # 缓存 + Agent 回归门禁
+└── scripts/                     # dev.sh、dev.ps1、install、smoke_test
 ```
 
 ---
@@ -616,31 +521,20 @@ likecodex/
 
 | 文档 | 说明 |
 |------|------|
-| [README.md](README.md) | 英文文档 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构详解 |
+| [README.md](README.md) | English documentation |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构参考 |
 | [docs/SPEC-CACHE.md](docs/SPEC-CACHE.md) | 缓存优先上下文规范 |
+| [docs/SPEC-AGENT.md](docs/SPEC-AGENT.md) | Agent harness 规范 |
 | [docs/API.md](docs/API.md) | HTTP API 参考 |
-| [docs/EVENTS.md](docs/EVENTS.md) | SSE 事件格式 |
+| [docs/EVENTS.md](docs/EVENTS.md) | SSE 事件 schema |
 | [docs/USAGE.md](docs/USAGE.md) | 详细使用指南 |
-| [docs/PARITY-CHECKLIST.md](docs/PARITY-CHECKLIST.md) | 能力 ↔ 测试映射 |
+| [docs/PARITY-CHECKLIST.md](docs/PARITY-CHECKLIST.md) | 功能 ↔ 测试对照 |
 | [SECURITY.md](SECURITY.md) | 安全策略 |
 
 ---
 
-## 路线图
+## 许可证
 
-- [ ] 在 `likecodex-indexer` 中集成 Tree-sitter 符号索引
-- [ ] MCP SSE/WebSocket 传输
-- [ ] 生产部署指南（Docker Compose、Kubernetes）
-- [ ] 自定义工具插件市场
-- [ ] 更多 LLM 提供商（Azure OpenAI、本地 Ollama）
-
----
-
-## 贡献与许可证
-
-欢迎提交 Issue 和 Pull Request！请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
-
-本项目采用 [MIT License](LICENSE) 开源。
+MIT — 见 [LICENSE](LICENSE)。
 
 灵感来自 OpenAI Codex 及更广泛的 Agent 编程生态。
