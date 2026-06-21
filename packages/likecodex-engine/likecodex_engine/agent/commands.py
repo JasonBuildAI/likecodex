@@ -217,6 +217,14 @@ def generate_project_memory(working_dir: str | Path) -> Path:
 - Build/test commands:
 - Code style:
 - Things to avoid:
+
+## LikeCodex host checks
+
+> Commands listed here are treated as final-readiness gates: the agent must
+> run each verification command successfully before it may stop with a final
+> answer. Use `verify:` prefix for each bullet.
+
+- verify: echo "add your verification commands here"
 """
     target.write_text(content, encoding="utf-8")
     return target

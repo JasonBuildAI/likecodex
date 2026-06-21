@@ -27,8 +27,11 @@ SUMMARY_SYSTEM = """You are compacting a coding agent conversation. Write under 
 Be terse. Preserve paths and identifiers exactly."""
 
 DEFAULT_COMPACT_RATIO = 0.8
+DEFAULT_SOFT_COMPACT_RATIO = 0.5
+DEFAULT_COMPACT_FORCE_RATIO = 0.9
 DEFAULT_CONTEXT_WINDOW = 1_000_000
 MAX_PINNED_USER_CHARS = 6000
+MAX_CONSECUTIVE_NOOP_COMPACTS = 3
 
 
 class ContextCompactor:
@@ -63,16 +66,60 @@ class CacheFirstCompactor:
         max_messages: int = 200,
         context_window: int = DEFAULT_CONTEXT_WINDOW,
         compact_ratio: float = DEFAULT_COMPACT_RATIO,
+        soft_compact_ratio: float = DEFAULT_SOFT_COMPACT_RATIO,
+        compact_force_ratio: float = DEFAULT_COMPACT_FORCE_RATIO,
         working_dir: str = ".",
     ) -> None:
         self.max_messages = max_messages
         self.context_window = context_window
         self.compact_ratio = compact_ratio
+        self.soft_compact_ratio = soft_compact_ratio
+        self.compact_force_ratio = compact_force_ratio
         self.working_dir = Path(working_dir)
+        self._consecutive_noop_compacts = 0
+        self._last_log_size = 0
 
     def should_compact(self, prompt_tokens: int) -> bool:
         threshold = int(self.context_window * self.compact_ratio)
         return prompt_tokens >= threshold
+
+    def should_soft_compact(self, prompt_tokens: int) -> bool:
+        """Return True when we should emit a soft notice (below hard threshold)."""
+        threshold = int(self.context_window * self.soft_compact_ratio)
+        return prompt_tokens >= threshold
+
+    def should_force_compact(self, prompt_tokens: int) -> bool:
+        """Return True when we must compact regardless of fold-economics."""
+        threshold = int(self.context_window * self.compact_force_ratio)
+        return prompt_tokens >= threshold
+
+    def fold_economics(self, foldable: list[Message]) -> bool:
+        """Skip compaction when folding would not reduce context meaningfully.
+
+        Reasonix foldEconomics: if foldable is small relative to the total log,
+        or if the summary would be nearly as large as the foldable content,
+        skip the LLM call and archive-only pass.
+        """
+        if not foldable:
+            return False
+        total_chars = sum(len(m.content) for m in foldable)
+        # If foldable is less than 500 chars, not worth the LLM call
+        if total_chars < 500:
+            return False
+        # If foldable is less than 10% of the total log, skip
+        if self._last_log_size > 0:
+            ratio = total_chars / self._last_log_size
+            if ratio < 0.1:
+                return False
+        return True
+
+    def compact_stuck(self) -> bool:
+        """Detect consecutive compactions that produce no reduction.
+
+        Reasonix compactStuck: if we've compacted N times in a row without
+        meaningful reduction, pause compaction to avoid a dead loop.
+        """
+        return self._consecutive_noop_compacts >= MAX_CONSECUTIVE_NOOP_COMPACTS
 
     def summarize_log(self, log: list[Message]) -> str:
         """Rule-based fallback summary."""

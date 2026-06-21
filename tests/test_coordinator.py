@@ -60,7 +60,7 @@ async def test_coordinator_runs_planner_then_executor(tmp_path: Path) -> None:
         context,
         permission_evaluator=PermissionEvaluator(ApprovalMode.FULL_ACCESS),
     )
-    coordinator = Coordinator(executor, planner_llm, planner_max_steps=5)
+    coordinator = Coordinator(executor, planner_llm, planner_max_steps=5, auto_plan="on")
     events: list[str] = []
     async for resp in coordinator.run("implement feature"):
         events.append(resp.event_type or "")
@@ -99,7 +99,7 @@ async def test_coordinator_planner_can_use_readonly_tools(tmp_path: Path) -> Non
         context,
         permission_evaluator=PermissionEvaluator(ApprovalMode.FULL_ACCESS),
     )
-    coordinator = Coordinator(executor, planner_llm, planner_max_steps=5)
+    coordinator = Coordinator(executor, planner_llm, planner_max_steps=5, auto_plan="on")
     async for _ in coordinator.run("review main.py"):
         pass
     assert any("read_file" in str(call) for call in planner_llm.calls)

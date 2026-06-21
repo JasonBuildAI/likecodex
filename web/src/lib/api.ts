@@ -42,6 +42,7 @@ export function parseRustEvent(data: RustEvent): {
   planModeActive?: boolean;
   planModePendingExit?: boolean;
   askRequest?: AskRequest;
+  reasoningContent?: string;
 } {
   const payload = data.payload || {};
   const taskId = payload.task_id as string | undefined;
@@ -198,6 +199,12 @@ export function parseRustEvent(data: RustEvent): {
         kind: 'ask_responded',
         taskId,
         content: String(payload.request_id || ''),
+      };
+    case 'reasoning_delta':
+      return {
+        kind: 'reasoning_delta',
+        taskId,
+        reasoningContent: String(payload.content || ''),
       };
     case 'error':
       return {
@@ -400,6 +407,11 @@ function applyParsedEvent(
         eventType: 'error',
         timestamp: Date.now(),
       });
+      break;
+    case 'reasoning_delta':
+      if (parsed.reasoningContent) {
+        handlers.onReasoningDelta?.(parsed.reasoningContent);
+      }
       break;
     default:
       break;
@@ -605,6 +617,7 @@ export type EventHandler = {
   onUpsertToolDispatch?: (call: ToolCall, partial: boolean) => void;
   onDiff?: (before: string, after: string) => void;
   onError?: (error: Error) => void;
+  onReasoningDelta?: (content: string) => void;
 };
 
 export function subscribeEvents(handlers: EventHandler): () => void {

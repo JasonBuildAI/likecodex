@@ -70,7 +70,7 @@ class AgentLoop:
         llm: LLMProvider,
         tools: ToolRegistry,
         context: ContextManager,
-        max_iterations: int = 50,
+        max_iterations: int = 0,
         planner: Planner | None = None,
         permission_evaluator: PermissionEvaluator | None = None,
         sandbox_executor_url: str | None = None,
@@ -139,6 +139,11 @@ class AgentLoop:
             if memories:
                 snippet = "\n".join(f"- {m.get('text', '')}" for m in memories)
                 self.context.add_context_block(f"Relevant memory:\n{snippet}")
+
+        # Inject reasoning_language transient block (not part of immutable prefix)
+        reasoning_language = getattr(self, "_reasoning_language", "")
+        if reasoning_language:
+            self.context.add_context_block(f"<reasoning-language>{reasoning_language}</reasoning-language>")
 
         self.context.add_user_message(prompt)
 
@@ -259,7 +264,12 @@ class AgentLoop:
         last_prefix_shape: PrefixShape | None = None
         have_last_prefix_shape = False
 
-        for _iteration in range(self.max_iterations):
+        iteration = 0
+        hit_max_iterations = False
+        while True:
+            if self.max_iterations > 0 and iteration >= self.max_iterations:
+                hit_max_iterations = True
+                break
             messages = self.context.get_messages()
             cur_prefix_shape = self._capture_prefix_shape(tool_schemas)
             response: LLMResponse | None = None
@@ -326,12 +336,37 @@ class AgentLoop:
             have_last_prefix_shape = True
             if hasattr(self.context, "record_prompt_tokens"):
                 self.context.record_prompt_tokens(response.usage)
-                if hasattr(self.context, "compact_async") and self.context.compactor.should_compact(
-                    getattr(self.context, "last_prompt_tokens", 0)
-                ):
+                
+                # Three-tier compaction strategy (Reasonix parity):
+                # 1. soft_compact_ratio (0.5) -> one-time notice
+                # 2. compact_ratio (0.8) -> normal compaction
+                # 3. compact_force_ratio (0.9) -> forced compaction
+                
+                prompt_tokens = getattr(self.context, "last_prompt_tokens", 0)
+                compactor = self.context.compactor
+                
+                # Tier 3: Force compact (highest priority)
+                if hasattr(self.context, "compact_async") and compactor.should_force_compact(prompt_tokens):
                     yield self._emit(
                         LLMResponse(
-                            content=json.dumps({"trigger": "auto"}),
+                            content=json.dumps({"trigger": "force", "prompt_tokens": prompt_tokens}),
+                            model="system",
+                            event_type="compaction_started",
+                        )
+                    )
+                    info = await self.context.compact_async(force=True)
+                    yield self._emit(
+                        LLMResponse(
+                            content=json.dumps(info),
+                            model="system",
+                            event_type="compaction_done",
+                        )
+                    )
+                # Tier 2: Normal compact
+                elif hasattr(self.context, "compact_async") and compactor.should_compact(prompt_tokens):
+                    yield self._emit(
+                        LLMResponse(
+                            content=json.dumps({"trigger": "auto", "prompt_tokens": prompt_tokens}),
                             model="system",
                             event_type="compaction_started",
                         )
@@ -344,6 +379,21 @@ class AgentLoop:
                             event_type="compaction_done",
                         )
                     )
+                # Tier 1: Soft compact notice (one-time)
+                elif hasattr(self.context, "_soft_notice_emitted") and compactor.should_soft_compact(prompt_tokens):
+                    if not self.context._soft_notice_emitted:
+                        self.context._soft_notice_emitted = True
+                        notice = (
+                            f"[soft-compact] Context usage at {prompt_tokens:,} tokens. "
+                            f"Consider wrapping up or the system will auto-compact soon."
+                        )
+                        yield self._emit(
+                            LLMResponse(
+                                content=notice,
+                                model="system",
+                                event_type="notice",
+                            )
+                        )
 
             raw_tool_calls: str | None = None
             tool_call_payload: list[dict[str, Any]] | None = None
@@ -365,6 +415,7 @@ class AgentLoop:
                 content=response.content,
                 tool_calls=tool_call_payload,
                 raw_tool_calls=raw_tool_calls,
+                reasoning_content=getattr(response, "reasoning_content", None),
             )
 
             yield self._emit(
@@ -470,7 +521,8 @@ class AgentLoop:
                 self.context.update_tool_result(tool_call_id, new_output)
                 self._turn_outcomes[0].output = new_output
                 yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
-        else:
+            iteration += 1
+        if hit_max_iterations:
             yield self._emit(
                 LLMResponse(
                     content="Maximum number of iterations reached. Stopping to avoid infinite loop.",

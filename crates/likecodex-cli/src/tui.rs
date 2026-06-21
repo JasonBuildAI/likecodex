@@ -87,6 +87,9 @@ enum EngineEvent {
     Notice {
         content: String,
     },
+    Reasoning {
+        content: String,
+    },
     Error {
         content: String,
     },
@@ -266,6 +269,9 @@ impl App {
             }
             EngineEvent::Ask { content } => self.push_system(format!("[ask] {content}")),
             EngineEvent::Notice { content } => self.push_system(content),
+            EngineEvent::Reasoning { content } => {
+                self.push_system(format!("[reasoning] {content}"))
+            }
             EngineEvent::Error { content } => self.push_system(format!("[error] {content}")),
             EngineEvent::CacheStats {
                 hit_rate,
@@ -621,6 +627,7 @@ async fn stream_engine_events(
                 }
                 "notice" => EngineEvent::Notice { content },
                 "usage" => EngineEvent::Notice { content },
+                "reasoning" => EngineEvent::Reasoning { content },
                 "compaction_started" => {
                     let trigger = serde_json::from_str::<serde_json::Value>(&content)
                         .ok()

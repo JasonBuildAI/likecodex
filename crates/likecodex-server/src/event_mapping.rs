@@ -310,6 +310,10 @@ pub fn map_engine_output(task_id: &str, output: &Value) -> Event {
                     .unwrap_or_else(|| serde_json::json!([])),
             }
         }
+        "reasoning" => Event::ReasoningDelta {
+            task_id: task_id.to_string(),
+            content,
+        },
         "error" => Event::Error {
             task_id: Some(task_id.to_string()),
             message: content,

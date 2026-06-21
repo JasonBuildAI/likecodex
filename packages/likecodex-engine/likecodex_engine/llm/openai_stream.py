@@ -37,6 +37,7 @@ async def stream_openai_chat(
 ) -> AsyncIterator[LLMResponse]:
     """Aggregate OpenAI-style stream chunks into delta/dispatch/assistant events."""
     content_parts: list[str] = []
+    reasoning_parts: list[str] = []
     pending_tools: dict[int, dict[str, Any]] = {}
     dispatched: set[int] = set()
     usage: dict[str, Any] | None = None
@@ -53,6 +54,16 @@ async def stream_openai_chat(
             if getattr(choice, "finish_reason", None):
                 finish_reason = choice.finish_reason
             delta = choice.delta
+            # Reasoning delta (DeepSeek thinking mode)
+            reasoning_delta = getattr(delta, "reasoning_content", None)
+            if reasoning_delta:
+                emitted = True
+                reasoning_parts.append(reasoning_delta)
+                yield LLMResponse(
+                    content=reasoning_delta,
+                    model=getattr(chunk, "model", None) or model,
+                    event_type="reasoning",
+                )
             if delta.content:
                 emitted = True
                 content_parts.append(delta.content)
@@ -105,6 +116,7 @@ async def stream_openai_chat(
         )
 
     final_content = "".join(content_parts)
+    final_reasoning = "".join(reasoning_parts)
     if final_content or tool_calls:
         merged_usage = dict(usage or {})
         if finish_reason:
@@ -115,6 +127,7 @@ async def stream_openai_chat(
             model=model,
             usage=merged_usage or None,
             event_type="assistant",
+            reasoning_content=final_reasoning or None,
         )
 
 

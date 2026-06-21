@@ -98,10 +98,18 @@ def engine_config_from_env(cwd: Path | None = None) -> dict[str, Any]:
         or llm.get("base_url", "https://api.deepseek.com"),
         "deepseek_thinking": os.environ.get("LIKECODEX_DEEPSEEK_THINKING")
         or str(deepseek.get("thinking", False)).lower(),
+        "reasoning_effort": os.environ.get("LIKECODEX_REASONING_EFFORT")
+        or deepseek.get("reasoning_effort", ""),
+        "reasoning_language": os.environ.get("LIKECODEX_REASONING_LANGUAGE")
+        or deepseek.get("reasoning_language", ""),
         "working_dir": working_dir,
         "approval_mode": os.environ.get("LIKECODEX_APPROVAL_MODE") or approval.get("mode", "auto"),
         "enable_planner": os.environ.get("LIKECODEX_ENABLE_PLANNER")
         or str(agent.get("enable_planner", False)).lower(),
+        "auto_plan": os.environ.get("LIKECODEX_AUTO_PLAN")
+        or str(agent.get("auto_plan", "off")).lower(),
+        "auto_plan_classifier": os.environ.get("LIKECODEX_AUTO_PLAN_CLASSIFIER")
+        or agent.get("auto_plan_classifier", ""),
         "enable_mcp": enable_mcp,
         "mcp_startup": mcp.get("startup", "lazy"),
         "mcp_servers": mcp_servers,
@@ -112,6 +120,11 @@ def engine_config_from_env(cwd: Path | None = None) -> dict[str, Any]:
         or agent.get("planner_model", "deepseek-v4-pro"),
         "compact_ratio": os.environ.get("LIKECODEX_COMPACT_RATIO")
         or str(agent.get("compact_ratio", 0.8)),
+        "soft_compact_ratio": os.environ.get("LIKECODEX_SOFT_COMPACT_RATIO")
+        or str(agent.get("soft_compact_ratio", 0.5)),
+        "compact_force_ratio": os.environ.get("LIKECODEX_COMPACT_FORCE_RATIO")
+        or str(agent.get("compact_force_ratio", 0.9)),
+        "max_steps": int(agent.get("max_steps", 0)),
         "goal_max_continuations": int(
             os.environ.get("LIKECODEX_GOAL_MAX_CONTINUATIONS")
             or agent.get("goal_max_continuations", 20)

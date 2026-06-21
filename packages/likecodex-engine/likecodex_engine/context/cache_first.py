@@ -19,6 +19,8 @@ from likecodex_engine.llm.tool_repair import sanitize_tool_pairing
 PLAN_PREFIX = "[Plan]\n"
 DEFAULT_CONTEXT_WINDOW = 1_000_000
 DEFAULT_COMPACT_RATIO = 0.8
+DEFAULT_SOFT_COMPACT_RATIO = 0.5
+DEFAULT_COMPACT_FORCE_RATIO = 0.9
 
 
 def _default_system_prompt() -> str:
@@ -72,6 +74,8 @@ class CacheFirstContext:
         max_messages: int = 200,
         context_window: int = DEFAULT_CONTEXT_WINDOW,
         compact_ratio: float = DEFAULT_COMPACT_RATIO,
+        soft_compact_ratio: float = DEFAULT_SOFT_COMPACT_RATIO,
+        compact_force_ratio: float = DEFAULT_COMPACT_FORCE_RATIO,
         messages: list[Message] | None = None,
     ) -> None:
         self.prefix = ImmutablePrefix(
@@ -83,12 +87,15 @@ class CacheFirstContext:
             max_messages=max_messages,
             context_window=context_window,
             compact_ratio=compact_ratio,
+            soft_compact_ratio=soft_compact_ratio,
+            compact_force_ratio=compact_force_ratio,
             working_dir=".",
         )
         self._compact_llm = None
         self.last_prompt_tokens = 0
         self.cache_reset_count = 0
         self.rewrite_version = 0
+        self._soft_notice_emitted = False
 
         if messages is not None:
             self._log: list[Message] = list(messages)
@@ -134,6 +141,7 @@ class CacheFirstContext:
         content: str,
         tool_calls: list[dict[str, Any]] | None = None,
         raw_tool_calls: str | None = None,
+        reasoning_content: str | None = None,
     ) -> None:
         serialized = raw_tool_calls
         if tool_calls is not None and serialized is None:
@@ -144,6 +152,7 @@ class CacheFirstContext:
                 content=content,
                 tool_calls=tool_calls,
                 raw_tool_calls=serialized,
+                reasoning_content=reasoning_content,
             )
         )
 
@@ -177,40 +186,121 @@ class CacheFirstContext:
         instructions: str = "",
         force: bool = False,
     ) -> dict[str, Any]:
-        """LLM compaction with archive."""
-        del force  # reserved for fold-economics skip (manual /compact always compacts)
+        """LLM compaction with archive and advanced strategies.
+        
+        Args:
+            instructions: Optional focus instructions for LLM summary
+            force: If True, bypass fold_economics (used by /compact command and force-ratio)
+        """
+        # Prune stale tool results first
         self._log, prune_stats = prune_stale_tool_results(self._log)
+        
+        # Check if compactor is stuck (consecutive no-op compacts)
+        if self.compactor.compact_stuck():
+            return {
+                "compacted": False,
+                "reason": "compact_stuck",
+                "message": "Compaction paused: consecutive compactions produced no meaningful reduction",
+            }
+        
+        # Split into pinned vs foldable
         pinned, foldable = self.compactor.split_compactable(self._log)
         if not foldable:
             return {"compacted": False, "reason": "nothing_to_fold"}
+        
+        # Apply fold economics (skip if foldable is too small) unless forced
+        if not force and not self.compactor.fold_economics(foldable):
+            return {
+                "compacted": False,
+                "reason": "fold_economics_skip",
+                "message": "Foldable content too small to justify compaction overhead",
+            }
+        
+        # Track log size before compaction for economics calculation
+        total_foldable_chars = sum(len(m.content) for m in foldable)
+        self.compactor._last_log_size = total_foldable_chars
+        
+        # Archive foldable messages
         archive_path = self.compactor.archive_messages(foldable)
+        
+        # Attempt LLM summary with fallback to mechanical summary
+        summary: str
         if self._compact_llm is not None:
-            summary = await self.compactor.llm_summarize(
-                foldable,
-                self._compact_llm,
-                instructions=instructions,
-            )
+            try:
+                summary = await self.compactor.llm_summarize(
+                    foldable,
+                    self._compact_llm,
+                    instructions=instructions,
+                )
+            except Exception:
+                # LLM summary failed, fall back to mechanical summary (Reasonix behavior)
+                summary = self.compactor.summarize_log(foldable)
         else:
             summary = self.compactor.summarize_log(foldable)
-        self._log = [*pinned, Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
+        
+        # Rebuild log with pinned + summary
+        new_log = [*pinned, Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
+        
+        # Check if compaction actually reduced size
+        old_size = sum(len(m.content) for m in self._log)
+        new_size = sum(len(m.content) for m in new_log)
+        
+        if new_size >= old_size * 0.95:
+            # Compaction produced minimal reduction (<5% savings)
+            self.compactor._consecutive_noop_compacts += 1
+        else:
+            # Successful compaction, reset counter
+            self.compactor._consecutive_noop_compacts = 0
+        
+        self._log = new_log
         self.cache_reset_count += 1
         self.rewrite_version += 1
+        
         return {
             "compacted": True,
             "archive": str(archive_path) if archive_path else None,
             "cache_reset_count": self.cache_reset_count,
             "pruned_results": prune_stats.results,
             "pruned_chars": prune_stats.saved_chars,
+            "consecutive_noop_compacts": self.compactor._consecutive_noop_compacts,
         }
 
     def _compact_sync(self) -> None:
+        """Synchronous compaction triggered by should_compact threshold."""
+        # Check if compactor is stuck
+        if self.compactor.compact_stuck():
+            return
+        
         self._log, _ = prune_stale_tool_results(self._log)
         pinned, foldable = self.compactor.split_compactable(self._log)
         if not foldable:
             return
+        
+        # Apply fold economics for sync compaction
+        if not self.compactor.fold_economics(foldable):
+            return
+        
+        # Track log size
+        total_foldable_chars = sum(len(m.content) for m in foldable)
+        self.compactor._last_log_size = total_foldable_chars
+        
+        # Archive and summarize
         self.compactor.archive_messages(foldable)
         summary = self.compactor.summarize_log(foldable)
-        self._log = [*pinned, Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
+        
+        # Rebuild log
+        new_log = [*pinned, Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
+        
+        # Check reduction
+        old_size = sum(len(m.content) for m in self._log)
+        new_size = sum(len(m.content) for m in new_log)
+        
+        if new_size >= old_size * 0.95:
+            self.compactor._consecutive_noop_compacts += 1
+        else:
+            self.compactor._consecutive_noop_compacts = 0
+        
+        self._log = new_log
         self.cache_reset_count += 1
         self.rewrite_version += 1
 

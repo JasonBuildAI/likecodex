@@ -24,6 +24,7 @@ class Message(BaseModel):
     tool_call_id: str | None = None
     name: str | None = None
     raw_tool_calls: str | None = None
+    reasoning_content: str | None = None
 
 
 class ToolCall(BaseModel):
@@ -37,8 +38,9 @@ class LLMResponse(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     model: str = ""
     usage: dict[str, Any] | None = None
-    event_type: str = "assistant"  # assistant | tool_result | permission | error | plan
+    event_type: str = "assistant"  # assistant | tool_result | permission | error | plan | reasoning
     metadata: dict[str, Any] | None = None
+    reasoning_content: str | None = None
 
 
 class LLMProvider(ABC):

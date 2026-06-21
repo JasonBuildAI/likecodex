@@ -45,7 +45,6 @@ model = "deepseek-v4-flash"
 mode = "auto"
 
 [agent]
-max_steps = 50
 planner_model = "deepseek-v4-pro"
 executor_model = "deepseek-v4-flash"
 compact_ratio = 0.8

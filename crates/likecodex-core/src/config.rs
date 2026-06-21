@@ -165,11 +165,19 @@ impl LlmConfig {
 pub struct DeepSeekConfig {
     #[serde(default = "default_false")]
     pub thinking: bool,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub reasoning_language: Option<String>,
 }
 
 impl Default for DeepSeekConfig {
     fn default() -> Self {
-        Self { thinking: false }
+        Self {
+            thinking: false,
+            reasoning_effort: None,
+            reasoning_language: None,
+        }
     }
 }
 
@@ -323,8 +331,16 @@ pub struct AgentConfig {
     pub compact_ratio: f32,
     #[serde(default = "default_false")]
     pub enable_planner: bool,
+    #[serde(default = "default_auto_plan")]
+    pub auto_plan: String,
+    #[serde(default)]
+    pub auto_plan_classifier: Option<String>,
     #[serde(default = "default_token_mode")]
     pub token_mode: String,
+}
+
+fn default_auto_plan() -> String {
+    "off".to_string()
 }
 
 fn default_token_mode() -> String {
@@ -340,13 +356,15 @@ impl Default for AgentConfig {
             planner_max_steps: default_planner_max_steps(),
             compact_ratio: default_compact_ratio(),
             enable_planner: false,
+            auto_plan: default_auto_plan(),
+            auto_plan_classifier: None,
             token_mode: default_token_mode(),
         }
     }
 }
 
 fn default_max_steps() -> u32 {
-    50
+    0
 }
 
 fn default_planner_max_steps() -> u32 {

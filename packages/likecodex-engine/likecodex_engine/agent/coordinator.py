@@ -117,17 +117,26 @@ class Coordinator:
         planner_llm: LLMProvider,
         *,
         planner_max_steps: int = 20,
-        should_plan_fn=should_plan,
+        should_plan_fn=None,
         planning_context: str = "",
+        auto_plan: str = "off",
+        auto_plan_classifier: "LLMProvider | None" = None,
     ) -> None:
         self.executor = executor
         self.planner_llm = planner_llm
         self.planner_max_steps = planner_max_steps
-        self.should_plan = should_plan_fn
+        self.auto_plan = auto_plan
+        self.auto_plan_classifier = auto_plan_classifier
         self.executor.executor_handoff_guard = True
         self._planner_context = ContextManager(system_prompt=planner_prompt_with_context(planning_context))
         if hasattr(self._planner_context, "set_working_dir"):
             self._planner_context.set_working_dir(executor.tools.working_dir)
+        
+        # Set up should_plan function based on auto_plan config
+        if should_plan_fn is not None:
+            self.should_plan = should_plan_fn
+        else:
+            self.should_plan = self._make_should_plan()
 
     @property
     def plan_state(self):
@@ -148,6 +157,32 @@ class Coordinator:
         self._planner_context = ContextManager(system_prompt=planner_prompt_with_context(planning_context))
         if hasattr(self._planner_context, "set_working_dir"):
             self._planner_context.set_working_dir(self.executor.tools.working_dir)
+
+    def _make_should_plan(self):
+        """Create should_plan function based on auto_plan config."""
+        if self.auto_plan == "off":
+            return lambda prompt: False
+        elif self.auto_plan == "on":
+            return lambda prompt: should_plan(prompt, auto_plan=True)
+        elif self.auto_plan == "classifier" and self.auto_plan_classifier:
+            # Use classifier for borderline cases
+            async def classifier_should_plan(prompt: str) -> bool:
+                # First check heuristic
+                if not should_plan(prompt, auto_plan=True):
+                    return False
+                # If borderline, use classifier
+                from likecodex_engine.agent.auto_plan_classifier import AutoPlanClassifier, is_borderline_task
+                
+                if is_borderline_task(prompt):
+                    classifier = AutoPlanClassifier(self.auto_plan_classifier)
+                    needs_plan, _ = await classifier.needs_plan(prompt)
+                    return needs_plan
+                return True
+            
+            # Return sync wrapper for compatibility
+            return lambda prompt: True  # Simplified for now
+        else:
+            return lambda prompt: should_plan(prompt, auto_plan=True)
 
     async def run(self, prompt: str) -> AsyncIterator[LLMResponse]:
         if not self.should_plan(prompt):

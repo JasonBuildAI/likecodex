@@ -79,6 +79,10 @@ pub enum Event {
         request_id: String,
         answers: serde_json::Value,
     },
+    ReasoningDelta {
+        task_id: String,
+        content: String,
+    },
     Error {
         task_id: Option<String>,
         message: String,

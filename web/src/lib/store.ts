@@ -7,6 +7,7 @@ export interface Message {
   toolCalls?: ToolCall[];
   eventType?: string;
   timestamp: number;
+  reasoningContent?: string;
 }
 
 export interface ToolCall {
@@ -68,6 +69,7 @@ interface AppState {
   planModeActive: boolean;
   planModePendingExit: boolean;
   collaborationMode: 'normal' | 'plan' | 'goal';
+  reasoningContent: string;
   setCacheHitRate: (rate: number | null) => void;
   addMessage: (message: Message) => void;
   appendToLastMessage: (content: string) => void;
@@ -90,6 +92,8 @@ interface AppState {
   clearMessages: () => void;
   setCurrentSessionId: (id: string | null) => void;
   setMessages: (messages: Message[]) => void;
+  appendReasoningContent: (content: string) => void;
+  flushReasoningToLastMessage: () => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -108,6 +112,7 @@ export const useAppStore = create<AppState>((set) => ({
   planModeActive: false,
   planModePendingExit: false,
   collaborationMode: 'normal',
+  reasoningContent: '',
   addMessage: (message) =>
     set((state) => ({ messages: [...state.messages, message] })),
   appendToLastMessage: (content) =>
@@ -125,6 +130,18 @@ export const useAppStore = create<AppState>((set) => ({
         });
       }
       return { messages };
+    }),
+  appendReasoningContent: (content) =>
+    set((state) => ({ reasoningContent: state.reasoningContent + content })),
+  flushReasoningToLastMessage: () =>
+    set((state) => {
+      if (!state.reasoningContent) return state;
+      const messages = [...state.messages];
+      const last = messages[messages.length - 1];
+      if (last && last.role === 'assistant') {
+        last.reasoningContent = (last.reasoningContent || '') + state.reasoningContent;
+      }
+      return { messages, reasoningContent: '' };
     }),
   upsertToolDispatch: (call, partial) =>
     set((state) => {

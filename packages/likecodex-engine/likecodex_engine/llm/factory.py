@@ -15,6 +15,7 @@ def create_provider(
     base_url: str | None = None,
     *,
     thinking: bool = False,
+    reasoning_effort: str = "",
 ) -> LLMProvider:
     """Create an LLM provider by name."""
     provider_norm = provider.lower()
@@ -24,6 +25,7 @@ def create_provider(
             api_key=api_key,
             base_url=base_url,
             thinking=thinking,
+            reasoning_effort=reasoning_effort,
         )
     if provider_norm in {"openai", "azure"}:
         return OpenAIProvider(model=model, api_key=api_key, base_url=base_url)
