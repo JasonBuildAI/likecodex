@@ -189,3 +189,9 @@ class SessionStore:
         manager = ContextManager()
         manager._log = restored
         return manager
+
+    def delete_session(self, session_id: str) -> None:
+        """Delete a session and all its events."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))

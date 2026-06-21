@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from likecodex_engine.permissions.bash_readonly import classify_bash
 from likecodex_engine.permissions.classifier import RiskClassifier, RiskLevel
 from likecodex_engine.permissions.policy import Decision, Policy
 
@@ -33,6 +34,10 @@ class PermissionDecision:
     allowed: bool
     execution_mode: ExecutionMode
     reason: str
+    # Additional metadata for the decision
+    warnings: list[str] = field(default_factory=list)
+    is_readonly: bool = False
+    is_dangerous: bool = False
 
 
 MEMORY_TOOLS = frozenset({"remember", "forget"})
@@ -56,6 +61,23 @@ class PermissionEvaluator:
         read_only = tool_name in RiskClassifier.READ_ONLY_TOOLS or tool_name.startswith("lsp_")
         read_only = read_only or tool_name in {"history", "memory_search", "memory", "code_index", "ask"}
 
+        # Bash readonly detection: refine read_only for run_command
+        bash_classification = None
+        if tool_name == "run_command":
+            cmd = str(arguments.get("command", ""))
+            if cmd:
+                bash_classification = classify_bash(cmd)
+                if bash_classification.is_readonly:
+                    read_only = True
+                if bash_classification.is_dangerous:
+                    return PermissionDecision(
+                        False,
+                        ExecutionMode.DENY,
+                        f"Dangerous command detected: {'; '.join(bash_classification.warnings)}",
+                        warnings=bash_classification.warnings,
+                        is_dangerous=True,
+                    )
+
         if tool_name in MEMORY_TOOLS:
             return PermissionDecision(True, ExecutionMode.PROMPT, "memory tools always require approval")
 
@@ -70,7 +92,7 @@ class PermissionEvaluator:
 
         if self.mode == ApprovalMode.READ_ONLY:
             if read_only:
-                return PermissionDecision(True, ExecutionMode.LOCAL, "read-only mode allows reads")
+                return PermissionDecision(True, ExecutionMode.LOCAL, "read-only mode allows reads", is_readonly=True)
             return PermissionDecision(False, ExecutionMode.DENY, "read-only mode denies writes")
 
         if self.mode in (ApprovalMode.FULL_ACCESS, ApprovalMode.YOLO):
@@ -80,25 +102,38 @@ class PermissionEvaluator:
 
         if self.mode == ApprovalMode.AUTO_APPROVE:
             if read_only:
-                return PermissionDecision(True, ExecutionMode.LOCAL, "reads allowed")
+                return PermissionDecision(True, ExecutionMode.LOCAL, "reads allowed", is_readonly=True)
             if policy_decision == Decision.ASK:
                 return PermissionDecision(True, ExecutionMode.PROMPT, "policy requires approval")
             return PermissionDecision(True, ExecutionMode.LOCAL, "auto-approve writer fallback")
 
         if self.mode == ApprovalMode.SANDBOX_REQUIRED:
             if read_only:
-                return PermissionDecision(True, ExecutionMode.LOCAL, "reads allowed locally")
+                return PermissionDecision(True, ExecutionMode.LOCAL, "reads allowed locally", is_readonly=True)
             return PermissionDecision(True, ExecutionMode.SANDBOX, "non-reads routed to sandbox")
 
         if self.mode in (ApprovalMode.AUTO, ApprovalMode.ASK):
             if policy_decision == Decision.ASK:
                 return PermissionDecision(True, ExecutionMode.PROMPT, "policy requires approval")
             risk = RiskClassifier.classify_tool_call(tool_name, arguments)
+            # Bash readonly detection can also affect risk level
+            if bash_classification and bash_classification.is_readonly:
+                risk = RiskLevel.LOW
             if risk == RiskLevel.HIGH:
                 return PermissionDecision(True, ExecutionMode.SANDBOX, "high-risk routed to sandbox")
             if risk == RiskLevel.MEDIUM:
-                return PermissionDecision(True, ExecutionMode.PROMPT, "medium-risk requires approval")
-            return PermissionDecision(True, ExecutionMode.LOCAL, "low-risk allowed locally")
+                return PermissionDecision(
+                    True,
+                    ExecutionMode.PROMPT,
+                    "medium-risk requires approval",
+                    warnings=bash_classification.warnings if bash_classification else [],
+                )
+            return PermissionDecision(
+                True,
+                ExecutionMode.LOCAL,
+                "low-risk allowed locally",
+                is_readonly=read_only,
+            )
 
         return PermissionDecision(True, ExecutionMode.PROMPT, "policy requires approval")
 
