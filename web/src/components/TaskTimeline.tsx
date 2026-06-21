@@ -6,9 +6,17 @@ interface TaskTimelineProps {
   tasks: Task[];
   planSteps?: PlanStep[];
   sessions?: SessionSummary[];
+  activeSessionId?: string | null;
+  onSessionSelect?: (sessionId: string) => void;
 }
 
-export function TaskTimeline({ tasks, planSteps = [], sessions = [] }: TaskTimelineProps) {
+export function TaskTimeline({
+  tasks,
+  planSteps = [],
+  sessions = [],
+  activeSessionId = null,
+  onSessionSelect,
+}: TaskTimelineProps) {
   return (
     <div className="space-y-6">
       <section className="bg-surface border border-border rounded-lg p-4">
@@ -16,8 +24,17 @@ export function TaskTimeline({ tasks, planSteps = [], sessions = [] }: TaskTimel
         {sessions.length === 0 && <p className="text-sm text-muted">No sessions yet.</p>}
         <ul className="space-y-2">
           {sessions.map((session) => (
-            <li key={session.id} className="text-sm truncate" title={session.id}>
-              {session.id}
+            <li key={session.id}>
+              <button
+                type="button"
+                onClick={() => onSessionSelect?.(session.id)}
+                className={`w-full text-left text-sm truncate rounded px-2 py-1 hover:bg-background ${
+                  activeSessionId === session.id ? 'bg-background ring-1 ring-primary' : ''
+                }`}
+                title={session.id}
+              >
+                {session.id}
+              </button>
             </li>
           ))}
         </ul>

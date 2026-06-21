@@ -4,12 +4,22 @@ import { useEffect, useRef, useState } from 'react';
 import { ChatMessages } from '@/components/Chat';
 import { DiffViewer } from '@/components/DiffViewer';
 import { PermissionModal } from '@/components/PermissionModal';
+import { SetupBanner } from '@/components/SetupBanner';
 import { TaskTimeline } from '@/components/TaskTimeline';
-import { createTask, fetchCacheMetrics, fetchConfig, fetchSessions, subscribeEvents } from '@/lib/api';
+import {
+  createTask,
+  fetchCacheMetrics,
+  fetchConfig,
+  fetchDoctor,
+  fetchSessionEvents,
+  fetchSessions,
+  subscribeEvents,
+} from '@/lib/api';
 import { useAppStore } from '@/lib/store';
 
 export default function Home() {
   const [input, setInput] = useState('');
+  const [doctor, setDoctor] = useState<Awaited<ReturnType<typeof fetchDoctor>>>(null);
   const messages = useAppStore((s) => s.messages);
   const tasks = useAppStore((s) => s.tasks);
   const planSteps = useAppStore((s) => s.planSteps);
@@ -34,6 +44,9 @@ export default function Home() {
   const setActiveDiff = useAppStore((s) => s.setActiveDiff);
   const setSessions = useAppStore((s) => s.setSessions);
   const setConfig = useAppStore((s) => s.setConfig);
+  const currentSessionId = useAppStore((s) => s.currentSessionId);
+  const setCurrentSessionId = useAppStore((s) => s.setCurrentSessionId);
+  const setMessages = useAppStore((s) => s.setMessages);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -43,6 +56,7 @@ export default function Home() {
   useEffect(() => {
     fetchConfig().then(setConfig);
     fetchSessions().then(setSessions);
+    fetchDoctor().then(setDoctor);
     fetchCacheMetrics().then((metrics) => {
       const rate = metrics.recent_hit_rate ?? metrics.hit_rate;
       setCacheHitRate(typeof rate === 'number' ? rate : null);
@@ -120,7 +134,7 @@ export default function Home() {
     setPlanSteps([]);
 
     try {
-      const task = await createTask(input);
+      const task = await createTask(input, currentSessionId);
       setTasks([...useAppStore.getState().tasks, task]);
       setCurrentTaskId(task.id);
     } catch (err) {
@@ -134,6 +148,14 @@ export default function Home() {
     }
 
     setInput('');
+  };
+
+  const handleSessionSelect = async (sessionId: string) => {
+    setCurrentSessionId(sessionId);
+    setIsStreaming(false);
+    setPlanSteps([]);
+    const events = await fetchSessionEvents(sessionId);
+    setMessages(events);
   };
 
   const approvalMode = (config as { approval?: { mode?: string } })?.approval?.mode || 'auto';
@@ -152,9 +174,17 @@ export default function Home() {
         </div>
       </header>
 
+      <SetupBanner doctor={doctor} />
+
       <div className="flex flex-1 min-h-0">
         <aside className="w-64 border-r border-border p-4 overflow-y-auto hidden md:block">
-          <TaskTimeline tasks={tasks} planSteps={planSteps} sessions={sessions} />
+          <TaskTimeline
+            tasks={tasks}
+            planSteps={planSteps}
+            sessions={sessions}
+            activeSessionId={currentSessionId}
+            onSessionSelect={handleSessionSelect}
+          />
         </aside>
 
         <section className="flex-1 flex flex-col min-w-0">
