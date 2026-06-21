@@ -24,6 +24,7 @@ from likecodex_engine.context.session_cache import SessionContextCache
 from likecodex_engine.context.session_resolver import session_id_for_dir
 from likecodex_engine.llm.base import LLMResponse
 from likecodex_engine.llm.cache_metrics import global_cache_metrics
+from likecodex_engine.config_loader import engine_config_from_env
 from likecodex_engine.llm.factory import create_provider
 from likecodex_engine.mcp.loader import register_mcp_tools
 from likecodex_engine.memory.vector import VectorMemory
@@ -169,7 +170,7 @@ def _make_agent(
         cfg.get("base_url"),
         thinking=bool(cfg.get("thinking", False)),
     )
-    tools = ToolRegistry(working_dir)
+    tools = ToolRegistry(working_dir, config=cfg)
     memory = VectorMemory(cfg.get("memory_path", ".likecodex/memory.jsonl"))
     approval_mode = cfg.get("approval_mode", "auto")
     policy = Policy.from_config(cfg)
@@ -277,8 +278,12 @@ def _make_agent(
 
 
 async def _ensure_mcp(config: dict, tools: ToolRegistry) -> None:
-    if str(config.get("enable_mcp", "false")).lower() in ("1", "true", "yes"):
-        await register_mcp_tools(tools, config)
+    if str(config.get("enable_mcp", "false")).lower() not in ("1", "true", "yes"):
+        return
+    if str(config.get("token_mode", "full")).lower() == "economy":
+        return
+    startup = str(config.get("mcp_startup", "lazy")).lower()
+    await register_mcp_tools(tools, config, eager_only=(startup == "lazy"))
 
 
 async def chat(request: web.Request) -> web.StreamResponse:
@@ -594,22 +599,7 @@ def create_app(config: dict | None = None) -> web.Application:
 def main() -> None:
     host = os.environ.get("LIKECODEX_ENGINE_HOST", "127.0.0.1")
     port = int(os.environ.get("LIKECODEX_ENGINE_PORT", "9090"))
-    working_dir = os.environ.get("LIKECODEX_WORKING_DIR", str(Path.cwd()))
-    config = {
-        "provider": os.environ.get("LIKECODEX_LLM_PROVIDER", "deepseek"),
-        "model": os.environ.get("LIKECODEX_LLM_MODEL", "deepseek-v4-flash"),
-        "api_key": os.environ.get("LIKECODEX_LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY"),
-        "base_url": os.environ.get("LIKECODEX_LLM_BASE_URL", "https://api.deepseek.com"),
-        "deepseek_thinking": os.environ.get("LIKECODEX_DEEPSEEK_THINKING", "false"),
-        "working_dir": working_dir,
-        "approval_mode": os.environ.get("LIKECODEX_APPROVAL_MODE", "auto"),
-        "enable_planner": os.environ.get("LIKECODEX_ENABLE_PLANNER", "false"),
-        "enable_mcp": os.environ.get("LIKECODEX_ENABLE_MCP", "false"),
-        "sandbox_executor_url": os.environ.get("LIKECODEX_SANDBOX_URL"),
-        "memory_path": os.environ.get("LIKECODEX_MEMORY_PATH", ".likecodex/memory.jsonl"),
-        "planner_model": os.environ.get("LIKECODEX_PLANNER_MODEL", "deepseek-v4-pro"),
-        "compact_ratio": os.environ.get("LIKECODEX_COMPACT_RATIO", "0.8"),
-    }
+    config = engine_config_from_env()
     app = create_app(config)
     web.run_app(app, host=host, port=port)
 
