@@ -102,6 +102,9 @@ class Policy:
         grant_key = f"{tool_name}:{subject}"
         if grant_key in self.session_grants:
             return Decision.ALLOW
+        if tool_name in WRITE_TOOLS and subject:
+            if f"Edit:{subject}" in self.session_grants or "Edit:*" in self.session_grants:
+                return Decision.ALLOW
         for rule in self.deny:
             if rule.matches(tool_name, subject):
                 return Decision.DENY
@@ -115,7 +118,17 @@ class Policy:
             return Decision.ALLOW
         return self.mode
 
-    def grant_session(self, tool_name: str, subject: str | None) -> None:
+    def grant_session(self, tool_name: str, subject: str | None, scope: str = "once") -> None:
+        if scope == "session" and tool_name in WRITE_TOOLS:
+            if subject:
+                self.session_grants.add(f"Edit:{subject}")
+            else:
+                self.session_grants.add(f"Edit:*")
+            return
+        if scope == "prefix" and tool_name == "run_command" and subject:
+            prefix = subject.split()[0] if subject else subject
+            self.session_grants.add(f"Bash({prefix}:*)")
+            return
         self.session_grants.add(f"{tool_name}:{subject}")
 
     def load_grants(self, path: Path) -> None:

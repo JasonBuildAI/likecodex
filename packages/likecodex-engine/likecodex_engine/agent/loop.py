@@ -15,6 +15,7 @@ from likecodex_engine.agent.checkpoints import CheckpointManager
 from likecodex_engine.agent.coordinator import EXECUTOR_HANDOFF_MARKER, should_plan
 from likecodex_engine.agent.dispatch import execute_tool_calls_parallel
 from likecodex_engine.agent.evidence import EvidenceLedger
+from likecodex_engine.agent.goal import GoalState
 from likecodex_engine.agent.guards import (
     MAX_EMPTY_FINAL_BLOCKS,
     MAX_EXECUTOR_HANDOFF_NUDGES,
@@ -28,6 +29,7 @@ from likecodex_engine.agent.guards import (
     finish_reason_notice,
     has_visible_final_answer,
 )
+from likecodex_engine.tools.ask import AskToolHandler
 from likecodex_engine.agent.output_limit import limit_tool_output
 from likecodex_engine.agent.plan_mode import plan_mode_block_reason, plan_mode_tool_result
 from likecodex_engine.agent.plan_state import PlanState
@@ -79,6 +81,7 @@ class AgentLoop:
         no_tools: bool = False,
         checkpoints: CheckpointManager | None = None,
         plan_state: PlanState | None = None,
+        goal_state: GoalState | None = None,
         is_subagent: bool = False,
         executor_handoff_guard: bool = False,
     ) -> None:
@@ -107,6 +110,12 @@ class AgentLoop:
         self._final_readiness_blocks = 0
         self._empty_final_blocks = 0
         self.plan_state = plan_state or PlanState()
+        self.goal_state = goal_state or GoalState()
+        self.ask_handler = AskToolHandler()
+        self.pending_asks: dict[str, asyncio.Future[str]] = {}
+        self.interactive_ask = True
+        self._plan_exec_window = False
+        self._pending_grant_scope = "once"
         self.is_subagent = is_subagent
         self.executor_handoff_guard = executor_handoff_guard
         self._used_any_tool = False
@@ -151,6 +160,10 @@ class AgentLoop:
         )
         if hook_out:
             self.context.add_context_block(hook_out)
+
+        goal_block = self.goal_state.transient_block()
+        if goal_block:
+            self.context.add_context_block(goal_block)
 
         plan: Plan | None = None
         use_planner = self.planner and should_plan(prompt) and not self.is_subagent
@@ -228,6 +241,9 @@ class AgentLoop:
             async for resp in self._run_inner(prompt):
                 yield resp
 
+        async for resp in self._run_goal_continuations():
+            yield resp
+
         if self.memory:
             summary = self._summarize_conversation()
             if summary:
@@ -237,6 +253,7 @@ class AgentLoop:
         if prompt and self.context.messages[-1].role.value != "user":
             self.context.add_user_message(prompt)
 
+        self._plan_exec_window = self.plan_state.execution_window_active
         tool_schemas = [] if self.no_tools else flatten_tool_schemas(self.tools.to_openai_schema())
         stream_recoveries = 0
         last_prefix_shape: PrefixShape | None = None
@@ -461,6 +478,22 @@ class AgentLoop:
                     event_type="error",
                 )
             )
+        if self._plan_exec_window:
+            self.plan_state.execution_window_active = False
+
+    def _last_assistant_text(self) -> str:
+        for msg in reversed(self.context.messages):
+            if getattr(msg.role, "value", str(msg.role)) == "assistant" and msg.content:
+                return str(msg.content)
+        return ""
+
+    async def _run_goal_continuations(self) -> AsyncIterator[LLMResponse]:
+        while True:
+            follow_up = self.goal_state.parse_response(self._last_assistant_text())
+            if not follow_up:
+                break
+            async for resp in self._run_inner(follow_up):
+                yield resp
 
     async def _handle_tool_call(
         self,
@@ -483,6 +516,11 @@ class AgentLoop:
                 self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
                 yield self._emit(LLMResponse(content=result, model="tool-result", event_type="tool_result"))
                 return
+
+        if tool_call.name == "ask":
+            async for resp in self._handle_ask_tool(tool_call):
+                yield resp
+            return
 
         pre_hook = await fire_hooks(
             "PreToolUse",
@@ -510,7 +548,11 @@ class AgentLoop:
                     )
                 )
 
-        decision = self.permission_evaluator.evaluate(tool_call.name, tool_call.arguments)
+        decision = self.permission_evaluator.evaluate(
+            tool_call.name,
+            tool_call.arguments,
+            plan_execution_window=self._plan_exec_window,
+        )
         result: str
         blocked = False
         if not decision.allowed:
@@ -571,7 +613,12 @@ class AgentLoop:
                     result = json.dumps({"error": "User denied permission"})
                     blocked = True
                 else:
-                    self.permission_evaluator.grant_session(tool_call.name, tool_call.arguments)
+                    self.permission_evaluator.grant_session(
+                        tool_call.name,
+                        tool_call.arguments,
+                        scope=self._pending_grant_scope,
+                    )
+                    self._pending_grant_scope = "once"
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     result = self._tag_result(result, "prompt-approved")
             elif decision.execution_mode == ExecutionMode.SANDBOX:
@@ -636,12 +683,59 @@ class AgentLoop:
             )
         )
 
-    async def respond_permission(self, request_id: str, approved: bool) -> bool:
+    async def respond_permission(
+        self, request_id: str, approved: bool, grant_scope: str = "once"
+    ) -> bool:
         future = self.pending_permissions.get(request_id)
         if future is None or future.done():
             return False
+        self._pending_grant_scope = grant_scope if approved else "once"
         future.set_result(approved)
         return True
+
+    async def wait_for_ask(self, request_id: str, questions: list[dict[str, Any]]) -> str:
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self.pending_asks[request_id] = future
+        return await future
+
+    async def respond_ask(self, request_id: str, answers: list[dict[str, Any]]) -> bool:
+        future = self.pending_asks.get(request_id)
+        if future is None or future.done():
+            return False
+        result = self.ask_handler.respond(request_id, answers)
+        if result is None:
+            future.set_result(self.ask_handler.headless_fallback([]))
+        else:
+            future.set_result(result)
+        return True
+
+    def list_pending_asks(self) -> list[dict[str, Any]]:
+        return [{"request_id": rid} for rid in self.pending_asks if not self.pending_asks[rid].done()]
+
+    async def _handle_ask_tool(self, tool_call: Any) -> AsyncIterator[LLMResponse]:
+        questions = tool_call.arguments.get("questions", [])
+        request_id = uuid.uuid4().hex[:12]
+        payload = json.dumps({"request_id": request_id, "questions": questions})
+        yield self._emit(
+            LLMResponse(content=payload, model="ask", event_type="ask", metadata={"request_id": request_id})
+        )
+        if self.interactive_ask:
+            try:
+                result = await self.wait_for_ask(request_id, questions)
+            except asyncio.CancelledError:
+                result = self.ask_handler.headless_fallback(questions)
+        else:
+            result = self.ask_handler.headless_fallback(questions)
+        self.pending_asks.pop(request_id, None)
+        self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
+        yield self._emit(
+            LLMResponse(
+                content=result,
+                model="tool-result",
+                event_type="tool_result",
+                metadata={"tool_call_id": tool_call.id},
+            )
+        )
 
     def list_pending_permissions(self) -> list[dict[str, Any]]:
         return [{"request_id": rid} for rid in self.pending_permissions if not self.pending_permissions[rid].done()]

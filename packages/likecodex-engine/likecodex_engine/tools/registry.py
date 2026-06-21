@@ -136,6 +136,46 @@ class ToolRegistry:
         self.register("forget", mem.forget_schema(), mem.forget)
         self.register("memory_search", mem.memory_search_schema(), mem.memory_search, read_only=True)
 
+        async def memory_op(operation: str, query: str = "", key: str = "", limit: int = 10) -> str:
+            if operation == "search":
+                return await mem.memory_search(query, limit=limit)
+            if operation == "list":
+                root = mem.memory_dir
+                keys = [p.stem for p in root.glob("*.md")]
+                return json.dumps({"keys": keys[:limit]})
+            if operation == "read":
+                path = mem._path_for(key)
+                if not path.exists():
+                    return json.dumps({"error": f"Unknown memory key {key!r}"})
+                return json.dumps({"key": key, "content": path.read_text(encoding="utf-8")})
+            return json.dumps({"error": f"Unknown memory operation {operation!r}"})
+
+        self.register(
+            "memory",
+            {
+                "description": "Search, list, or read agent memory files.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {"type": "string", "enum": ["search", "list", "read"]},
+                        "query": {"type": "string"},
+                        "key": {"type": "string"},
+                        "limit": {"type": "integer", "default": 10},
+                    },
+                    "required": ["operation"],
+                },
+            },
+            memory_op,
+            read_only=True,
+        )
+
+        from likecodex_engine.tools.ask import ask_tool_schema
+
+        async def ask_stub(**kwargs: Any) -> str:
+            return json.dumps({"error": "ask is handled by AgentLoop"})
+
+        self.register("ask", ask_tool_schema(), ask_stub, read_only=True)
+
         self.register("todo_write", self.todo.todo_write_schema(), self.todo.todo_write)
         self.register(
             "complete_step",
@@ -274,8 +314,29 @@ class ToolRegistry:
         self.register("task", task.task_schema(), task.task)
         parallel = ParallelTasksTool(factory)
         self.register("parallel_tasks", parallel.parallel_tasks_schema(), parallel.parallel_tasks)
-        skills = SkillRunner(self.working_dir, factory)
+        skills = SkillRunner(
+            self.working_dir,
+            factory,
+            disabled=self._engine_config.get("disabled_skills"),
+        )
         self.register("run_skill", skills.run_skill_schema(), skills.run_skill)
+
+        for alias in ("explore", "review", "research", "security_review"):
+            async def _skill_alias(task: str = "", _name: str = alias, **_: Any) -> str:
+                return await skills.run_skill(_name, task)
+
+            self.register(
+                alias,
+                {
+                    "description": f"Invoke built-in {alias} skill (subagent playbook).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"task": {"type": "string"}},
+                        "required": ["task"],
+                    },
+                },
+                _skill_alias,
+            )
 
     def register(
         self,

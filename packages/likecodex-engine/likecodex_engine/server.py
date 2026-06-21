@@ -13,7 +13,6 @@ from typing import Any
 from aiohttp import web
 
 from likecodex_engine.agent.checkpoints import CheckpointManager
-from likecodex_engine.agent.commands import expand_prompt
 from likecodex_engine.agent.coordinator import Coordinator
 from likecodex_engine.agent.loop import AgentLoop, build_subagent_loop
 from likecodex_engine.agent.plan_state import PlanState
@@ -31,10 +30,9 @@ from likecodex_engine.memory.vector import VectorMemory
 from likecodex_engine.permissions.evaluator import ApprovalMode, PermissionEvaluator
 from likecodex_engine.permissions.policy import Policy
 from likecodex_engine.persistence.session import SessionEvent, SessionStore
+from likecodex_engine.server_turn import prepare_turn, run_manual_compact_responses
 from likecodex_engine.skills.loader import discover_skills, skills_prefix_block
 from likecodex_engine.tools.registry import ToolRegistry
-
-APP_CONFIG = web.AppKey("config", dict)
 
 APP_CONFIG = web.AppKey("config", dict)
 
@@ -95,34 +93,8 @@ async def _run_manual_compact(
     focus: str,
 ) -> AsyncIterator[LLMResponse]:
     """Run a manual /compact pass, yielding compaction + assistant events."""
-    if hasattr(context, "set_compact_llm"):
-        context.set_compact_llm(llm)
-    if not hasattr(context, "compact_async"):
-        yield LLMResponse(
-            content="Compaction is not available for this session context.",
-            model="command",
-            event_type="assistant",
-        )
-        return
-
-    yield LLMResponse(
-        content=json.dumps({"trigger": "manual", "focus": focus}),
-        model="system",
-        event_type="compaction_started",
-    )
-    info = await context.compact_async(instructions=focus, force=True)
-    yield LLMResponse(
-        content=json.dumps(info),
-        model="system",
-        event_type="compaction_done",
-    )
-    if info.get("compacted"):
-        reply = "Context compacted."
-        if focus:
-            reply += f" Focus: {focus}"
-    else:
-        reply = "Nothing to compact."
-    yield LLMResponse(content=reply, model="command", event_type="assistant")
+    async for resp in run_manual_compact_responses(context, llm, focus):
+        yield resp
 
 
 def _get_or_create_context(session_id: str, store: SessionStore) -> ContextManager:
@@ -198,7 +170,7 @@ def _make_agent(
     if context is None:
         context = _get_or_create_context(sid, store)
 
-    skills = discover_skills(working_dir)
+    skills = discover_skills(working_dir, disabled=cfg.get("disabled_skills"))
     context.set_skills_content(skills_prefix_block(skills))
     if hasattr(context, "set_project_memories"):
         memory_parts: list[str] = []
@@ -245,6 +217,10 @@ def _make_agent(
 
     loop_holder: dict[str, AgentLoop] = {}
 
+    from likecodex_engine.agent.goal import GoalState
+
+    goal_state = GoalState(max_continuations=int(cfg.get("goal_max_continuations", 20)))
+
     loop = AgentLoop(
         llm,
         tools,
@@ -259,6 +235,7 @@ def _make_agent(
         agent_factory=agent_factory,
         no_tools=no_tools,
         plan_state=PlanState(),
+        goal_state=goal_state,
     )
     loop_holder["loop"] = loop
     tools.set_agent_factory(agent_factory)
@@ -301,7 +278,15 @@ async def chat(request: web.Request) -> web.StreamResponse:
     await _ensure_mcp(cfg, loop.tools)
     store.append_event(sid, SessionEvent(event_type="user", content=prompt, metadata={}))
 
-    expanded = expand_prompt(prompt, working_dir)
+    runner = _get_runner(sid)
+    prepared = prepare_turn(
+        sid=sid,
+        prompt=prompt,
+        working_dir=working_dir,
+        context=context,
+        runner=runner,
+        loop=loop,
+    )
 
     response = web.StreamResponse(
         status=200,
@@ -315,32 +300,22 @@ async def chat(request: web.Request) -> web.StreamResponse:
     )
     await response.prepare(request)
 
-    if expanded.compact_trigger:
-        async for resp in _run_manual_compact(context, loop.llm, expanded.compact_focus):
+    if prepared.expanded.compact_trigger:
+        async for resp in _run_manual_compact(context, loop.llm, prepared.expanded.compact_focus):
             payload = json.dumps(_serialize_response(resp))
             await response.write(f"data: {payload}\n\n".encode())
         await response.write(b"data: [DONE]\n\n")
         return response
 
-    if expanded.direct_reply is not None:
-        reply = {"type": "assistant", "content": expanded.direct_reply, "tool_calls": [], "model": "command"}
-        await response.write(f"data: {json.dumps(reply)}\n\n".encode())
+    for resp in prepared.early_responses:
+        payload = json.dumps(_serialize_response(resp))
+        await response.write(f"data: {payload}\n\n".encode())
+
+    if prepared.expanded.direct_reply is not None:
         await response.write(b"data: [DONE]\n\n")
         return response
 
-    for block in expanded.context_blocks:
-        context.add_context_block(block)
-
-    runner = _get_runner(sid)
-
-    if expanded.plan_mode_enter:
-        runner.plan_state.enter()
-    if expanded.plan_mode_exit_request:
-        runner.plan_state.request_exit(expanded.prompt)
-    if expanded.plan_mode_exit_approve:
-        runner.plan_state.approve_exit()
-
-    async for resp in runner.run(expanded.prompt):
+    async for resp in runner.run(prepared.prompt):
         payload = json.dumps(_serialize_response(resp))
         await response.write(f"data: {payload}\n\n".encode())
     cache_stats = global_cache_metrics().to_dict()
@@ -364,22 +339,27 @@ async def run_task(request: web.Request) -> web.Response:
     await _ensure_mcp(cfg, loop.tools)
     store.append_event(sid, SessionEvent(event_type="user", content=prompt, metadata={}))
 
-    expanded = expand_prompt(prompt, working_dir)
-    if expanded.compact_trigger:
-        outputs = []
-        async for resp in _run_manual_compact(context, loop.llm, expanded.compact_focus):
+    runner = _get_runner(sid)
+    prepared = prepare_turn(
+        sid=sid,
+        prompt=prompt,
+        working_dir=working_dir,
+        context=context,
+        runner=runner,
+        loop=loop,
+    )
+
+    outputs = [_serialize_response(r) for r in prepared.early_responses]
+
+    if prepared.expanded.compact_trigger:
+        async for resp in _run_manual_compact(context, loop.llm, prepared.expanded.compact_focus):
             outputs.append(_serialize_response(resp))
         return web.json_response({"outputs": outputs, "session_id": sid})
-    if expanded.direct_reply is not None:
-        reply = {"type": "assistant", "content": expanded.direct_reply, "tool_calls": [], "model": "command"}
-        return web.json_response({"outputs": [reply], "session_id": sid})
-    for block in expanded.context_blocks:
-        context.add_context_block(block)
 
-    runner = _get_runner(sid)
+    if prepared.expanded.direct_reply is not None:
+        return web.json_response({"outputs": outputs, "session_id": sid})
 
-    outputs = []
-    async for resp in runner.run(expanded.prompt):
+    async for resp in runner.run(prepared.prompt):
         outputs.append(_serialize_response(resp))
 
     return web.json_response({"outputs": outputs, "session_id": sid, "cache": global_cache_metrics().to_dict()})
@@ -422,7 +402,8 @@ async def create_task(request: web.Request) -> web.Response:
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
     cfg = _resolve_config(request.app[APP_CONFIG])
-    task_id = session_id or session_id_for_dir(cfg.get("working_dir", "."))
+    working_dir = cfg.get("working_dir", ".")
+    task_id = session_id or session_id_for_dir(working_dir)
 
     store = _session_store()
     store.create_session(task_id, {"prompt": prompt, "status": "running"})
@@ -431,11 +412,41 @@ async def create_task(request: web.Request) -> web.Response:
         context = _get_or_create_context(task_id, store)
         loop = _make_agent(cfg, session_id=task_id, context=context)
         await _ensure_mcp(cfg, loop.tools)
+        store.append_event(task_id, SessionEvent(event_type="user", content=prompt, metadata={}))
         try:
-            async for resp in loop.run(prompt):
+            runner = _get_runner(task_id)
+            prepared = prepare_turn(
+                sid=task_id,
+                prompt=prompt,
+                working_dir=working_dir,
+                context=context,
+                runner=runner,
+                loop=loop,
+            )
+            for resp in prepared.early_responses:
+                metadata = {"model": resp.model, **(resp.metadata or {})}
+                store.append_event(
+                    task_id,
+                    SessionEvent(event_type=resp.event_type, content=resp.content, metadata=metadata),
+                )
+            if prepared.expanded.compact_trigger:
+                async for resp in _run_manual_compact(context, loop.llm, prepared.expanded.compact_focus):
+                    metadata = {"model": resp.model, **(resp.metadata or {})}
+                    store.append_event(
+                        task_id,
+                        SessionEvent(event_type=resp.event_type, content=resp.content, metadata=metadata),
+                    )
+                store.create_session(task_id, {"prompt": prompt, "status": "completed"})
+                return
+            if prepared.expanded.direct_reply is not None:
+                store.create_session(task_id, {"prompt": prompt, "status": "completed"})
+                return
+            async for resp in runner.run(prepared.prompt):
                 metadata = {"model": resp.model}
                 if resp.usage:
                     metadata["usage"] = resp.usage
+                if resp.metadata:
+                    metadata.update(resp.metadata)
                 store.append_event(
                     task_id,
                     SessionEvent(
@@ -453,6 +464,7 @@ async def create_task(request: web.Request) -> web.Response:
             )
         finally:
             _ACTIVE_LOOPS.pop(task_id, None)
+            _ACTIVE_COORDINATORS.pop(task_id, None)
 
     asyncio.create_task(run_in_background())
 
@@ -504,11 +516,38 @@ async def respond_permission(request: web.Request) -> web.Response:
     request_id = request.match_info["id"]
     data = await request.json()
     approved = bool(data.get("approved", False))
+    grant_scope = str(data.get("grant_scope", "once"))
     for sid in list(_ACTIVE_LOOPS.keys()) + list(_ACTIVE_COORDINATORS.keys()):
         runner = _get_runner(sid)
-        if await runner.respond_permission(request_id, approved):
+        if await runner.respond_permission(request_id, approved, grant_scope=grant_scope):
             return web.json_response({"ok": True, "request_id": request_id, "approved": approved})
     return web.json_response({"error": "Permission request not found"}, status=404)
+
+
+async def list_pending_asks(request: web.Request) -> web.Response:
+    pending: list[dict] = []
+    seen: set[str] = set()
+    for sid in set(_ACTIVE_LOOPS) | set(_ACTIVE_COORDINATORS):
+        loop = _resolve_loop(sid)
+        if loop is None:
+            continue
+        for item in loop.list_pending_asks():
+            rid = item.get("request_id")
+            if rid and rid not in seen:
+                seen.add(rid)
+                pending.append(item)
+    return web.json_response({"pending": pending})
+
+
+async def respond_ask(request: web.Request) -> web.Response:
+    request_id = request.match_info["id"]
+    data = await request.json()
+    answers = data.get("answers", [])
+    for sid in list(_ACTIVE_LOOPS.keys()) + list(_ACTIVE_COORDINATORS.keys()):
+        loop = _resolve_loop(sid)
+        if loop and await loop.respond_ask(request_id, answers):
+            return web.json_response({"ok": True, "request_id": request_id})
+    return web.json_response({"error": "Ask request not found"}, status=404)
 
 
 async def list_checkpoints(request: web.Request) -> web.Response:
@@ -543,10 +582,17 @@ async def codegraph_search(request: web.Request) -> web.Response:
 async def rewind_checkpoint(request: web.Request) -> web.Response:
     data = await request.json()
     checkpoint_id = data.get("checkpoint_id")
+    mode = data.get("mode", "code")
     cfg = _resolve_config(request.app[APP_CONFIG])
-    manager = CheckpointManager(cfg.get("working_dir", "."))
-    result = manager.rewind(checkpoint_id)
-    status = 200 if result.get("rewound") else 400
+    working_dir = cfg.get("working_dir", ".")
+    session_id = data.get("session_id") or session_id_for_dir(working_dir)
+    store = _session_store()
+    context = _get_or_create_context(session_id, store)
+    from likecodex_engine.agent.rewind import RewindController
+
+    controller = RewindController(working_dir, context, session_id, store)
+    result = controller.rewind(checkpoint_id, mode=mode)
+    status = 200 if result.get("ok") else 400
     return web.json_response(result, status=status)
 
 
@@ -588,6 +634,8 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_get("/tasks/{task_id}", get_task)
     app.router.add_get("/permissions/pending", list_pending_permissions)
     app.router.add_post("/permissions/{id}/respond", respond_permission)
+    app.router.add_get("/ask/pending", list_pending_asks)
+    app.router.add_post("/ask/{id}/respond", respond_ask)
     app.router.add_get("/sessions", list_sessions)
     app.router.add_get("/sessions/{id}/events", get_session_events)
     app.router.add_get("/checkpoints", list_checkpoints)

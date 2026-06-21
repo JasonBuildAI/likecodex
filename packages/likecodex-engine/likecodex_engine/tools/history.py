@@ -30,6 +30,21 @@ def _bm25_score(query_tokens: list[str], doc_tokens: list[str], avg_dl: float, d
     return score
 
 
+def _read_jsonl_messages(path: Path) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    if not path.exists():
+        return messages
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            messages.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return messages
+
+
 class HistoryTools:
     def __init__(self, working_dir: str, session_db_path: str = ".likecodex/sessions.db") -> None:
         self.working_dir = Path(working_dir).resolve()
@@ -43,21 +58,50 @@ class HistoryTools:
             for path in sorted(archive_dir.glob("*.jsonl")):
                 text = path.read_text(encoding="utf-8", errors="replace")
                 docs.append((str(path), "archive", text))
+        sessions_dir = self.working_dir / ".likecodex" / "sessions"
+        if sessions_dir.exists():
+            for path in sorted(sessions_dir.glob("*.jsonl")):
+                text = path.read_text(encoding="utf-8", errors="replace")
+                docs.append((str(path), "session", text))
         if scope == "global" and self.global_dir.exists():
             for path in self.global_dir.rglob("*.jsonl"):
                 text = path.read_text(encoding="utf-8", errors="replace")
                 docs.append((str(path), "global", text))
         return docs
 
+    def _around_slice(
+        self,
+        path: Path,
+        message_index: int,
+        before: int,
+        after: int,
+    ) -> dict[str, Any]:
+        messages = _read_jsonl_messages(path)
+        if not messages:
+            return {"path": str(path), "messages": [], "hint": "No messages in file"}
+        idx = max(0, min(message_index, len(messages) - 1))
+        start = max(0, idx - before)
+        end = min(len(messages), idx + after + 1)
+        return {
+            "path": str(path),
+            "message_index": idx,
+            "before": before,
+            "after": after,
+            "messages": messages[start:end],
+        }
+
     def history_schema(self) -> dict[str, Any]:
         return {
-            "description": "Search compacted conversation archives (BM25). scope=project|global.",
+            "description": "Search compacted conversation archives (BM25) or fetch context around a message index.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
                     "scope": {"type": "string", "enum": ["project", "global"], "default": "project"},
                     "operation": {"type": "string", "enum": ["search", "around"], "default": "search"},
+                    "message_index": {"type": "integer", "description": "Target message index for around"},
+                    "before": {"type": "integer", "default": 3},
+                    "after": {"type": "integer", "default": 3},
                     "limit": {"type": "integer", "default": 5},
                 },
                 "required": ["query"],
@@ -70,8 +114,21 @@ class HistoryTools:
         scope: str = "project",
         operation: str = "search",
         limit: int = 5,
+        message_index: int | None = None,
+        before: int = 3,
+        after: int = 3,
     ) -> str:
         docs = self._collect_docs(scope)
+        if operation == "around" and message_index is not None:
+            sessions_dir = self.working_dir / ".likecodex" / "sessions"
+            live = sorted(sessions_dir.glob("*.jsonl")) if sessions_dir.exists() else []
+            target = live[-1] if live else None
+            if target is None and docs:
+                target = Path(docs[0][0])
+            if target is None:
+                return json.dumps({"messages": [], "hint": "No session JSONL found for around"})
+            return json.dumps(self._around_slice(target, message_index, before, after))
+
         if not docs:
             return json.dumps({"hits": [], "hint": "No archived history found. Compaction creates archives."})
         query_tokens = _tokenize(query)
@@ -92,7 +149,7 @@ class HistoryTools:
             snippet = text[:500].replace("\n", " ")
             hits.append({"score": round(score, 3), "path": path, "kind": kind, "snippet": snippet})
         if operation == "around" and hits:
-            path = hits[0]["path"]
-            content = Path(path).read_text(encoding="utf-8", errors="replace")
-            return json.dumps({"path": path, "content": content[:8000]})
+            path = Path(hits[0]["path"])
+            idx = message_index if message_index is not None else 0
+            return json.dumps(self._around_slice(path, idx, before, after))
         return json.dumps({"hits": hits, "query": query})

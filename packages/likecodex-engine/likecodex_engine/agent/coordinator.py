@@ -186,8 +186,20 @@ class Coordinator:
                 last = resp.content
         return last.strip() or "No plan produced."
 
-    async def respond_permission(self, request_id: str, approved: bool) -> bool:
-        return await self.executor.respond_permission(request_id, approved)
+    @property
+    def goal_state(self):
+        return self.executor.goal_state
+
+    async def respond_permission(
+        self, request_id: str, approved: bool, grant_scope: str = "once"
+    ) -> bool:
+        return await self.executor.respond_permission(request_id, approved, grant_scope=grant_scope)
+
+    async def respond_ask(self, request_id: str, answers: list) -> bool:
+        return await self.executor.respond_ask(request_id, answers)
+
+    def list_pending_asks(self) -> list:
+        return self.executor.list_pending_asks()
 
     def list_pending_permissions(self) -> list[dict]:
         return self.executor.list_pending_permissions()

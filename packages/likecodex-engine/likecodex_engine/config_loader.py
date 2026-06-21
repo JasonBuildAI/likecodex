@@ -62,6 +62,7 @@ def engine_config_from_env(cwd: Path | None = None) -> dict[str, Any]:
     llm = merged.get("llm", {})
     approval = merged.get("approval", {})
     agent = merged.get("agent", {})
+    skills_cfg = merged.get("skills", {})
     deepseek = merged.get("deepseek", {})
     mcp = merged.get("mcp", {})
 
@@ -111,4 +112,9 @@ def engine_config_from_env(cwd: Path | None = None) -> dict[str, Any]:
         or agent.get("planner_model", "deepseek-v4-pro"),
         "compact_ratio": os.environ.get("LIKECODEX_COMPACT_RATIO")
         or str(agent.get("compact_ratio", 0.8)),
+        "goal_max_continuations": int(
+            os.environ.get("LIKECODEX_GOAL_MAX_CONTINUATIONS")
+            or agent.get("goal_max_continuations", 20)
+        ),
+        "disabled_skills": skills_cfg.get("disabled", []) if isinstance(skills_cfg, dict) else [],
     }

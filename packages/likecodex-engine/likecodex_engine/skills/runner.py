@@ -17,13 +17,15 @@ class SkillRunner:
         self,
         working_dir: str,
         agent_factory: Callable[[list[str] | None, int | None], AgentLoop] | None = None,
+        disabled: list[str] | None = None,
     ) -> None:
         self.working_dir = working_dir
         self.agent_factory = agent_factory
-        self._skills = {s.name: s for s in discover_skills(working_dir)}
+        self._disabled = disabled
+        self._skills = {s.name: s for s in discover_skills(working_dir, disabled=disabled)}
 
     def reload(self) -> None:
-        self._skills = {s.name: s for s in discover_skills(self.working_dir)}
+        self._skills = {s.name: s for s in discover_skills(self.working_dir, disabled=self._disabled)}
 
     def run_skill_schema(self) -> dict[str, Any]:
         return {

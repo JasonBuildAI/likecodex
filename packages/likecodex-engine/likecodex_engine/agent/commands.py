@@ -32,6 +32,9 @@ class ExpandedPrompt:
     plan_mode_exit_approve: bool = False
     compact_trigger: bool = False
     compact_focus: str = ""
+    goal_start: str | None = None
+    goal_strategy: str = "simple"
+    goal_clear: bool = False
 
 
 def load_slash_commands(working_dir: str | Path) -> dict[str, str]:
@@ -135,6 +138,26 @@ def expand_prompt(prompt: str, working_dir: str | Path) -> ExpandedPrompt:
             direct_reply=(
                 "Plan exit requested. Review the plan summary, then send `/exit_plan approve` to leave plan mode."
             ),
+        )
+
+    if stripped == "/goal clear" or stripped == "/goal --clear":
+        return ExpandedPrompt(prompt=prompt, goal_clear=True, direct_reply="Active goal cleared.")
+
+    if stripped.startswith("/goal"):
+        rest = stripped.removeprefix("/goal").strip()
+        strategy = "simple"
+        if rest.startswith("--research"):
+            strategy = "research"
+            rest = rest.removeprefix("--research").strip()
+        elif rest.startswith("--simple"):
+            strategy = "simple"
+            rest = rest.removeprefix("--simple").strip()
+        objective = rest or "Continue the active goal."
+        return ExpandedPrompt(
+            prompt=objective,
+            goal_start=objective,
+            goal_strategy=strategy,
+            direct_reply=f"Goal mode started ({strategy}): {objective}",
         )
 
     commands = load_slash_commands(wd)
