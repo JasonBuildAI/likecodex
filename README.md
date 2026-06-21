@@ -26,6 +26,7 @@ Unlike a thin LLM wrapper or a monolithic Python app, LikeCodex uses a **deliber
 - [Planning, Sub-Agents, and Skills](#planning-sub-agents-and-skills)
 - [Security and Execution Routing](#security-and-execution-routing)
 - [Event Protocol (One Stream for All Clients)](#event-protocol-one-stream-for-all-clients)
+- [ACP Protocol](#acp-protocol)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
 - [Built-in Tools](#built-in-tools)

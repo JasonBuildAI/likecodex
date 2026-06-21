@@ -26,6 +26,7 @@
 - [规划、子 Agent 与 Skills](#规划子-agent-与-skills)
 - [安全与执行路由](#安全与执行路由)
 - [事件协议（所有客户端共享一条流）](#事件协议所有客户端共享一条流)
+- [ACP 协议](#acp-协议)
 - [快速开始](#快速开始)
 - [配置说明](#配置说明)
 - [内置工具](#内置工具)
@@ -364,11 +365,12 @@ Web UI 顶栏显示实时缓存命中率。
 
 1. **路径约束** — 文件/git 工具不能逃出 `LIKECODEX_WORKING_DIR`。
 2. **风险分类** — shell 命令标记为 read / medium / high。
-3. **策略规则** — 配置中 per-tool 的 allow / ask / deny。
-4. **用户审批** — SSE `permission_requested` → 客户端响应。
-5. **Docker 沙箱** — 隔离容器，CPU/内存限制。
-6. **API Token** — `POST /execute` 可选 Bearer 认证。
-7. **配置脱敏** — `/config` 不返回密钥。
+3. **Bash 只读检测** — 40+ 已知只读命令（如 `git log`、`docker ps`、`npm ls`）自动放行，无需审批；30+ 危险模式（如 `rm -rf`、`curl|sh`、`sudo`）立即拒绝。
+4. **策略规则** — per-tool 的 `allow` / `ask` / `deny`，支持 glob/字面量/前缀匹配：`Bash(go test:*)`、`Edit(docs/**)`、`Bash=go test ./...`。
+5. **用户审批** — SSE `permission_requested` → 客户端响应。
+6. **Docker 沙箱** — 隔离容器，CPU/内存限制。
+7. **API Token** — `POST /execute` 可选 Bearer 认证。
+8. **配置脱敏** — `/config` 不返回密钥。
 
 详情：[SECURITY.md](SECURITY.md)
 
@@ -389,6 +391,30 @@ Web UI 顶栏显示实时缓存命中率。
 Python 输出较扁平的对象；`likecodex-server/src/event_mapping.rs` 规范化后，CLI、TUI、Web 渲染一致。
 
 完整 schema：[docs/EVENTS.md](docs/EVENTS.md)
+
+---
+
+## ACP 协议
+
+LikeCodex 通过 `likecodex-acp` 在 stdin/stdout 上暴露 **[Agent Client Protocol (ACP) v1](docs/ACP.md)** 端点，支持编辑器（VS Code、Zed 等）将 LikeCodex 作为子进程启动，通过 NDJSON JSON-RPC 2.0 通信。
+
+**支持的方法：**
+
+| 方法 | 说明 |
+|------|------|
+| `initialize` | 能力握手 |
+| `session/new` | 创建新会话 |
+| `session/load` | 加载并回放会话历史 |
+| `session/resume` | 恢复已有会话 |
+| `session/prompt` | 发送 prompt 并流式响应 |
+| `session/cancel` | 取消正在执行的 turn |
+| `session/set_config_option` | 运行时切换模型或审批模式 |
+| `session/set_model` | 切换 LLM 模型 |
+| `session/list` | 列出所有会话 |
+| `session/close` | 关闭会话 |
+| `session/delete` | 删除会话 |
+
+**协议实现：** [`crates/likecodex-acp/`](crates/likecodex-acp/)
 
 ---
 
@@ -497,6 +523,7 @@ likecodex/
 │   ├── likecodex-core/          # 配置、事件、共享类型
 │   ├── likecodex-cli/           # CLI、TUI、start/setup/doctor
 │   ├── likecodex-server/        # HTTP/SSE 控制平面
+│   ├── likecodex-acp/           # Agent Client Protocol (ACP v1) stdio 服务端
 │   ├── likecodex-executor/      # 本地命令执行
 │   ├── likecodex-sandbox/       # Docker 沙箱
 │   └── likecodex-indexer/       # 文件 + CodeGraph 索引
@@ -526,6 +553,7 @@ likecodex/
 | [docs/SPEC-CACHE.md](docs/SPEC-CACHE.md) | 缓存优先上下文规范 |
 | [docs/SPEC-AGENT.md](docs/SPEC-AGENT.md) | Agent harness 规范 |
 | [docs/API.md](docs/API.md) | HTTP API 参考 |
+| [docs/ACP.md](docs/ACP.md) | ACP v1 协议规范 |
 | [docs/EVENTS.md](docs/EVENTS.md) | SSE 事件 schema |
 | [docs/USAGE.md](docs/USAGE.md) | 详细使用指南 |
 | [docs/PARITY-CHECKLIST.md](docs/PARITY-CHECKLIST.md) | 功能 ↔ 测试对照 |
