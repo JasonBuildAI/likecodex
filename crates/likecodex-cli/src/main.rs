@@ -1,5 +1,8 @@
+mod doctor;
 mod engine;
 mod interaction;
+mod setup;
+mod supervisor;
 mod tui;
 
 use std::env;
@@ -60,6 +63,9 @@ enum Commands {
         /// Include sandbox/security checks.
         #[arg(long)]
         security: bool,
+        /// Emit JSON for programmatic consumers (Web UI).
+        #[arg(long)]
+        json: bool,
     },
     /// Show cache hit rate and token stats.
     Stats,
@@ -78,6 +84,27 @@ enum Commands {
     },
     /// Start the API server.
     Serve,
+    /// Start engine + API server (+ optional Web UI).
+    Start {
+        /// Also launch the Next.js Web UI.
+        #[arg(long)]
+        web: bool,
+        /// Rust API server port.
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        /// Python engine port.
+        #[arg(long, default_value_t = 9090)]
+        engine_port: u16,
+        /// Web UI port (with --web).
+        #[arg(long, default_value_t = 3000)]
+        web_port: u16,
+    },
+    /// Interactive first-time setup wizard.
+    Setup {
+        /// Non-interactive defaults only.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Show current configuration.
     Config,
 }
@@ -108,6 +135,11 @@ fn apply_config_env(config: &Config) {
     if config.agent.enable_planner {
         std::env::set_var("LIKECODEX_ENABLE_PLANNER", "true");
     }
+    std::env::set_var("LIKECODEX_TOKEN_MODE", &config.agent.token_mode);
+    std::env::set_var(
+        "LIKECODEX_ENABLE_MCP",
+        if config.mcp.enabled { "true" } else { "false" },
+    );
     if let Some(model) = &config.agent.planner_model {
         std::env::set_var("LIKECODEX_PLANNER_MODEL", model);
     }
@@ -353,63 +385,26 @@ fn print_cache_summary(cache: &Value) {
     );
 }
 
-async fn cmd_doctor(client: &Client, url: &str, security: bool) -> Result<()> {
-    println!("LikeCodex Doctor\n");
-
-    println!("[ok] likecodex CLI {}", env!("CARGO_PKG_VERSION"));
-
-    match Command::new("uv").arg("--version").output() {
-        Ok(out) if out.status.success() => {
-            println!("[ok] uv {}", String::from_utf8_lossy(&out.stdout).trim());
-        }
-        _ => println!("[warn] uv not found — install from https://docs.astral.sh/uv/"),
-    }
-
-    match Command::new("python").arg("--version").output() {
-        Ok(out) if out.status.success() => {
-            println!(
-                "[ok] python {}",
-                String::from_utf8_lossy(&out.stdout).trim()
-            );
-        }
-        _ => println!("[warn] python not found in PATH"),
-    }
-
-    match Command::new("git").arg("--version").output() {
-        Ok(out) if out.status.success() => {
-            println!("[ok] {}", String::from_utf8_lossy(&out.stdout).trim());
-        }
-        _ => println!("[warn] git not found in PATH (checkpoints/rewind still work without it)"),
-    }
-
-    if std::env::var("DEEPSEEK_API_KEY").is_ok() || std::env::var("LIKECODEX_LLM_API_KEY").is_ok() {
-        println!("[ok] DeepSeek API key configured");
-    } else {
-        println!("[warn] DEEPSEEK_API_KEY not set");
-    }
-
-    match client.get(format!("{url}/health")).send().await {
-        Ok(resp) if resp.status().is_success() => println!("[ok] engine reachable at {url}"),
-        Ok(resp) => println!("[warn] engine at {url} returned {}", resp.status()),
-        Err(e) => println!("[warn] engine not reachable at {url}: {e}"),
-    }
-
-    if security {
-        match Command::new("docker").args(["images", "-q", "likecodex/sandbox"]).output() {
-            Ok(out) if out.status.success() && !out.stdout.is_empty() => {
-                println!("[ok] sandbox image likecodex/sandbox present");
-            }
-            _ => println!(
-                "[warn] sandbox image missing — run: docker build -t likecodex/sandbox:latest docker/sandbox"
-            ),
-        }
-        println!(
-            "[info] approval mode: {}",
-            env::var("LIKECODEX_APPROVAL_MODE").unwrap_or_else(|_| "auto".into())
-        );
-    }
-
-    Ok(())
+async fn cmd_doctor(
+    client: &Client,
+    config: &Config,
+    engine_url: &str,
+    security: bool,
+    json: bool,
+) -> Result<()> {
+    let server_port = config.server.port;
+    let server_url = format!("http://127.0.0.1:{server_port}");
+    let web_url = "http://127.0.0.1:3000".to_string();
+    doctor::run_doctor(
+        client,
+        config,
+        engine_url,
+        &server_url,
+        &web_url,
+        security,
+        json,
+    )
+    .await
 }
 
 async fn cmd_stats(client: &Client, url: &str) -> Result<()> {
@@ -510,24 +505,77 @@ async fn main() -> Result<()> {
 
     let client = Client::new();
     let engine_url = engine_url(&cli);
-    let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
 
     if let Some(p) = &cli.prompt {
+        let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
         info!(prompt = %p, engine_url = %engine_url, "running one-shot prompt");
         run_prompt(&client, &engine_url, p).await?;
         return Ok(());
     }
 
     match cli.command {
+        Some(Commands::Setup { yes }) => {
+            let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            setup::run_setup(&cwd, yes).await
+        }
+        Some(Commands::Start {
+            web,
+            port,
+            engine_port,
+            web_port,
+        }) => {
+            let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let mut cfg = config;
+            cfg.server.port = port;
+            apply_config_env(&cfg);
+            std::env::set_var(
+                "LIKECODEX_ENGINE_URL",
+                format!("http://127.0.0.1:{engine_port}"),
+            );
+            let stack = supervisor::StackSupervisor::start(
+                &client,
+                &cwd,
+                &cfg,
+                supervisor::StartOptions {
+                    web,
+                    server_port: port,
+                    engine_port,
+                    web_port,
+                },
+            )
+            .await?;
+            stack.wait_for_shutdown().await
+        }
+        Some(Commands::Doctor { security, json }) => {
+            cmd_doctor(&client, &config, &engine_url, security, json).await
+        }
+        Some(Commands::Serve) => {
+            let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
+            let status = Command::new("cargo")
+                .args(["run", "-p", "likecodex-server"])
+                .status()
+                .context("failed to spawn likecodex-server")?;
+            if !status.success() {
+                anyhow::bail!("likecodex-server exited with {status}");
+            }
+            Ok(())
+        }
+        Some(Commands::Config) => {
+            println!("{}", serde_json::to_string_pretty(&config.redacted())?);
+            Ok(())
+        }
         Some(Commands::Code) | Some(Commands::Interactive) | None => {
+            let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
             info!(engine_url = %engine_url, "starting TUI session");
             tui::run_tui(client, engine_url).await
         }
         Some(Commands::Run { prompt: cmd_prompt }) => {
+            let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
             run_prompt(&client, &engine_url, &cmd_prompt).await?;
             Ok(())
         }
         Some(Commands::Chat { prompt }) => {
+            let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
             if let Some(p) = prompt {
                 chat_stream(&client, &engine_url, &p, true).await?;
             } else {
@@ -550,23 +598,17 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Some(Commands::Doctor { security }) => cmd_doctor(&client, &engine_url, security).await,
-        Some(Commands::Stats) => cmd_stats(&client, &engine_url).await,
-        Some(Commands::Sessions { action }) => cmd_sessions(&client, &engine_url, action).await,
-        Some(Commands::Rewind { id, list }) => cmd_rewind(&client, &engine_url, id, list).await,
-        Some(Commands::Serve) => {
-            let status = Command::new("cargo")
-                .args(["run", "-p", "likecodex-server"])
-                .status()
-                .context("failed to spawn likecodex-server")?;
-            if !status.success() {
-                anyhow::bail!("likecodex-server exited with {status}");
-            }
-            Ok(())
+        Some(Commands::Stats) => {
+            let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
+            cmd_stats(&client, &engine_url).await
         }
-        Some(Commands::Config) => {
-            println!("{}", serde_json::to_string_pretty(&config.redacted())?);
-            Ok(())
+        Some(Commands::Sessions { action }) => {
+            let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
+            cmd_sessions(&client, &engine_url, action).await
+        }
+        Some(Commands::Rewind { id, list }) => {
+            let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
+            cmd_rewind(&client, &engine_url, id, list).await
         }
     }
 }
