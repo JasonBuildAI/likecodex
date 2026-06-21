@@ -6,7 +6,9 @@
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![Node.js 20+](https://img.shields.io/badge/node.js-20+-green.svg)](https://nodejs.org/)
 
-**LikeCodex** is an open-source coding agent powered by **DeepSeek V4**. It combines a **Rust control plane** (CLI, HTTP API, sandbox execution) with a **Python agent engine** (LLM loop, tools, planning, memory) and a **Next.js web UI** — optimized for **DeepSeek context cache hit rate** to reduce API cost on multi-turn tool loops.
+**LikeCodex** is an open-source **coding agent** powered by **DeepSeek V4**. You describe a task in natural language; the agent reads your codebase, runs commands, edits files, and reports back — with optional human approval for risky operations.
+
+Unlike a thin LLM wrapper or a monolithic Python app, LikeCodex uses a **deliberate split architecture**: Rust for control, safety, and I/O; Python for agent intelligence; Next.js for a rich browser UI. The entire system is tuned for **DeepSeek prefix caching** so multi-turn tool loops stay fast and cheap.
 
 **[中文文档 README.zh-CN.md](README.zh-CN.md)**
 
@@ -14,505 +16,460 @@
 
 ## Table of Contents
 
-- [What Is LikeCodex?](#what-is-likecodex)
-- [Architecture](#architecture)
-  - [Design Philosophy](#design-philosophy)
-  - [Four-Layer Model](#four-layer-model)
-  - [Runtime Topology](#runtime-topology)
-  - [Component Map](#component-map)
-  - [End-to-End Request Flow](#end-to-end-request-flow)
-  - [Agent Loop (Python Engine)](#agent-loop-python-engine)
-  - [Event Protocol (SSE)](#event-protocol-sse)
-  - [Cache-First Context Model](#cache-first-context-model)
-  - [Security and Execution Routing](#security-and-execution-routing)
-- [Features](#features)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
+- [What Problem Does LikeCodex Solve?](#what-problem-does-likecodex-solve)
+- [Core Design Principles](#core-design-principles)
+- [Architecture at a Glance](#architecture-at-a-glance)
+- [The Four Layers](#the-four-layers)
+- [How a Task Runs End-to-End](#how-a-task-runs-end-to-end)
+- [The Agent Loop (Heart of the System)](#the-agent-loop-heart-of-the-system)
+- [Cache-First Context (Why LikeCodex Is Different)](#cache-first-context-why-likecodex-is-different)
+- [Planning, Sub-Agents, and Skills](#planning-sub-agents-and-skills)
+- [Security and Execution Routing](#security-and-execution-routing)
+- [Event Protocol (One Stream for All Clients)](#event-protocol-one-stream-for-all-clients)
 - [Quick Start](#quick-start)
-- [Usage](#usage)
-- [Built-in Tools](#built-in-tools)
 - [Configuration](#configuration)
-- [Development](#development)
-- [Testing](#testing)
+- [Built-in Tools](#built-in-tools)
 - [Project Layout](#project-layout)
 - [Documentation](#documentation)
-- [Roadmap](#roadmap)
-- [Contributing & License](#contributing--license)
+- [License](#license)
 
 ---
 
-## What Is LikeCodex?
+## What Problem Does LikeCodex Solve?
 
-LikeCodex helps you **edit, run, and understand code** through natural language. You describe a task; the agent reads files, runs commands, writes patches, and reports back — with optional human approval for risky operations.
+Programming agents need to do three hard things at once:
 
-Most coding agents are either:
+1. **Reason** — break a vague request into steps, call tools, recover from errors.
+2. **Act safely** — read/write files and run shell commands without destroying your machine.
+3. **Stay usable** — stream progress to terminal and browser, ask permission when needed, resume sessions.
 
-- a **thin CLI wrapper** around an LLM API, or
-- a **monolithic Python app** where UI, security, and agent logic are tangled together.
+Most tools pick one stack and compromise on the others. LikeCodex separates concerns:
 
-LikeCodex deliberately **splits responsibilities**:
+| Concern | Layer | Language | Why here |
+|---------|-------|----------|----------|
+| User interfaces | CLI, TUI, Web | Rust + TypeScript | Fast startup, rich UX |
+| HTTP bridge, SSE, sandbox gateway | Control plane | Rust | Safe I/O, one event bus |
+| LLM loop, tools, planning, memory | Agent engine | Python | Rapid iteration on agent logic |
+| Shell/git execution, Docker isolation | Execution | Rust | Path confinement, low overhead |
 
-| Concern | Where it lives | Why |
-|---------|----------------|-----|
-| Fast, safe shell/git execution | Rust | Path confinement, sandbox routing, low overhead |
-| Agent logic iteration | Python | Tool loop, LLM providers, planning, compaction |
-| Unified UX for CLI + Web | Rust server + SSE events | One event schema for all clients |
-| Rich browser UI | Next.js | Chat, diffs, permissions, session history |
-
-**Default LLM:** DeepSeek V4 (`deepseek-v4-flash` or `deepseek-v4-pro`) via OpenAI-compatible API.
-
----
-
-## Architecture
-
-### Design Philosophy
-
-1. **Separation of control and intelligence** — Rust handles I/O, HTTP, permissions broadcast, and command execution; Python handles reasoning and tool orchestration.
-2. **One event stream for all clients** — CLI, TUI, and Web subscribe to the same normalized SSE events from `likecodex-server`.
-3. **Cache stability as a first-class invariant** — context is structured so DeepSeek prefix caching stays hot across tool-loop turns (see [Cache-First Context Model](#cache-first-context-model)).
-4. **Defense in depth** — path confinement, risk-based command routing, user approval, and optional Docker sandbox.
+**Default model:** `deepseek-v4-flash` via [DeepSeek OpenAI-compatible API](https://api.deepseek.com). Optional planner model: `deepseek-v4-pro`.
 
 ---
 
-### Four-Layer Model
+## Core Design Principles
+
+### 1. Separation of control and intelligence
+
+Rust never calls the LLM. Python never spawns Docker directly from arbitrary user input without going through permission checks. Each layer has a narrow job:
+
+- **Rust** — HTTP, SSE broadcast, session proxy, local/sandbox execution, config loading.
+- **Python** — `AgentLoop`, tool registry, context assembly, compaction, LLM streaming.
+
+This lets you change agent behavior (Python) without rewriting the security boundary (Rust).
+
+### 2. One event stream for every client
+
+CLI, TUI, and Web all consume the **same SSE event schema** from `likecodex-server`. Python emits raw stream chunks; Rust normalizes them in `event_mapping.rs`. You see the same tool cards, permission prompts, and retry notices everywhere.
+
+### 3. Cache stability as a first-class invariant
+
+DeepSeek **automatic context caching** only hits when the prompt prefix (from token 0) is **byte-identical** across turns. LikeCodex structures every conversation as:
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│ LAYER 1 — INTERFACES (how you talk to LikeCodex)                        │
-│   • likecodex-cli     one-shot / REPL / Ratatui TUI                     │
-│   • web/              Next.js three-column UI (:3000)                    │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │  HTTP + SSE
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ LAYER 2 — CONTROL PLANE (likecodex-server, :8080)                       │
-│   • Forward /tasks, /chat, /run, /plan to Python engine                 │
-│   • Broadcast normalized events on GET /events                          │
-│   • Permission API + session persistence proxy                          │
-│   • POST /execute → Docker sandbox or local executor                    │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │  HTTP (engine bridge)
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ LAYER 3 — AGENT ENGINE (likecodex-engine, :9090)                        │
-│   • AgentLoop — multi-turn LLM ↔ tool cycle                             │
-│   • ToolRegistry — filesystem, shell, git, search, MCP, …              │
-│   • ContextManager — cache-first prompt assembly + compaction            │
-│   • Permissions — policy + approval modes                               │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │  tool calls
-┌───────────────────────────────▼─────────────────────────────────────────┐
-│ LAYER 4 — EXECUTION (Rust)                                              │
-│   • likecodex-executor   local shell/git with working-dir limits        │
-│   • likecodex-sandbox    Docker-isolated commands                       │
-│   • likecodex-indexer    filename / code graph search helpers           │
-└─────────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-                    DeepSeek V4 API (OpenAI-compatible)
+┌─────────────────────────────────────┐
+│ IMMUTABLE PREFIX  (never rewritten) │  system.md + skills + tool schemas
+├─────────────────────────────────────┤
+│ APPEND-ONLY LOG   (grows forward)   │  user → assistant → tool → …
+├─────────────────────────────────────┤
+│ VOLATILE SCRATCH  (never sent)      │  debug, raw planner dumps
+└─────────────────────────────────────┘
 ```
+
+This is not an optimization bolt-on — it shapes how sessions, compaction, planner isolation, and tool JSON serialization work. See [Cache-First Context](#cache-first-context-why-likecodex-is-different).
+
+### 4. Defense in depth
+
+File tools are confined to the workspace. Shell commands are risk-classified. Approval modes gate writes and execution. High-risk commands can route to a **Docker sandbox**. Checkpoints snapshot files before writes so you can rewind.
 
 ---
 
-### Runtime Topology
+## Architecture at a Glance
 
-When you run `scripts/dev.sh` or `scripts/dev.ps1`, three processes start:
+```mermaid
+flowchart TB
+  subgraph L1 [Layer 1 — Interfaces]
+    CLI["likecodex-cli\none-shot / TUI"]
+    WEB["Next.js Web UI\n:3000"]
+  end
 
-| Process | Port | Package | Role |
-|---------|------|---------|------|
-| Python engine | **9090** | `likecodex-engine` | Agent brain — loop, tools, LLM |
-| Rust API server | **8080** | `likecodex-server` | Bridge, SSE bus, sandbox gateway |
-| Next.js dev server | **3000** | `web/` | Browser UI (proxies API in dev) |
+  subgraph L2 [Layer 2 — Control Plane :8080]
+    SRV["likecodex-server\nAxum HTTP + SSE EventBus"]
+    EXEC["likecodex-executor"]
+    SBX["likecodex-sandbox"]
+    IDX["likecodex-indexer"]
+  end
 
-**Health checks:**
+  subgraph L3 [Layer 3 — Agent Engine :9090]
+    LOOP["AgentLoop"]
+    TOOLS["ToolRegistry"]
+    CTX["ContextManager\n cache-first"]
+    PERM["PermissionEvaluator"]
+  end
+
+  subgraph L4 [External]
+    DS["DeepSeek V4 API"]
+    MCP["MCP servers\noptional plugins"]
+  end
+
+  CLI -->|HTTP direct or via bridge| SRV
+  WEB -->|"/api" proxy| SRV
+  SRV -->|forward /tasks /chat| LOOP
+  SRV --> EXEC
+  SRV --> SBX
+  SRV --> IDX
+  LOOP --> TOOLS
+  LOOP --> CTX
+  LOOP --> PERM
+  LOOP -->|stream + tools| DS
+  TOOLS --> MCP
+  TOOLS --> EXEC
+  TOOLS --> SBX
+```
+
+**Daily startup** (recommended):
 
 ```bash
-curl http://127.0.0.1:9090/health   # Python engine
-curl http://127.0.0.1:8080/health   # Rust server
+likecodex setup          # first time: API key, config, LIKECODEX.md
+likecodex start --web    # engine :9090 + server :8080 + web :3000
+likecodex code           # terminal-only TUI
 ```
 
-The CLI can talk **directly** to the Python engine (`--engine-url`) or through the Rust server (Web path).
+Contributors can still use `scripts/dev.sh` / `scripts/dev.ps1` for hot reload.
 
 ---
 
-### Component Map
+## The Four Layers
 
-#### Rust workspace (`crates/`)
+### Layer 1 — Interfaces
 
-| Crate | Responsibility |
-|-------|----------------|
-| **likecodex-core** | Shared types: `Config`, `Event`, `Task`, permission models, event bus |
-| **likecodex-cli** | Terminal entry: one-shot runs, REPL, Ratatui TUI, optional engine auto-start |
-| **likecodex-server** | Axum HTTP server: engine bridge, SSE `/events`, `/execute`, sessions API |
-| **likecodex-executor** | Runs shell/git locally inside configured working directory |
-| **likecodex-sandbox** | Spawns Docker containers for high-risk commands |
-| **likecodex-indexer** | File index and code-graph search (Tree-sitter integration planned) |
+| Component | Entry | Role |
+|-----------|-------|------|
+| **likecodex-cli** | `likecodex`, `likecodex code`, `likecodex start` | One-shot runs, Ratatui TUI, stack supervisor, `setup` / `doctor` |
+| **web/** | http://127.0.0.1:3000 | Three-column UI: sessions / chat / diff; permission modal; session resume |
 
-#### Python engine (`packages/likecodex-engine/`)
+The CLI can talk **directly** to the Python engine (`--engine-url http://127.0.0.1:9090`) or through the Rust server (same path as Web).
 
-| Module | Responsibility |
-|--------|----------------|
-| **agent/loop.py** | Core agent loop: stream LLM → parse tool calls → execute → repeat |
-| **agent/planner.py** | Optional step-by-step plan before execution |
-| **agent/coordinator.py** | Dual-model handoff (planner Pro → executor Flash) |
-| **agent/subagent*.py** | Delegate subtasks to focused child agent runs |
-| **agent/guards.py** | Loop/storm/repeat guards, empty-final protection |
-| **agent/plan_mode.py** | Restrict tools while in read-only planning |
-| **tools/** | Built-in tools: filesystem, shell, git, grep, LSP, review, MCP, … |
-| **llm/deepseek.py** | DeepSeek V4 provider with cache usage metrics |
-| **context/** | Cache-first prompt assembly, compaction, pruning |
-| **permissions/** | Approval modes, policy rules, risk classification |
-| **persistence/** | SQLite sessions + JSONL event history |
-| **memory/** | Optional vector memory (`.likecodex/memory.jsonl`) |
+### Layer 2 — Control plane (`likecodex-server`)
 
-#### Web UI (`web/`)
+Rust Axum server on **port 8080**. Responsibilities:
 
-| Area | Responsibility |
-|------|----------------|
-| **src/app/page.tsx** | Three-column layout: timeline / chat / diff |
-| **src/lib/api.ts** | HTTP client + SSE parser (`parseRustEvent`) |
-| **src/lib/store.ts** | Zustand state: messages, tasks, permissions, diffs |
+- **Engine bridge** — forward `POST /tasks`, `/chat`, `/run`, `/plan` to Python `:9090`.
+- **Event bus** — `GET /events` SSE stream for all clients.
+- **Permissions API** — `GET /permissions/pending`, `POST /permissions/{id}/respond`.
+- **Execution gateway** — `POST /execute` → local executor or Docker sandbox.
+- **Health & diagnostics** — `/health`, `/doctor`, `/config`, `/metrics` (proxied from engine).
+
+Key crates:
+
+| Crate | Purpose |
+|-------|---------|
+| `likecodex-core` | Shared `Config`, `Event`, `Task`, event bus types |
+| `likecodex-server` | HTTP server + engine bridge + SSE mapping |
+| `likecodex-executor` | Local shell/git inside working directory |
+| `likecodex-sandbox` | Docker-isolated command execution |
+| `likecodex-indexer` | File index + CodeGraph search helpers |
+
+### Layer 3 — Agent engine (`likecodex-engine`)
+
+Python aiohttp server on **port 9090**. This is the **brain**:
+
+| Module | Purpose |
+|--------|---------|
+| `agent/loop.py` | Core loop: LLM → tool calls → results → repeat |
+| `agent/coordinator.py` | Dual-model: Pro planner session → Flash executor session |
+| `agent/planner.py` | Optional JSON step planner for complex tasks |
+| `agent/guards.py` | Loop/storm/repeat guards, empty-final protection |
+| `agent/plan_mode.py` | Read-only mode: blocks writes until plan approved |
+| `agent/checkpoints.py` | Snapshot files before write tools; rewind support |
+| `tools/registry.py` | 40+ built-in tools + MCP + economy mode |
+| `context/cache_first.py` | Immutable prefix + append-only log |
+| `context/compaction.py` | Summarize tail when context nears limit |
+| `llm/deepseek.py` | Streaming, cache token metrics, thinking mode |
+| `permissions/` | Approval modes + allow/ask/deny policy rules |
+| `persistence/` | SQLite sessions + JSONL event history |
+| `mcp/` | Persistent stdio MCP clients, `.mcp.json` discovery |
+| `skills/` | Markdown playbooks (`explore`, `review`, …) |
+
+### Layer 4 — External services
+
+- **DeepSeek V4** — LLM inference (OpenAI-compatible `/chat/completions`).
+- **MCP servers** — optional plugins (fetch, filesystem, custom tools) via stdio JSON-RPC.
+- **Docker** — optional sandbox image `likecodex/sandbox:latest`.
 
 ---
 
-### End-to-End Request Flow
+## How a Task Runs End-to-End
 
-Example: user sends *"Add unit tests for utils.py"* in the Web UI.
+Example: *"Add unit tests for `utils.py` and run them"* from the Web UI.
 
 ```text
-  Browser                Rust Server (:8080)          Python Engine (:9090)         DeepSeek API
-     │                          │                            │                          │
-     │  POST /tasks             │                            │                          │
-     │ ───────────────────────► │  POST /tasks (forward)     │                          │
-     │                          │ ─────────────────────────► │                          │
-     │                          │                            │  AgentLoop.run()         │
-     │                          │                            │ ────────────────────────►│
-     │                          │                            │ ◄────────────────────────│ tool_calls
-     │                          │                            │                          │
-     │                          │                            │  read_file / write_file  │
-     │                          │                            │  run_command (maybe)     │
-     │                          │ ◄── engine SSE chunks ──── │                          │
-     │                          │  map_engine_output()       │                          │
-     │  GET /events (SSE)       │  EventBus.emit()           │                          │
-     │ ◄─────────────────────── │                            │                          │
-     │  stream_chunk            │                            │                          │
-     │  tool_call_requested     │                            │                          │
-     │  permission_requested?   │                            │                          │
-     │  task_completed          │                            │                          │
+ Browser          Rust Server :8080       Python Engine :9090        DeepSeek
+    │                    │                       │                      │
+    │ POST /tasks        │                       │                      │
+    │───────────────────►│ POST /tasks (forward) │                      │
+    │                    │──────────────────────►│ AgentLoop.run()      │
+    │                    │                       │─────────────────────►│
+    │                    │                       │◄─────────────────────│ tool_calls
+    │                    │                       │ read_file, edit_file │
+    │                    │                       │ run_command          │
+    │                    │◄── stream chunks ─────│                      │
+    │                    │ map → EventBus        │                      │
+    │ GET /events (SSE)  │                       │                      │
+    │◄───────────────────│ stream_chunk          │                      │
+    │                    │ tool_call_requested   │                      │
+    │                    │ permission_requested? │                      │
+    │                    │ task_completed        │                      │
 ```
 
 **Step by step:**
 
-1. **Web/CLI** sends `POST /tasks` or `POST /chat` to Rust server with `{ "prompt": "...", "session_id": "..." }`.
-2. **Rust server** creates a client-visible `task_id`, emits `task_started`, and forwards to Python `/tasks` or `/chat`.
-3. **Python engine** runs `AgentLoop`:
-   - Builds messages from cache-first context (static system prefix + history).
-   - Calls DeepSeek with tool schemas.
-   - Executes tool calls (possibly in parallel for read-only tools).
-   - Streams assistant deltas and tool events.
-4. **High-risk shell** (`run_command`) may route to Rust `POST /execute` → Docker sandbox (depends on approval mode).
-5. **Rust server** maps flat Python output objects → typed `Event` values → broadcasts on `/events`.
-6. **Web/CLI** renders streaming text, tool cards, permission modals, and file diffs.
+1. Client sends `{ "prompt": "...", "session_id": "..." }` to Rust `POST /tasks` (or Python `POST /run` for sync CLI).
+2. Rust creates a client-visible `task_id`, emits `task_started`, forwards to Python.
+3. Python **AgentLoop** builds cache-first context, calls DeepSeek with sorted tool schemas.
+4. Model returns tool calls → **permission check** → execute (parallel if read-only).
+5. Tool results append to history → loop until model returns text-only final answer.
+6. Rust maps Python output → typed SSE events → all subscribed clients update in real time.
+7. If permission needed (`auto` mode), client calls `POST /permissions/{id}/respond`; engine resumes.
 
-For permission prompts in `auto` mode, the client calls `POST /permissions/{id}/respond`; the engine resumes the blocked tool call.
+Session continuity: reuse `session_id` to keep the same immutable prefix hot for cache hits.
 
 ---
 
-### Agent Loop (Python Engine)
+## The Agent Loop (Heart of the System)
 
-The heart of LikeCodex is `AgentLoop` in `packages/likecodex-engine/likecodex_engine/agent/loop.py`:
+`AgentLoop` in `packages/likecodex-engine/likecodex_engine/agent/loop.py` implements:
 
 ```text
-┌──────────────┐
-│ User prompt  │
-└──────┬───────┘
-       ▼
-┌──────────────────────────────────────┐
-│ Build context (CacheFirstContext)    │
-│   SYSTEM prefix + history + [Context]│
-└──────┬───────────────────────────────┘
-       ▼
-┌──────────────────────────────────────┐
-│ LLM.complete / stream (DeepSeek V4)  │
-└──────┬───────────────────────────────┘
-       │
-       ├── text only ──► final answer ──► done
-       │
-       └── tool_calls ──► permission check
-                │
-                ├── denied ──► error to model ──► retry loop
-                │
-                └── allowed ──► execute tools (local / sandbox)
-                         │
-                         └── append tool results ──► loop again
+         ┌─────────────┐
+         │ User prompt │
+         └──────┬──────┘
+                ▼
+    ┌───────────────────────────┐
+    │ Build context (cache-first)│
+    └─────────────┬─────────────┘
+                  ▼
+    ┌───────────────────────────┐
+    │ Stream LLM turn (DeepSeek) │
+    └─────────────┬─────────────┘
+                  │
+      ┌───────────┴───────────┐
+      │                       │
+  text only              tool_calls
+      │                       │
+      ▼                       ▼
+  final answer          permission gate
+  (+ readiness check)         │
+                         allowed → checkpoint (writes)
+                              → execute tools
+                              → append results
+                              → loop (max 50 steps)
 ```
 
 **Notable behaviors:**
 
-- **Guards** — detects infinite loops, repeated failures, storm of tool calls.
-- **Compaction** — when context nears token limit, summarizes tail while preserving SYSTEM prefix.
-- **Sub-agents** — `task` tool spawns isolated runs with separate context.
-- **Checkpoints** — snapshots files before write tools; `/rewind` restores state.
-- **Plan mode** — blocks mutating tools until user exits planning.
+| Mechanism | What it does |
+|-----------|--------------|
+| **Parallel dispatch** | Consecutive read-only tools run concurrently |
+| **Guards** | Detect infinite loops, tool storms, repeated identical successes |
+| **Stream recovery** | One retry on interrupted SSE; preserve partial assistant text |
+| **Compaction** | When context exceeds ~80% of window, summarize tail; prefix unchanged |
+| **Evidence ledger** | Track todo/step completion with verification commands |
+| **Checkpoints** | Snapshot workspace before `write_file` / `edit_file`; `likecodex rewind` |
+| **Plan mode** | Read-only tools only until user approves plan exit |
 
 ---
 
-### Event Protocol (SSE)
+## Cache-First Context (Why LikeCodex Is Different)
 
-All clients consume **adjacently tagged JSON** on `GET /events`:
+Most agents treat the prompt as a growing chat blob. LikeCodex treats it as a **structured document** with strict regions ([full spec](docs/SPEC-CACHE.md)).
 
-```json
-{"type":"stream_chunk","payload":{"task_id":"…","content":"partial text"}}
-{"type":"tool_call_requested","payload":{"task_id":"…","call":{"id":"…","name":"read_file","arguments":{…}}}}
-{"type":"permission_requested","payload":{"task_id":"…","request":{…}}}
-{"type":"task_completed","payload":{"id":"…","status":"completed"}}
-```
+**Why it matters:** A 20-turn tool loop without caching resends the entire system prompt + tool schemas every turn. With DeepSeek prefix caching, turns 2–N reuse cached tokens at a fraction of the cost — but only if bytes 0…N never change.
 
-Python emits flat objects like `{"type":"assistant","content":"…"}`; **`likecodex-server`** maps them to structured events via `event_mapping.rs` so CLI, TUI, and Web stay in sync.
+**How LikeCodex achieves this:**
 
-Full schema: [docs/EVENTS.md](docs/EVENTS.md)
-
----
-
-### Cache-First Context Model
-
-DeepSeek **automatic context caching** requires the prompt prefix (from token 0) to be **byte-identical** across turns. LikeCodex treats cache stability as a design invariant.
-
-```text
-┌─────────────────────────────────────────┐
-│ IMMUTABLE PREFIX (never changes mid-session) │
-│   system.md + skills + project memory   │
-│   + sorted tool JSON schemas            │
-├─────────────────────────────────────────┤
-│ APPEND-ONLY LOG                         │
-│   user → assistant → tool → …           │
-├─────────────────────────────────────────┤
-│ VOLATILE SCRATCH (not sent to API)      │
-│   planner raw output, debug traces      │
-└─────────────────────────────────────────┘
-```
-
-| Technique | Purpose |
-|-----------|---------|
+| Technique | Effect |
+|-----------|--------|
 | Versioned `system.md` (>1024 tokens) | Stable SYSTEM message |
-| Sorted tool schema keys | Deterministic `tools` parameter |
-| `[Context]` USER messages at tail | Dynamic memory without touching prefix |
-| Session reuse via `session_id` | Same `ContextManager` across HTTP requests |
-| Tail-only compaction | Trim history without editing SYSTEM block |
+| Deterministic sorted tool JSON schemas | Stable `tools` API parameter |
+| Skills index in prefix, bodies on demand | Stable skill listing |
+| `LIKECODEX.md` / project memory in prefix | Project context without mid-session edits |
+| `[Context]` USER blocks at tail | Dynamic data without touching prefix |
+| Separate planner session | Pro planner never pollutes Flash executor cache |
+| Raw tool call JSON persistence | No re-serialization drift between turns |
+| Tail-only compaction | Trim history, never rewrite SYSTEM |
 
-Monitor cache metrics:
+**Monitor cache health:**
 
 ```bash
-curl http://127.0.0.1:9090/metrics
-curl http://127.0.0.1:8080/metrics
+curl http://127.0.0.1:9090/metrics   # engine
+curl http://127.0.0.1:8080/metrics   # server proxy
+likecodex stats
 ```
 
-Web UI header shows live cache hit %. Full spec: [docs/SPEC-CACHE.md](docs/SPEC-CACHE.md)
+Web UI header shows live cache hit percentage.
 
 ---
 
-### Security and Execution Routing
+## Planning, Sub-Agents, and Skills
 
-| Approval mode | Read tools | Write / medium shell | High-risk shell | Notes |
-|---------------|------------|----------------------|-----------------|-------|
-| `read-only` | Allowed | Blocked | Blocked | Safe analysis |
-| `auto` | Auto | User prompt | Docker sandbox | Default; fallback if Docker down |
-| `full-access` | Auto | Auto | Local | Trusted environments only |
-| `sandbox-required` | Auto | Sandbox only | Sandbox only | CI / untrusted prompts |
+### Dual-model coordinator
 
-**Layers:**
+For non-trivial tasks, LikeCodex can run **two isolated sessions**:
 
-- **Path confinement** — file/git tools cannot escape `LIKECODEX_WORKING_DIR`.
-- **Risk classifier** — shell commands tagged read / medium / high.
-- **Policy rules** — allow / ask / deny per tool in config.
-- **Docker sandbox** — isolated container with resource limits.
-- **API token** — optional Bearer auth on `POST /execute`.
-- **Config redaction** — secrets never returned from `/config`.
+1. **Planner** (`deepseek-v4-pro`) — read-only tools, produces structured plan.
+2. **Executor** (`deepseek-v4-flash`) — full tools, implements the plan.
+
+Separate sessions keep the executor prefix cache-stable while the planner explores freely.
+
+Enable: `LIKECODEX_ENABLE_PLANNER=true` or auto-detection via `coordinator.py`.
+
+### Sub-agents (`task` tool)
+
+Delegate focused subtasks to child agent runs with their own context. Supports `continue_from` / `fork_from` for transcript reuse. Meta-tools (`task`, `parallel_tasks`) are excluded from child agents to prevent recursion storms.
+
+### Skills
+
+Markdown playbooks in `.likecodex/skills/` or built-ins (`explore`, `review`, `test-after-edit`). Invoked via `run_skill`; index folded into cache-stable prefix.
+
+### MCP plugins
+
+External tools via [Model Context Protocol](https://modelcontextprotocol.io). Configured in `~/.likecodex/config.toml` or project `.mcp.json`. Persistent stdio sessions; tools named `mcp__<server>__<tool>`.
+
+### Token economy mode
+
+Set `[agent] token_mode = "economy"` to hide optional tools (MCP, LSP, skills, sub-agents) from the schema. Model calls `connect_tool_source(source)` to enable them on demand — keeps the prefix lean for long sessions.
+
+---
+
+## Security and Execution Routing
+
+| Approval mode | Reads | Writes | Shell (medium) | Shell (high-risk) |
+|---------------|-------|--------|----------------|-------------------|
+| `read-only` | ✓ | ✗ | ✗ | ✗ |
+| `auto` (default) | ✓ | prompt | prompt | Docker sandbox |
+| `full-access` | ✓ | ✓ | ✓ | local |
+| `sandbox-required` | ✓ | sandbox | sandbox | sandbox |
+
+**Layers of protection:**
+
+1. **Path confinement** — file/git tools cannot escape `LIKECODEX_WORKING_DIR`.
+2. **Risk classifier** — shell commands tagged read / medium / high.
+3. **Policy rules** — per-tool allow / ask / deny in config.
+4. **User approval** — SSE `permission_requested` → client responds.
+5. **Docker sandbox** — isolated container with CPU/memory limits.
+6. **API token** — optional Bearer auth on `POST /execute`.
+7. **Config redaction** — secrets never returned from `/config`.
 
 Details: [SECURITY.md](SECURITY.md)
 
 ---
 
-## Features
+## Event Protocol (One Stream for All Clients)
 
-### Interfaces
+All clients subscribe to `GET /events` on the Rust server. Events use adjacent JSON tagging:
 
-| Interface | Command / URL | Best for |
-|-----------|---------------|----------|
-| One-shot CLI | `cargo run -p likecodex-cli -- "prompt"` | Scripts, CI, quick tasks |
-| Interactive REPL | `likecodex interactive` | Lightweight terminal chat |
-| Ratatui TUI | `likecodex --tui` | Rich terminal with streaming |
-| Web UI | http://localhost:3000 | Chat, diffs, permissions, sessions |
-
-### Agent Capabilities
-
-- Multi-turn **tool-calling loop** with structured results
-- Optional **task planner** (`LIKECODEX_ENABLE_PLANNER=true`)
-- **Sub-agent orchestration** for delegated subtasks
-- **MCP integration** for external tool servers
-- **Session persistence** (SQLite + JSONL events)
-- **Vector memory** (optional `.likecodex/memory.jsonl`)
-- **Checkpoints & rewind** before destructive writes
-- **Slash commands** (`/compact`, `/init`, …)
-
-### Models (DeepSeek V4)
-
-| Model | Config | Notes |
-|-------|--------|-------|
-| `deepseek-v4-flash` | Default | Fast, lowest cost, best cache economics |
-| `deepseek-v4-pro` | Planner / hard tasks | Higher quality |
-
-Set `DEEPSEEK_API_KEY` or `LIKECODEX_LLM_API_KEY`. Enable thinking: `LIKECODEX_DEEPSEEK_THINKING=true`.
-
----
-
-## Prerequisites
-
-| Tool | Version | Purpose |
-|------|---------|---------|
-| [Rust](https://rustup.rs/) | 1.70+ | CLI, server, sandbox, executor |
-| [Python](https://www.python.org/) | 3.11+ | Agent engine |
-| [uv](https://github.com/astral-sh/uv) | latest | Python deps |
-| [Node.js](https://nodejs.org/) | 20+ | Web UI |
-| [Docker](https://www.docker.com/products/docker-desktop/) | optional | Sandbox execution |
-
-**Platform notes:**
-
-- **Windows:** use `scripts/dev.ps1`; Rust needs **MSVC Build Tools** — run `.\scripts\check-prerequisites.ps1`
-- **macOS / Linux:** use `scripts/dev.sh`
-- **Sandbox:** `docker build -t likecodex/sandbox:latest docker/sandbox`
-
----
-
-## Installation
-
-```bash
-git clone https://github.com/JasonBuildAI/likecodex.git
-cd likecodex
-
-uv sync --all-packages --extra dev
-cd web && npm install --legacy-peer-deps && cd ..
-cargo build --workspace
-
-cp .env.example .env
-# Edit .env — set DEEPSEEK_API_KEY
+```json
+{"type":"stream_chunk","payload":{"task_id":"…","content":"partial text"}}
+{"type":"tool_call_requested","payload":{"task_id":"…","call":{"name":"read_file",…}}}
+{"type":"permission_requested","payload":{"task_id":"…","request":{…}}}
+{"type":"stream_retrying","payload":{"task_id":"…","reason":"provider","attempt":1}}
+{"type":"task_completed","payload":{"id":"…","status":"completed"}}
 ```
 
-Create `~/.likecodex/config.toml` (see [Configuration](#configuration)).
+Python emits simpler flat objects; `likecodex-server/src/event_mapping.rs` normalizes them so CLI, TUI, and Web render identically.
+
+Full schema: [docs/EVENTS.md](docs/EVENTS.md)
 
 ---
 
 ## Quick Start
 
-### 1. Configure LLM
+### Prerequisites
 
-`~/.likecodex/config.toml`:
+| Tool | Version |
+|------|---------|
+| Rust | 1.70+ |
+| Python | 3.11+ |
+| uv | latest |
+| Node.js | 20+ (for Web UI) |
+| Docker | optional (sandbox) |
+
+### Install
+
+```bash
+git clone https://github.com/JasonBuildAI/likecodex.git
+cd likecodex
+uv sync --all-packages --extra dev
+cd web && npm install --legacy-peer-deps && cd ..
+cargo build --workspace
+```
+
+### Configure and run
+
+```bash
+likecodex setup                    # interactive wizard
+likecodex start --web              # full stack
+likecodex doctor                   # health check with fix hints
+
+# Or terminal only:
+likecodex code
+likecodex "fix the failing tests in src/"
+```
+
+Windows: install MSVC Build Tools first — `.\scripts\check-prerequisites.ps1`
+
+---
+
+## Configuration
+
+**Merge priority** (low → high):
+
+```text
+defaults → ~/.likecodex/config.toml → ancestor likecodex.toml → cwd likecodex.toml → env vars → CLI flags
+```
+
+Example `~/.likecodex/config.toml`:
 
 ```toml
 [llm]
 provider = "deepseek"
 model = "deepseek-v4-flash"
-api_key = "..."               # or DEEPSEEK_API_KEY in .env
+api_key = "..."                    # or DEEPSEEK_API_KEY env
 base_url = "https://api.deepseek.com"
-
-[deepseek]
-thinking = false
 
 [approval]
 mode = "auto"
+
+[agent]
+enable_planner = false
+token_mode = "full"                # or "economy"
+
+[mcp]
+enabled = false
+startup = "lazy"                   # or "eager"
+
+[server]
+port = 8080
 
 [sandbox]
 enabled = true
 image = "likecodex/sandbox:latest"
 allow_fallback = true
-
-[server]
-host = "127.0.0.1"
-port = 8080
-engine_url = "http://127.0.0.1:9090"
 ```
 
-### 2. Start (recommended)
+Project-level override: create `./likecodex.toml` in your repo root.
 
-```bash
-likecodex setup
-likecodex start --web    # opens API :8080 and Web :3000
-```
-
-### 2b. Dev stack (contributors)
-
-```bash
-./scripts/dev.sh          # macOS / Linux
-.\scripts\dev.ps1         # Windows
-```
-
-### 3. Run a task
-
-```bash
-likecodex "Create hello.py that prints 1..10 and run it"
-likecodex code            # TUI
-# or open http://localhost:3000 after `likecodex start --web`
-```
-
----
-
-## Usage
-
-### CLI & TUI
-
-```bash
-cargo run -p likecodex-cli -- "refactor the login module"
-cargo run -p likecodex-cli -- run "fix failing tests"
-cargo run -p likecodex-cli -- interactive
-cargo run -p likecodex-cli -- --tui
-cargo run -p likecodex-cli -- serve
-cargo run -p likecodex-cli -- config
-
-# Overrides
-cargo run -p likecodex-cli -- --approval read-only "analyze repo"
-cargo run -p likecodex-cli -- --engine-url http://127.0.0.1:9090 "prompt"
-```
-
-### Web UI
-
-Three columns: **sessions & tasks** | **streaming chat** | **file diff viewer**.
-
-Features: permission modal, live SSE, cache hit % in header, session history.
-
-### HTTP API
-
-**Rust server (`:8080`)** — primary entry for Web and integrations:
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check |
-| GET | `/config` | Redacted config |
-| POST | `/tasks` | Background agent task |
-| POST | `/chat` | Streaming chat (SSE) |
-| GET | `/events` | Global SSE event stream |
-| GET/POST | `/permissions/*` | Approval workflow |
-| POST | `/execute` | Sandbox command |
-| GET | `/sessions` | List sessions |
-
-**Python engine (`:9090`)** — direct CLI access or via bridge:
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/run` | Synchronous execution |
-| POST | `/chat` | Streaming SSE |
-| POST | `/plan` | Plan only |
-| POST | `/tasks` | Background task |
-| GET | `/metrics` | Cache metrics |
-
-Examples:
-
-```bash
-curl -X POST http://127.0.0.1:8080/tasks \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "List all Python files"}'
-
-curl -N http://127.0.0.1:8080/events
-```
-
-Full reference: [docs/API.md](docs/API.md)
+See [docs/USAGE.md](docs/USAGE.md) and [.env.example](.env.example).
 
 ---
 
@@ -520,74 +477,15 @@ Full reference: [docs/API.md](docs/API.md)
 
 | Category | Tools |
 |----------|-------|
-| Filesystem | `read_file`, `write_file`, `list_dir`, `search_files`, `edit_file` |
-| Shell | `run_command`, background job helpers |
-| Search | `grep_files`, `find_symbol`, `index_search`, LSP tools |
+| Filesystem | `read_file`, `write_file`, `edit_file`, `multi_edit`, `glob`, `ls`, `move_file` |
+| Shell | `run_command`, `bgjobs`, `bash_output`, `kill_shell`, `wait_job` |
+| Search | `grep_files`, `codegraph_*`, `code_index`, LSP tools |
 | Git | `git_status`, `git_diff`, `git_log`, `git_branch`, `git_commit` |
-| Review | `review_file`, `review_diff`, `check_dependencies` |
-| Agent | `task`, `parallel_tasks`, `remember` / `forget`, `todo` |
-
-Enable MCP: `LIKECODEX_ENABLE_MCP=true` + `[mcp.servers.*]` in config.
-
----
-
-## Configuration
-
-Priority (low → high): code defaults → `~/.likecodex/config.toml` → env vars → CLI flags.
-
-Key environment variables — see [.env.example](.env.example):
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DEEPSEEK_API_KEY` | — | API key |
-| `LIKECODEX_LLM_MODEL` | `deepseek-v4-flash` | Model |
-| `LIKECODEX_WORKING_DIR` | `.` | Agent workspace root |
-| `LIKECODEX_APPROVAL_MODE` | `auto` | Approval mode |
-| `LIKECODEX_ENABLE_PLANNER` | `false` | Task planner |
-| `LIKECODEX_SESSION_DB` | `.likecodex/sessions.db` | Session database |
-
----
-
-## Development
-
-```bash
-cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
-uv run ruff check packages/likecodex-engine tests
-cd web && npm run lint && npm run type-check
-
-# Run services individually
-uv run python -m likecodex_engine.server    # :9090
-cargo run -p likecodex-server                # :8080
-cd web && npm run dev                          # :3000
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
----
-
-## Testing
-
-```bash
-# Rust
-cargo test --workspace
-
-# Python (exclude integration unless Rust server is built)
-uv sync --all-packages --extra dev
-uv run pytest packages/likecodex-engine/tests tests -m "not integration" -v
-
-# Full-stack E2E (needs cargo build -p likecodex-server)
-uv run pytest tests/e2e/test_full_stack.py -m integration -v
-uv run python scripts/smoke_test.py
-
-# Web
-cd web && npm run test && npm run build
-
-# Benchmarks
-uv run python benchmarks/cache/run.py --turns 10 --simulate-cache
-uv run python benchmarks/agent/run.py --check
-```
-
-CI runs these on every push — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+| Web | `web_search`, `web_fetch` |
+| Agent meta | `task`, `parallel_tasks`, `run_skill`, `todo_write`, `complete_step` |
+| Memory | `remember`, `forget`, `memory_search`, `history` |
+| Economy | `connect_tool_source` (when `token_mode = "economy"`) |
+| MCP | `mcp__<server>__<tool>` (when configured) |
 
 ---
 
@@ -595,20 +493,26 @@ CI runs these on every push — see [`.github/workflows/ci.yml`](.github/workflo
 
 ```text
 likecodex/
-├── crates/                    # Rust workspace
-│   ├── likecodex-core/        # Shared types, config, events
-│   ├── likecodex-cli/         # CLI + TUI
-│   ├── likecodex-server/      # HTTP/SSE bridge
-│   ├── likecodex-executor/    # Local execution
-│   ├── likecodex-sandbox/     # Docker sandbox
-│   └── likecodex-indexer/     # File/code search
-├── packages/likecodex-engine/ # Python agent core
-├── web/                       # Next.js UI
-├── tests/                     # Integration & security tests
-├── scripts/                   # dev.sh, dev.ps1, smoke_test.py
-├── benchmarks/                # Cache & agent regression gates
-├── docs/                      # Architecture, API, events, cache spec
-└── docker/                    # Sandbox & server images
+├── crates/                      # Rust workspace
+│   ├── likecodex-core/          # Config, events, shared types
+│   ├── likecodex-cli/           # CLI, TUI, start/setup/doctor
+│   ├── likecodex-server/        # HTTP/SSE control plane
+│   ├── likecodex-executor/      # Local command execution
+│   ├── likecodex-sandbox/       # Docker sandbox
+│   └── likecodex-indexer/       # File + CodeGraph index
+├── packages/likecodex-engine/   # Python agent engine
+│   └── likecodex_engine/
+│       ├── agent/               # Loop, guards, planner, coordinator
+│       ├── tools/               # Tool registry + builtins
+│       ├── context/             # Cache-first context + compaction
+│       ├── llm/                 # DeepSeek provider + streaming
+│       ├── mcp/                 # MCP client + loader
+│       └── skills/              # Skill discovery + builtins
+├── web/                         # Next.js three-column UI
+├── docs/                        # Architecture, API, events, cache spec
+├── tests/                       # Integration + E2E
+├── benchmarks/                  # Cache + agent regression gates
+└── scripts/                     # dev.sh, dev.ps1, install, smoke_test
 ```
 
 ---
@@ -617,9 +521,10 @@ likecodex/
 
 | Document | Description |
 |----------|-------------|
-| [README.zh-CN.md](README.zh-CN.md) | Chinese documentation |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture deep dive |
-| [docs/SPEC-CACHE.md](docs/SPEC-CACHE.md) | Cache-first context spec |
+| [README.zh-CN.md](README.zh-CN.md) | 中文文档 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture reference |
+| [docs/SPEC-CACHE.md](docs/SPEC-CACHE.md) | Cache-first context specification |
+| [docs/SPEC-AGENT.md](docs/SPEC-AGENT.md) | Agent harness specification |
 | [docs/API.md](docs/API.md) | HTTP API reference |
 | [docs/EVENTS.md](docs/EVENTS.md) | SSE event schema |
 | [docs/USAGE.md](docs/USAGE.md) | Detailed usage guide |
@@ -628,20 +533,8 @@ likecodex/
 
 ---
 
-## Roadmap
+## License
 
-- [ ] Tree-sitter symbol indexing in `likecodex-indexer`
-- [ ] MCP SSE/WebSocket transports
-- [ ] Production deployment guides (Docker Compose, Kubernetes)
-- [ ] Plugin marketplace for custom tools
-- [ ] Additional LLM providers (Azure OpenAI, local Ollama)
-
----
-
-## Contributing & License
-
-Contributions welcome! Read [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
-
-Licensed under the [MIT License](LICENSE).
+MIT — see [LICENSE](LICENSE).
 
 Inspired by OpenAI Codex and the broader agentic coding ecosystem.
