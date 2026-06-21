@@ -29,6 +29,16 @@ export interface PermissionRequest {
   arguments?: Record<string, unknown>;
 }
 
+export interface AskRequest {
+  requestId: string;
+  questions: Array<{
+    header: string;
+    question: string;
+    options: Array<{ label: string; description?: string }>;
+    multiSelect?: boolean;
+  }>;
+}
+
 export interface PlanStep {
   id: string;
   description: string;
@@ -48,12 +58,16 @@ interface AppState {
   currentTaskId: string | null;
   isStreaming: boolean;
   pendingPermissions: PermissionRequest[];
+  pendingAskRequests: AskRequest[];
   planSteps: PlanStep[];
   activeDiff: { before: string; after: string } | null;
   sessions: SessionSummary[];
   config: Record<string, unknown>;
   cacheHitRate: number | null;
   currentSessionId: string | null;
+  planModeActive: boolean;
+  planModePendingExit: boolean;
+  collaborationMode: 'normal' | 'plan' | 'goal';
   setCacheHitRate: (rate: number | null) => void;
   addMessage: (message: Message) => void;
   appendToLastMessage: (content: string) => void;
@@ -64,6 +78,10 @@ interface AppState {
   setIsStreaming: (streaming: boolean) => void;
   addPendingPermission: (req: PermissionRequest) => void;
   removePendingPermission: (requestId: string) => void;
+  addPendingAsk: (req: AskRequest) => void;
+  removePendingAsk: (requestId: string) => void;
+  setPlanMode: (active: boolean, pendingExit?: boolean) => void;
+  setCollaborationMode: (mode: 'normal' | 'plan' | 'goal') => void;
   setPlanSteps: (steps: PlanStep[]) => void;
   updatePlanStep: (id: string, update: Partial<PlanStep>) => void;
   setActiveDiff: (diff: { before: string; after: string } | null) => void;
@@ -80,12 +98,16 @@ export const useAppStore = create<AppState>((set) => ({
   currentTaskId: null,
   isStreaming: false,
   pendingPermissions: [],
+  pendingAskRequests: [],
   planSteps: [],
   activeDiff: null,
   sessions: [],
   config: {},
   cacheHitRate: null,
   currentSessionId: null,
+  planModeActive: false,
+  planModePendingExit: false,
+  collaborationMode: 'normal',
   addMessage: (message) =>
     set((state) => ({ messages: [...state.messages, message] })),
   appendToLastMessage: (content) =>
@@ -153,6 +175,19 @@ export const useAppStore = create<AppState>((set) => ({
         (p) => p.requestId !== requestId
       ),
     })),
+  addPendingAsk: (req) =>
+    set((state) => ({
+      pendingAskRequests: [...state.pendingAskRequests, req],
+    })),
+  removePendingAsk: (requestId) =>
+    set((state) => ({
+      pendingAskRequests: state.pendingAskRequests.filter(
+        (p) => p.requestId !== requestId
+      ),
+    })),
+  setPlanMode: (active, pendingExit = false) =>
+    set({ planModeActive: active, planModePendingExit: pendingExit }),
+  setCollaborationMode: (mode) => set({ collaborationMode: mode }),
   setPlanSteps: (steps) => set({ planSteps: steps }),
   updatePlanStep: (id, update) =>
     set((state) => ({

@@ -114,6 +114,30 @@ describe('parseRustEvent', () => {
     expect(parsed.permission?.description).toBe('approved');
   });
 
+  it('parses plan_mode_changed', () => {
+    const parsed = parseRustEvent({
+      type: 'plan_mode_changed',
+      payload: { task_id: 't1', active: true, pending_exit: false, reason: 'enter' },
+    });
+    expect(parsed.kind).toBe('plan_mode_changed');
+    expect(parsed.planModeActive).toBe(true);
+    expect(parsed.planModePendingExit).toBe(false);
+  });
+
+  it('parses ask_requested', () => {
+    const parsed = parseRustEvent({
+      type: 'ask_requested',
+      payload: {
+        task_id: 't1',
+        request_id: 'ask-1',
+        questions: [{ question: 'Pick one', options: ['A', 'B'], multi_select: false }],
+      },
+    });
+    expect(parsed.kind).toBe('ask');
+    expect(parsed.askRequest?.requestId).toBe('ask-1');
+    expect(parsed.askRequest?.questions[0].options).toEqual(['A', 'B']);
+  });
+
   it('formats retry labels by reason', () => {
     expect(formatRetryMessage('provider', 1, 3)).toContain('Provider reconnect');
     expect(formatRetryMessage('stream_recovery', 2, 3)).toContain('Stream interrupted');

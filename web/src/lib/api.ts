@@ -1,4 +1,5 @@
 import {
+  AskRequest,
   Message,
   PermissionRequest,
   PlanStep,
@@ -38,6 +39,9 @@ export function parseRustEvent(data: RustEvent): {
   retryReason?: string;
   checkpointLabel?: string;
   checkpointFiles?: string[];
+  planModeActive?: boolean;
+  planModePendingExit?: boolean;
+  askRequest?: AskRequest;
 } {
   const payload = data.payload || {};
   const taskId = payload.task_id as string | undefined;
@@ -170,6 +174,31 @@ export function parseRustEvent(data: RustEvent): {
         content: String(payload.reasoning || ''),
       };
     }
+    case 'plan_mode_changed':
+      return {
+        kind: 'plan_mode_changed',
+        taskId,
+        planModeActive: Boolean(payload.active),
+        planModePendingExit: Boolean(payload.pending_exit),
+        content: String(payload.reason || ''),
+      };
+    case 'ask_requested': {
+      const questions = (payload.questions as AskRequest['questions']) || [];
+      return {
+        kind: 'ask',
+        taskId,
+        askRequest: {
+          requestId: String(payload.request_id || ''),
+          questions,
+        },
+      };
+    }
+    case 'ask_responded':
+      return {
+        kind: 'ask_responded',
+        taskId,
+        content: String(payload.request_id || ''),
+      };
     case 'error':
       return {
         kind: 'error',
@@ -195,6 +224,293 @@ export async function createTask(prompt: string, sessionId?: string | null): Pro
   }
   const data = await resp.json();
   return data.task as Task;
+}
+
+function applyParsedEvent(
+  parsed: ReturnType<typeof parseRustEvent>,
+  handlers: EventHandler
+) {
+  switch (parsed.kind) {
+    case 'retrying':
+      handlers.onMessage?.({
+        id: `retry-${Date.now()}`,
+        role: 'system',
+        content: formatRetryMessage(
+          parsed.retryReason || 'retry',
+          parsed.retryAttempt || 1,
+          parsed.retryMax || 1
+        ),
+        eventType: 'retrying',
+        timestamp: Date.now(),
+      });
+      break;
+    case 'compaction_started':
+      handlers.onMessage?.({
+        id: `compact-start-${Date.now()}`,
+        role: 'system',
+        content: `Compacting conversation (${parsed.content || 'auto'})…`,
+        eventType: 'compaction_started',
+        timestamp: Date.now(),
+      });
+      break;
+    case 'compaction_done':
+      handlers.onMessage?.({
+        id: `compact-done-${Date.now()}`,
+        role: 'system',
+        content: 'Context compacted.',
+        eventType: 'compaction_done',
+        timestamp: Date.now(),
+      });
+      break;
+    case 'checkpoint_created': {
+      const files = parsed.checkpointFiles?.length
+        ? ` (${parsed.checkpointFiles.join(', ')})`
+        : '';
+      handlers.onMessage?.({
+        id: `checkpoint-${Date.now()}`,
+        role: 'system',
+        content: `Checkpoint saved: ${parsed.checkpointLabel || 'write'} → ${parsed.content || '?'}${files}`,
+        eventType: 'checkpoint',
+        timestamp: Date.now(),
+      });
+      break;
+    }
+    case 'plan_mode_changed':
+      handlers.onPlanModeChanged?.(
+        Boolean(parsed.planModeActive),
+        Boolean(parsed.planModePendingExit)
+      );
+      handlers.onMessage?.({
+        id: `plan-mode-${Date.now()}`,
+        role: 'system',
+        content: parsed.planModeActive
+          ? 'Plan mode enabled (read-only).'
+          : 'Plan mode disabled.',
+        eventType: 'plan_mode_changed',
+        timestamp: Date.now(),
+      });
+      break;
+    case 'ask':
+      if (parsed.askRequest) handlers.onAsk?.(parsed.askRequest);
+      break;
+    case 'stream_chunk':
+      if (parsed.content?.startsWith('[retrying]')) {
+        handlers.onMessage?.({
+          id: `retry-${Date.now()}`,
+          role: 'system',
+          content: parsed.content.replace(/^\[retrying\]\s*/, 'Stream interrupted — retrying: '),
+          eventType: 'retrying',
+          timestamp: Date.now(),
+        });
+      } else if (parsed.content?.startsWith('[usage]')) {
+        handlers.onMessage?.({
+          id: `usage-${Date.now()}`,
+          role: 'system',
+          content: parsed.content.replace(/^\[usage\]\s?/, ''),
+          eventType: 'usage',
+          timestamp: Date.now(),
+        });
+      } else if (parsed.content?.startsWith('[tool]')) {
+        handlers.onMessage?.({
+          id: `tool-${Date.now()}`,
+          role: 'tool',
+          content: parsed.content,
+          eventType: 'stream_chunk',
+          timestamp: Date.now(),
+        });
+      } else if (parsed.content) {
+        handlers.onAppend?.(parsed.content);
+      }
+      break;
+    case 'task_started':
+      if (parsed.task) handlers.onTaskStarted?.(parsed.task);
+      break;
+    case 'task_completed':
+      handlers.onTaskCompleted?.(parsed.taskId || '', parsed.content === 'failed');
+      break;
+    case 'stream_finished':
+      handlers.onStreamFinished?.();
+      break;
+    case 'tool_call':
+      if (parsed.call) {
+        const isPartial = parsed.call.arguments?.partial === true;
+        if (handlers.onUpsertToolDispatch) {
+          handlers.onUpsertToolDispatch(parsed.call, isPartial);
+          break;
+        }
+        if (isPartial) {
+          handlers.onMessage?.({
+            id: `tool-dispatch-${parsed.call.id || parsed.call.name}-${Date.now()}`,
+            role: 'tool',
+            content: `Calling ${parsed.call.name}...`,
+            toolCalls: [parsed.call],
+            eventType: 'tool_dispatch',
+            timestamp: Date.now(),
+          });
+          break;
+        }
+        handlers.onToolCall?.(parsed.call);
+        handlers.onMessage?.({
+          id: `tool-call-${parsed.call.id}`,
+          role: 'tool',
+          content: `[tool] ${parsed.call.name}(${JSON.stringify(parsed.call.arguments)})`,
+          toolCalls: [parsed.call],
+          eventType: 'tool_call',
+          timestamp: Date.now(),
+        });
+      }
+      break;
+    case 'tool_result':
+      handlers.onMessage?.({
+        id: `tool-result-${Date.now()}`,
+        role: 'tool',
+        content: parsed.content || '',
+        eventType: 'tool_result',
+        timestamp: Date.now(),
+      });
+      break;
+    case 'permission':
+      if (parsed.permission) handlers.onPermission?.(parsed.permission);
+      break;
+    case 'permission_responded':
+      if (parsed.permission?.requestId) {
+        handlers.onPermissionResponded?.(
+          parsed.permission.requestId,
+          parsed.permission.description === 'approved'
+        );
+      }
+      break;
+    case 'plan':
+      if (parsed.planStep) handlers.onPlanStep?.(parsed.planStep);
+      if (parsed.content) {
+        handlers.onMessage?.({
+          id: `plan-${Date.now()}`,
+          role: 'system',
+          content: parsed.content,
+          eventType: 'plan',
+          timestamp: Date.now(),
+        });
+      }
+      break;
+    case 'error':
+      handlers.onMessage?.({
+        id: `error-${Date.now()}`,
+        role: 'system',
+        content: `Error: ${parsed.message}`,
+        eventType: 'error',
+        timestamp: Date.now(),
+      });
+      break;
+    default:
+      break;
+  }
+}
+
+/** Stream a chat turn via POST /chat SSE (primary Web path). */
+export async function streamChat(
+  prompt: string,
+  sessionId: string | null,
+  handlers: EventHandler,
+  signal?: AbortSignal
+): Promise<void> {
+  const resp = await fetch(`${API_BASE}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt,
+      ...(sessionId ? { session_id: sessionId } : {}),
+    }),
+    signal,
+  });
+  if (!resp.ok || !resp.body) {
+    throw new Error(`Chat stream failed: ${resp.statusText}`);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  handlers.onTaskStarted?.({
+    id: sessionId || `chat-${Date.now()}`,
+    prompt,
+    status: 'running',
+    outputs: [],
+  });
+  handlers.onMessage?.({
+    id: `assistant-${Date.now()}`,
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+  });
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const part of parts) {
+        for (const line of part.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+          const data = trimmed.slice(6);
+          if (data === '[DONE]') {
+            handlers.onStreamFinished?.();
+            return;
+          }
+          try {
+            const event = JSON.parse(data) as RustEvent;
+            applyParsedEvent(parseRustEvent(event), handlers);
+          } catch {
+            // ignore malformed chunks
+          }
+        }
+      }
+    }
+  } finally {
+    handlers.onStreamFinished?.();
+  }
+}
+
+export async function fetchCheckpoints(): Promise<
+  Array<{ id: string; label: string; created_at: number; files: string[] }>
+> {
+  const resp = await fetch(`${API_BASE}/checkpoints`);
+  if (!resp.ok) return [];
+  const data = await resp.json();
+  return (data.checkpoints || []) as Array<{
+    id: string;
+    label: string;
+    created_at: number;
+    files: string[];
+  }>;
+}
+
+export async function rewindCheckpoint(
+  checkpointId: string | null,
+  mode: 'code' | 'conversation' | 'both' | 'fork' | 'summarize_from' | 'summarize_upto' = 'code'
+): Promise<Record<string, unknown>> {
+  const resp = await fetch(`${API_BASE}/checkpoints/rewind`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ checkpoint_id: checkpointId, mode }),
+  });
+  return resp.json();
+}
+
+export async function respondAsk(
+  requestId: string,
+  answers: Array<{ questionIndex: number; selected: string[] }>
+): Promise<void> {
+  const resp = await fetch(`${API_BASE}/ask/${requestId}/respond`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answers }),
+  });
+  if (!resp.ok) {
+    throw new Error(`Ask response failed: ${resp.statusText}`);
+  }
 }
 
 export async function fetchConfig(): Promise<Record<string, unknown>> {
@@ -261,12 +577,13 @@ export async function fetchSessionEvents(sessionId: string): Promise<Message[]> 
 
 export async function respondPermission(
   requestId: string,
-  approved: boolean
+  approved: boolean,
+  grantScope: 'once' | 'session' | 'prefix' = 'once'
 ): Promise<void> {
   const resp = await fetch(`${API_BASE}/permissions/${requestId}/respond`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ approved }),
+    body: JSON.stringify({ approved, grant_scope: grantScope }),
   });
   if (!resp.ok) {
     throw new Error(`Permission response failed: ${resp.statusText}`);
@@ -281,6 +598,8 @@ export type EventHandler = {
   onStreamFinished?: () => void;
   onPermission?: (req: PermissionRequest) => void;
   onPermissionResponded?: (requestId: string, approved: boolean) => void;
+  onAsk?: (req: AskRequest) => void;
+  onPlanModeChanged?: (active: boolean, pendingExit: boolean) => void;
   onPlanStep?: (step: PlanStep) => void;
   onToolCall?: (call: ToolCall) => void;
   onUpsertToolDispatch?: (call: ToolCall, partial: boolean) => void;
@@ -294,167 +613,7 @@ export function subscribeEvents(handlers: EventHandler): () => void {
   eventSource.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data) as RustEvent;
-      const parsed = parseRustEvent(data);
-
-      switch (parsed.kind) {
-        case 'retrying':
-          handlers.onMessage({
-            id: `retry-${Date.now()}`,
-            role: 'system',
-            content: formatRetryMessage(
-              parsed.retryReason || 'retry',
-              parsed.retryAttempt || 1,
-              parsed.retryMax || 1
-            ),
-            eventType: 'retrying',
-            timestamp: Date.now(),
-          });
-          break;
-        case 'compaction_started':
-          handlers.onMessage({
-            id: `compact-start-${Date.now()}`,
-            role: 'system',
-            content: `Compacting conversation (${parsed.content || 'auto'})…`,
-            eventType: 'compaction_started',
-            timestamp: Date.now(),
-          });
-          break;
-        case 'compaction_done':
-          handlers.onMessage({
-            id: `compact-done-${Date.now()}`,
-            role: 'system',
-            content: 'Context compacted.',
-            eventType: 'compaction_done',
-            timestamp: Date.now(),
-          });
-          break;
-        case 'checkpoint_created': {
-          const files = parsed.checkpointFiles?.length
-            ? ` (${parsed.checkpointFiles.join(', ')})`
-            : '';
-          handlers.onMessage({
-            id: `checkpoint-${Date.now()}`,
-            role: 'system',
-            content: `Checkpoint saved: ${parsed.checkpointLabel || 'write'} → ${parsed.content || '?'}${files}`,
-            eventType: 'checkpoint',
-            timestamp: Date.now(),
-          });
-          break;
-        }
-        case 'stream_chunk':
-          if (parsed.content?.startsWith('[retrying]')) {
-            handlers.onMessage({
-              id: `retry-${Date.now()}`,
-              role: 'system',
-              content: parsed.content.replace(/^\[retrying\]\s*/, 'Stream interrupted — retrying: '),
-              eventType: 'retrying',
-              timestamp: Date.now(),
-            });
-          } else if (parsed.content?.startsWith('[usage]')) {
-            handlers.onMessage({
-              id: `usage-${Date.now()}`,
-              role: 'system',
-              content: parsed.content.replace(/^\[usage\]\s?/, ''),
-              eventType: 'usage',
-              timestamp: Date.now(),
-            });
-          } else if (parsed.content?.startsWith('[tool]')) {
-            handlers.onMessage({
-              id: `tool-${Date.now()}`,
-              role: 'tool',
-              content: parsed.content,
-              eventType: 'stream_chunk',
-              timestamp: Date.now(),
-            });
-          } else if (parsed.content) {
-            handlers.onAppend?.(parsed.content);
-          }
-          break;
-        case 'task_started':
-          if (parsed.task) handlers.onTaskStarted?.(parsed.task);
-          break;
-        case 'task_completed':
-          handlers.onTaskCompleted?.(
-            parsed.taskId || '',
-            parsed.content === 'failed'
-          );
-          break;
-        case 'stream_finished':
-          handlers.onStreamFinished?.();
-          break;
-        case 'tool_call':
-          if (parsed.call) {
-            const isPartial = parsed.call.arguments?.partial === true;
-            if (handlers.onUpsertToolDispatch) {
-              handlers.onUpsertToolDispatch(parsed.call, isPartial);
-              break;
-            }
-            if (isPartial) {
-              handlers.onMessage({
-                id: `tool-dispatch-${parsed.call.id || parsed.call.name}-${Date.now()}`,
-                role: 'tool',
-                content: `Calling ${parsed.call.name}...`,
-                toolCalls: [parsed.call],
-                eventType: 'tool_dispatch',
-                timestamp: Date.now(),
-              });
-              break;
-            }
-            handlers.onToolCall?.(parsed.call);
-            handlers.onMessage({
-              id: `tool-call-${parsed.call.id}`,
-              role: 'tool',
-              content: `[tool] ${parsed.call.name}(${JSON.stringify(parsed.call.arguments)})`,
-              toolCalls: [parsed.call],
-              eventType: 'tool_call',
-              timestamp: Date.now(),
-            });
-          }
-          break;
-        case 'tool_result':
-          handlers.onMessage({
-            id: `tool-result-${Date.now()}`,
-            role: 'tool',
-            content: parsed.content || '',
-            eventType: 'tool_result',
-            timestamp: Date.now(),
-          });
-          break;
-        case 'permission':
-          if (parsed.permission) handlers.onPermission?.(parsed.permission);
-          break;
-        case 'permission_responded':
-          if (parsed.permission?.requestId) {
-            handlers.onPermissionResponded?.(
-              parsed.permission.requestId,
-              parsed.permission.description === 'approved'
-            );
-          }
-          break;
-        case 'plan':
-          if (parsed.planStep) handlers.onPlanStep?.(parsed.planStep);
-          if (parsed.content) {
-            handlers.onMessage({
-              id: `plan-${Date.now()}`,
-              role: 'system',
-              content: parsed.content,
-              eventType: 'plan',
-              timestamp: Date.now(),
-            });
-          }
-          break;
-        case 'error':
-          handlers.onMessage({
-            id: `error-${Date.now()}`,
-            role: 'system',
-            content: `Error: ${parsed.message}`,
-            eventType: 'error',
-            timestamp: Date.now(),
-          });
-          break;
-        default:
-          break;
-      }
+      applyParsedEvent(parseRustEvent(data), handlers);
     } catch {
       // Ignore malformed events
     }

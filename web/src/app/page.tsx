@@ -4,15 +4,17 @@ import { useEffect, useRef, useState } from 'react';
 import { ChatMessages } from '@/components/Chat';
 import { DiffViewer } from '@/components/DiffViewer';
 import { PermissionModal } from '@/components/PermissionModal';
+import { AskModal } from '@/components/AskModal';
+import { CheckpointPanel } from '@/components/CheckpointPanel';
 import { SetupBanner } from '@/components/SetupBanner';
 import { TaskTimeline } from '@/components/TaskTimeline';
 import {
-  createTask,
   fetchCacheMetrics,
   fetchConfig,
   fetchDoctor,
   fetchSessionEvents,
   fetchSessions,
+  streamChat,
   subscribeEvents,
 } from '@/lib/api';
 import { useAppStore } from '@/lib/store';
@@ -20,14 +22,20 @@ import { useAppStore } from '@/lib/store';
 export default function Home() {
   const [input, setInput] = useState('');
   const [doctor, setDoctor] = useState<Awaited<ReturnType<typeof fetchDoctor>>>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const messages = useAppStore((s) => s.messages);
   const tasks = useAppStore((s) => s.tasks);
   const planSteps = useAppStore((s) => s.planSteps);
   const sessions = useAppStore((s) => s.sessions);
   const pendingPermissions = useAppStore((s) => s.pendingPermissions);
+  const pendingAskRequests = useAppStore((s) => s.pendingAskRequests);
   const activeDiff = useAppStore((s) => s.activeDiff);
   const config = useAppStore((s) => s.config);
   const cacheHitRate = useAppStore((s) => s.cacheHitRate);
+  const planModeActive = useAppStore((s) => s.planModeActive);
+  const collaborationMode = useAppStore((s) => s.collaborationMode);
+  const setCollaborationMode = useAppStore((s) => s.setCollaborationMode);
+  const setPlanMode = useAppStore((s) => s.setPlanMode);
   const setCacheHitRate = useAppStore((s) => s.setCacheHitRate);
   const isStreaming = useAppStore((s) => s.isStreaming);
   const addMessage = useAppStore((s) => s.addMessage);
@@ -39,6 +47,8 @@ export default function Home() {
   const setCurrentTaskId = useAppStore((s) => s.setCurrentTaskId);
   const addPendingPermission = useAppStore((s) => s.addPendingPermission);
   const removePendingPermission = useAppStore((s) => s.removePendingPermission);
+  const addPendingAsk = useAppStore((s) => s.addPendingAsk);
+  const removePendingAsk = useAppStore((s) => s.removePendingAsk);
   const setPlanSteps = useAppStore((s) => s.setPlanSteps);
   const updatePlanStep = useAppStore((s) => s.updatePlanStep);
   const setActiveDiff = useAppStore((s) => s.setActiveDiff);
@@ -75,24 +85,10 @@ export default function Home() {
       onMessage: addMessage,
       onAppend: appendToLastMessage,
       onUpsertToolDispatch: upsertToolDispatch,
-      onTaskStarted: (task) => {
-        setTasks([...useAppStore.getState().tasks, task]);
-        setCurrentTaskId(task.id);
-        addMessage({
-          id: `assistant-${task.id}`,
-          role: 'assistant',
-          content: '',
-          timestamp: Date.now(),
-        });
-      },
-      onTaskCompleted: (taskId, failed) => {
-        updateTask(taskId, { status: failed ? 'failed' : 'completed' });
-        setIsStreaming(false);
-        fetchSessions().then(setSessions);
-      },
-      onStreamFinished: () => setIsStreaming(false),
       onPermission: addPendingPermission,
       onPermissionResponded: (requestId) => removePendingPermission(requestId),
+      onAsk: addPendingAsk,
+      onPlanModeChanged: (active) => setPlanMode(active),
       onPlanStep: (step) => {
         const existing = useAppStore.getState().planSteps;
         if (existing.find((s) => s.id === step.id)) {
@@ -108,46 +104,83 @@ export default function Home() {
     addMessage,
     appendToLastMessage,
     upsertToolDispatch,
-    setTasks,
-    setCurrentTaskId,
-    updateTask,
-    setIsStreaming,
     addPendingPermission,
     removePendingPermission,
+    addPendingAsk,
+    setPlanMode,
     setPlanSteps,
     updatePlanStep,
     setActiveDiff,
-    setSessions,
   ]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isStreaming) return;
+  const runPrompt = async (prompt: string) => {
+    if (!prompt.trim() || isStreaming) return;
 
     addMessage({
       id: `user-${Date.now()}`,
       role: 'user',
-      content: input,
+      content: prompt,
       timestamp: Date.now(),
     });
     setIsStreaming(true);
     setPlanSteps([]);
 
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+
     try {
-      const task = await createTask(input, currentSessionId);
-      setTasks([...useAppStore.getState().tasks, task]);
-      setCurrentTaskId(task.id);
+      await streamChat(
+        prompt,
+        currentSessionId,
+        {
+          onMessage: addMessage,
+          onAppend: appendToLastMessage,
+          onUpsertToolDispatch: upsertToolDispatch,
+          onTaskStarted: (task) => {
+            setTasks([...useAppStore.getState().tasks, task]);
+            setCurrentTaskId(task.id);
+            if (!currentSessionId) setCurrentSessionId(task.id);
+          },
+          onTaskCompleted: (taskId, failed) => {
+            updateTask(taskId, { status: failed ? 'failed' : 'completed' });
+            fetchSessions().then(setSessions);
+          },
+          onStreamFinished: () => setIsStreaming(false),
+          onPermission: addPendingPermission,
+          onAsk: addPendingAsk,
+          onPlanModeChanged: (active) => setPlanMode(active),
+          onPlanStep: (step) => {
+            const existing = useAppStore.getState().planSteps;
+            if (existing.find((s) => s.id === step.id)) {
+              updatePlanStep(step.id, step);
+            } else {
+              setPlanSteps([...existing, step]);
+            }
+          },
+        },
+        abortRef.current.signal
+      );
     } catch (err) {
       addMessage({
         id: `error-${Date.now()}`,
         role: 'system',
-        content: `Failed to create task: ${err instanceof Error ? err.message : String(err)}`,
+        content: `Failed: ${err instanceof Error ? err.message : String(err)}`,
         timestamp: Date.now(),
       });
       setIsStreaming(false);
     }
+  };
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isStreaming) return;
+    const prompt = input;
     setInput('');
+    await runPrompt(prompt);
+  };
+
+  const sendSlash = (cmd: string) => {
+    void runPrompt(cmd);
   };
 
   const handleSessionSelect = async (sessionId: string) => {
@@ -167,7 +200,32 @@ export default function Home() {
     <main className="flex h-screen flex-col">
       <header className="border-b border-border px-6 py-4 flex items-center justify-between bg-surface">
         <h1 className="text-xl font-semibold">LikeCodex</h1>
-        <div className="text-sm text-muted flex gap-4">
+        <div className="text-sm text-muted flex gap-4 items-center">
+          {planModeActive ? (
+            <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 text-xs">Plan</span>
+          ) : null}
+          <select
+            className="text-xs bg-transparent border border-border rounded px-1 py-0.5"
+            value={collaborationMode}
+            onChange={(e) => {
+              const mode = e.target.value as 'normal' | 'plan' | 'goal';
+              setCollaborationMode(mode);
+              if (mode === 'plan') void runPrompt('/plan');
+              if (mode === 'goal') void runPrompt('/goal Continue autonomously on the active task');
+              if (mode === 'normal') void runPrompt('/exit_plan');
+            }}
+          >
+            <option value="normal">normal</option>
+            <option value="plan">plan</option>
+            <option value="goal">goal</option>
+          </select>
+          <button
+            type="button"
+            className="text-xs underline"
+            onClick={() => sendSlash('/plan')}
+          >
+            Toggle plan
+          </button>
           <span>{model}</span>
           <span>{cacheLabel}</span>
           <span>{approvalMode}</span>
@@ -185,6 +243,9 @@ export default function Home() {
             activeSessionId={currentSessionId}
             onSessionSelect={handleSessionSelect}
           />
+          <div className="mt-6">
+            <CheckpointPanel />
+          </div>
         </aside>
 
         <section className="flex-1 flex flex-col min-w-0">
@@ -193,7 +254,7 @@ export default function Home() {
               <div className="text-center text-muted mt-20">
                 <p className="text-lg">What would you like to build?</p>
                 <p className="text-sm mt-2">
-                  Try: create a python script that prints 1..10 and run it
+                  Try: /plan then describe a refactor, or ask to fix failing tests
                 </p>
               </div>
             )}
@@ -233,6 +294,7 @@ export default function Home() {
         requests={pendingPermissions}
         onResponded={removePendingPermission}
       />
+      <AskModal requests={pendingAskRequests} onResponded={removePendingAsk} />
     </main>
   );
 }

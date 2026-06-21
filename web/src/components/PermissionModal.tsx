@@ -2,6 +2,7 @@
 
 import { PermissionRequest } from '@/lib/store';
 import { respondPermission } from '@/lib/api';
+import { useState } from 'react';
 
 interface PermissionModalProps {
   requests: PermissionRequest[];
@@ -10,11 +11,13 @@ interface PermissionModalProps {
 
 export function PermissionModal({ requests, onResponded }: PermissionModalProps) {
   const current = requests[0];
+  const [scope, setScope] = useState<'once' | 'session' | 'prefix'>('once');
   if (!current) return null;
 
   const handle = async (approved: boolean) => {
-    await respondPermission(current.requestId, approved);
+    await respondPermission(current.requestId, approved, approved ? scope : 'once');
     onResponded(current.requestId);
+    setScope('once');
   };
 
   return (
@@ -27,6 +30,18 @@ export function PermissionModal({ requests, onResponded }: PermissionModalProps)
         <pre className="text-xs bg-background p-3 rounded mb-4 overflow-auto max-h-40">
           {JSON.stringify(current.arguments || {}, null, 2)}
         </pre>
+        <div className="mb-4 text-sm">
+          <label className="block text-muted mb-1">If approved:</label>
+          <select
+            value={scope}
+            onChange={(e) => setScope(e.target.value as 'once' | 'session' | 'prefix')}
+            className="w-full rounded border border-border bg-background px-2 py-1"
+          >
+            <option value="once">Allow once</option>
+            <option value="session">Allow for session</option>
+            <option value="prefix">Allow similar (prefix)</option>
+          </select>
+        </div>
         <div className="flex gap-2 justify-end">
           <button
             type="button"
