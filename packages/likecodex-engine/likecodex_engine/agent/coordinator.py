@@ -67,7 +67,11 @@ def build_planner_readonly_tool_names(all_tools: list[str]) -> list[str]:
         "todo_write",
         "complete_step",
     }
-    return sorted(n for n in all_tools if n in readonly or (n.startswith("mcp_") and "write" not in n.lower()))
+    return sorted(
+        n
+        for n in all_tools
+        if n in readonly or ((n.startswith("mcp__") or n.startswith("mcp_")) and "write" not in n.lower())
+    )
 
 
 def planner_tool_registry(parent: ToolRegistry) -> ToolRegistry:

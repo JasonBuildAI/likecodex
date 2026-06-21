@@ -36,7 +36,7 @@ READ_ONLY_TOOLS = frozenset(
 
 
 def is_read_only_tool(name: str) -> bool:
-    return name in READ_ONLY_TOOLS or name.startswith("mcp_")
+    return name in READ_ONLY_TOOLS or name.startswith("mcp__") or name.startswith("mcp_")
 
 
 async def execute_tool_calls_parallel(
