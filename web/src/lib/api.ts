@@ -181,11 +181,14 @@ export function parseRustEvent(data: RustEvent): {
   }
 }
 
-export async function createTask(prompt: string): Promise<Task> {
+export async function createTask(prompt: string, sessionId?: string | null): Promise<Task> {
   const resp = await fetch(`${API_BASE}/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify({
+      prompt,
+      ...(sessionId ? { session_id: sessionId } : {}),
+    }),
   });
   if (!resp.ok) {
     throw new Error(`Failed to create task: ${resp.statusText}`);
@@ -214,6 +217,46 @@ export async function fetchSessions(): Promise<SessionSummary[]> {
   if (!resp.ok) return [];
   const data = await resp.json();
   return (data.sessions || []) as SessionSummary[];
+}
+
+export interface DoctorReport {
+  ok: boolean;
+  engine_reachable: boolean;
+  api_key_configured: boolean;
+  approval_mode?: string;
+  mcp_enabled?: boolean;
+  fix?: string | null;
+}
+
+export async function fetchDoctor(): Promise<DoctorReport | null> {
+  const resp = await fetch(`${API_BASE}/doctor`);
+  if (!resp.ok) return null;
+  return resp.json() as Promise<DoctorReport>;
+}
+
+export async function fetchSessionEvents(sessionId: string): Promise<Message[]> {
+  const resp = await fetch(`${API_BASE}/sessions/${sessionId}/events`);
+  if (!resp.ok) return [];
+  const data = await resp.json();
+  const events = (data.events || []) as Array<{
+    event_type: string;
+    content: string;
+    timestamp?: number;
+  }>;
+  return events.map((event, index) => ({
+    id: `${sessionId}-${index}`,
+    role:
+      event.event_type === 'user'
+        ? 'user'
+        : event.event_type === 'assistant'
+          ? 'assistant'
+          : event.event_type === 'tool_result'
+            ? 'tool'
+            : 'system',
+    content: event.content,
+    eventType: event.event_type,
+    timestamp: event.timestamp || Date.now(),
+  }));
 }
 
 export async function respondPermission(

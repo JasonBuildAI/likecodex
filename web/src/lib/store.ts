@@ -53,6 +53,7 @@ interface AppState {
   sessions: SessionSummary[];
   config: Record<string, unknown>;
   cacheHitRate: number | null;
+  currentSessionId: string | null;
   setCacheHitRate: (rate: number | null) => void;
   addMessage: (message: Message) => void;
   appendToLastMessage: (content: string) => void;
@@ -69,6 +70,8 @@ interface AppState {
   setSessions: (sessions: SessionSummary[]) => void;
   setConfig: (config: Record<string, unknown>) => void;
   clearMessages: () => void;
+  setCurrentSessionId: (id: string | null) => void;
+  setMessages: (messages: Message[]) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -82,6 +85,7 @@ export const useAppStore = create<AppState>((set) => ({
   sessions: [],
   config: {},
   cacheHitRate: null,
+  currentSessionId: null,
   addMessage: (message) =>
     set((state) => ({ messages: [...state.messages, message] })),
   appendToLastMessage: (content) =>
@@ -161,4 +165,6 @@ export const useAppStore = create<AppState>((set) => ({
   setConfig: (config) => set({ config }),
   setCacheHitRate: (rate) => set({ cacheHitRate: rate }),
   clearMessages: () => set({ messages: [], currentTaskId: null }),
+  setCurrentSessionId: (id) => set({ currentSessionId: id }),
+  setMessages: (messages) => set({ messages }),
 }));
