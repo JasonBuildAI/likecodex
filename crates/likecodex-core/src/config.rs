@@ -22,25 +22,34 @@ pub struct Config {
 }
 
 impl Config {
+    /// Load merged config: user → project ancestors → optional explicit path.
     pub fn load() -> anyhow::Result<Self> {
-        let path = Self::default_path();
-        if path.exists() {
-            let content = std::fs::read_to_string(&path)?;
-            let mut cfg: Config = toml::from_str(&content)?;
-            cfg.llm.resolve_api_key();
-            cfg.server.resolve_api_token();
-            Ok(cfg)
-        } else {
-            Ok(Self::default())
-        }
+        Self::load_resolved(None, std::env::current_dir().ok().as_deref())
     }
 
     pub fn load_from(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let mut cfg: Config = toml::from_str(&content)?;
-        cfg.llm.resolve_api_key();
-        cfg.server.resolve_api_token();
-        Ok(cfg)
+        Self::load_resolved(Some(path.as_ref()), std::env::current_dir().ok().as_deref())
+    }
+
+    pub fn load_resolved(explicit: Option<&Path>, cwd: Option<&Path>) -> anyhow::Result<Self> {
+        let mut merged = toml::Value::Table(toml::map::Map::new());
+
+        let user_path = Self::default_path();
+        if user_path.exists() {
+            merge_toml(&mut merged, parse_toml_file(&user_path)?);
+        }
+
+        if let Some(cwd) = cwd {
+            for path in project_config_paths(cwd) {
+                merge_toml(&mut merged, parse_toml_file(&path)?);
+            }
+        }
+
+        if let Some(path) = explicit {
+            merge_toml(&mut merged, parse_toml_file(path)?);
+        }
+
+        value_to_config(merged)
     }
 
     pub fn default_path() -> PathBuf {
@@ -49,6 +58,63 @@ impl Config {
             .join(".likecodex")
             .join("config.toml")
     }
+
+    pub fn save_user(&self) -> anyhow::Result<PathBuf> {
+        let path = Self::default_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(&path, content)?;
+        Ok(path)
+    }
+}
+
+fn parse_toml_file(path: &Path) -> anyhow::Result<toml::Value> {
+    let content = std::fs::read_to_string(path)?;
+    Ok(toml::from_str(&content)?)
+}
+
+fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
+    match (base, overlay) {
+        (toml::Value::Table(base_tbl), toml::Value::Table(overlay_tbl)) => {
+            for (key, value) in overlay_tbl {
+                if let Some(existing) = base_tbl.get_mut(&key) {
+                    merge_toml(existing, value);
+                } else {
+                    base_tbl.insert(key, value);
+                }
+            }
+        }
+        (base_slot, overlay) => *base_slot = overlay,
+    }
+}
+
+fn value_to_config(value: toml::Value) -> anyhow::Result<Config> {
+    let content = toml::to_string(&value)?;
+    let mut cfg: Config = toml::from_str(&content)?;
+    cfg.llm.resolve_api_key();
+    cfg.server.resolve_api_token();
+    Ok(cfg)
+}
+
+/// Project config files from repo root toward `cwd` (later entries override earlier).
+pub fn project_config_paths(cwd: &Path) -> Vec<PathBuf> {
+    let mut dir = cwd.to_path_buf();
+    let mut stack: Vec<PathBuf> = Vec::new();
+    loop {
+        for name in [".likecodex/config.toml", "likecodex.toml"] {
+            let candidate = dir.join(name);
+            if candidate.exists() {
+                stack.push(candidate);
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    stack.reverse();
+    stack
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,8 +241,16 @@ impl SandboxConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct McpConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_mcp_startup")]
+    pub startup: String,
     #[serde(default)]
     pub servers: HashMap<String, McpServerConfig>,
+}
+
+fn default_mcp_startup() -> String {
+    "lazy".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +260,10 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub startup: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +323,12 @@ pub struct AgentConfig {
     pub compact_ratio: f32,
     #[serde(default = "default_false")]
     pub enable_planner: bool,
+    #[serde(default = "default_token_mode")]
+    pub token_mode: String,
+}
+
+fn default_token_mode() -> String {
+    "full".to_string()
 }
 
 impl Default for AgentConfig {
@@ -256,6 +340,7 @@ impl Default for AgentConfig {
             planner_max_steps: default_planner_max_steps(),
             compact_ratio: default_compact_ratio(),
             enable_planner: false,
+            token_mode: default_token_mode(),
         }
     }
 }

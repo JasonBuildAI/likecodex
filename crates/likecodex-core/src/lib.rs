@@ -136,8 +136,31 @@ pub enum StepStatus {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::Config;
+    use crate::config::{project_config_paths, Config};
     use crate::events::Event;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("likecodex-test-{name}-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn project_config_merge_prefers_nearest() {
+        let dir = temp_test_dir("cfg");
+        let root = dir.join("repo");
+        let sub = root.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(root.join("likecodex.toml"), "[llm]\nmodel = \"root\"\n").unwrap();
+        fs::write(sub.join("likecodex.toml"), "[llm]\nmodel = \"sub\"\n").unwrap();
+        let paths = project_config_paths(&sub);
+        assert_eq!(paths.len(), 2);
+        let cfg = Config::load_resolved(None, Some(&sub)).unwrap();
+        assert_eq!(cfg.llm.model, "sub");
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn redacts_api_key() {
