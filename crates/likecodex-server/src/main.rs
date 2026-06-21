@@ -118,6 +118,11 @@ async fn main() -> anyhow::Result<()> {
     if config.approval.mode == "sandbox-required" {
         config.sandbox.allow_fallback = false;
     }
+    if let Ok(port) = std::env::var("LIKECODEX_SERVER_PORT") {
+        if let Ok(parsed) = port.parse() {
+            config.server.port = parsed;
+        }
+    }
 
     let engine_url = config
         .server
@@ -144,6 +149,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/doctor", get(get_doctor))
         .route("/config", get(get_config))
         .route("/metrics", get(get_metrics))
         .route("/tasks", post(create_task))
@@ -174,6 +180,29 @@ async fn main() -> anyhow::Result<()> {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+async fn get_doctor(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let engine_ok = state.engine_bridge.get("/health").await.is_ok();
+    let has_key = state.config.llm.api_key.is_some()
+        || std::env::var("DEEPSEEK_API_KEY").is_ok()
+        || std::env::var("LIKECODEX_LLM_API_KEY").is_ok();
+    Json(serde_json::json!({
+        "ok": engine_ok && has_key,
+        "engine_reachable": engine_ok,
+        "api_key_configured": has_key,
+        "approval_mode": state.config.approval.mode,
+        "mcp_enabled": state.config.mcp.enabled,
+        "fix": if !has_key {
+            Some("Run `likecodex setup` or set DEEPSEEK_API_KEY")
+        } else if !engine_ok {
+            Some("Run `likecodex start` to launch the Python engine")
+        } else {
+            None::<String>
+        },
+    }))
 }
 
 async fn get_config(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
