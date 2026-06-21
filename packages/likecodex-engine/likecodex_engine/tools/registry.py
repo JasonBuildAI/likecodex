@@ -41,6 +41,10 @@ class ToolRegistry:
         self._tools: dict[str, dict[str, Any]] = {}
         self._handlers: dict[str, Callable[..., Awaitable[str]]] = {}
         self._read_only: set[str] = set()
+        self._hidden: set[str] = set()
+        self._connected_sources: set[str] = set()
+        self._engine_config = config or {}
+        self._token_mode = str(self._engine_config.get("token_mode", "full")).lower()
         self._agent_factory = agent_factory
         self._session_log = session_log_provider
         self._session_id = ""
@@ -50,6 +54,9 @@ class ToolRegistry:
             self._register_defaults(agent_factory)
         elif agent_factory:
             self._register_meta_tools(agent_factory)
+        if self._token_mode == "economy":
+            self._apply_economy_hiding()
+            self._register_connect_tool_source()
 
     def _register_defaults(self, agent_factory: AgentFactory | None) -> None:
         fs = FileSystemTools(self.working_dir)
@@ -139,6 +146,101 @@ class ToolRegistry:
         if agent_factory:
             self._register_meta_tools(agent_factory)
 
+    def _is_economy_optional(self, name: str) -> bool:
+        if name == "connect_tool_source":
+            return False
+        if name.startswith("mcp__") or name.startswith("lsp_"):
+            return True
+        if name in {
+            "web_fetch",
+            "web_search",
+            "run_skill",
+            "task",
+            "parallel_tasks",
+        }:
+            return True
+        return False
+
+    def _apply_economy_hiding(self) -> None:
+        for name in list(self._tools.keys()):
+            if self._is_economy_optional(name):
+                self._hidden.add(name)
+
+    def _register_connect_tool_source(self) -> None:
+        async def connect_tool_source(source: str, name: str = "") -> str:
+            return await self._connect_tool_source(source, name)
+
+        self.register(
+            "connect_tool_source",
+            {
+                "description": (
+                    "Token economy mode: enable an optional tool source when needed. "
+                    "Sources: mcp, lsp, web_fetch, skills, task. For mcp, pass server name."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "source": {
+                            "type": "string",
+                            "description": "Tool source to enable",
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "MCP server name when source is mcp",
+                        },
+                    },
+                    "required": ["source"],
+                },
+            },
+            connect_tool_source,
+            read_only=True,
+        )
+        self._hidden.discard("connect_tool_source")
+
+    async def _connect_tool_source(self, source: str, name: str = "") -> str:
+        source = source.strip().lower()
+        self._connected_sources.add(source)
+        enabled: list[str] = []
+
+        if source == "mcp":
+            from likecodex_engine.mcp.loader import register_mcp_tools
+
+            cfg = {**self._engine_config, "working_dir": self.working_dir}
+            if name:
+                servers = cfg.get("mcp_servers") or {}
+                if name not in servers:
+                    return json.dumps({"error": f"MCP server '{name}' not configured", "servers": sorted(servers)})
+            added = await register_mcp_tools(self, cfg)
+            for tool_name in added:
+                self._hidden.discard(tool_name)
+                enabled.append(tool_name)
+        elif source == "lsp":
+            for tool_name in list(self._tools.keys()):
+                if tool_name.startswith("lsp_"):
+                    self._hidden.discard(tool_name)
+                    enabled.append(tool_name)
+        elif source == "web_fetch":
+            for tool_name in ("web_fetch", "web_search"):
+                self._hidden.discard(tool_name)
+                if tool_name in self._tools:
+                    enabled.append(tool_name)
+        elif source == "skills":
+            self._hidden.discard("run_skill")
+            if "run_skill" in self._tools:
+                enabled.append("run_skill")
+        elif source == "task":
+            for tool_name in ("task", "parallel_tasks"):
+                self._hidden.discard(tool_name)
+                if tool_name in self._tools:
+                    enabled.append(tool_name)
+        else:
+            return json.dumps({"error": f"Unknown source '{source}'"})
+
+        return json.dumps({"source": source, "enabled_tools": enabled})
+
+    def reveal_tool(self, name: str) -> None:
+        self._hidden.discard(name)
+
     def set_session_log_provider(self, provider: Callable[[], list[Any]]) -> None:
         self._session_log = provider
         self.plan_progress._session_log = provider
@@ -152,6 +254,8 @@ class ToolRegistry:
     def set_agent_factory(self, factory: AgentFactory) -> None:
         self._agent_factory = factory
         self._register_meta_tools(factory)
+        if self._token_mode == "economy":
+            self._apply_economy_hiding()
 
     def _register_meta_tools(self, factory: AgentFactory) -> None:
         from likecodex_engine.agent.parallel_tasks import ParallelTasksTool
@@ -195,9 +299,17 @@ class ToolRegistry:
         return [
             {"type": "function", "function": {"name": name, **schema}}
             for name, schema in sorted(self._tools.items(), key=lambda item: item[0])
+            if name not in self._hidden
         ]
 
     async def execute(self, name: str, arguments: dict[str, Any]) -> str:
+        if name in self._hidden:
+            return json.dumps(
+                {
+                    "error": f"Tool '{name}' is hidden in token economy mode. "
+                    "Call connect_tool_source first.",
+                }
+            )
         handler = self._handlers.get(name)
         if not handler:
             return json.dumps({"error": f"Tool '{name}' not found"})
