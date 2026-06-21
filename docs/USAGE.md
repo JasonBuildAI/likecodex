@@ -2,7 +2,25 @@
 
 ## Quick Start
 
-1. Configure DeepSeek in `~/.likecodex/config.toml`:
+### Recommended daily workflow
+
+```bash
+likecodex setup          # first time: API key, config, project memory
+likecodex start --web    # engine + API + Web UI (http://127.0.0.1:3000)
+likecodex code           # terminal-only session
+likecodex doctor --json  # health check with fix hints
+```
+
+### Legacy dev stack (contributors)
+
+```bash
+./scripts/dev.sh
+# Windows: .\scripts\dev.ps1
+```
+
+### Configure LLM
+
+User config: `~/.likecodex/config.toml`. Project overrides: `./likecodex.toml` or `./.likecodex/config.toml`.
 
 ```toml
 [llm]
@@ -29,19 +47,6 @@ allow_fallback = true
 
 Or copy `.env.example` and set `DEEPSEEK_API_KEY`.
 
-2. Start the dev stack:
-
-```bash
-./scripts/dev.sh
-# Windows: .\scripts\dev.ps1
-```
-
-3. Run a task:
-
-```bash
-cargo run -p likecodex-cli -- "create a python script that prints 1..10 and run it"
-```
-
 ## Session continuity (cache hits)
 
 Pass `session_id` to `/chat` or `/run` to continue a conversation and reuse the prompt prefix:
@@ -67,9 +72,12 @@ Returns `hit_rate`, `recent_hit_rate`, and token counters from DeepSeek usage fi
 
 ## CLI Commands
 
+- `likecodex setup` — interactive first-time configuration
+- `likecodex start [--web]` — launch engine + API server (+ Web UI)
 - `likecodex "<prompt>"` — one-shot task
-- `likecodex --tui` — terminal UI
-- `likecodex serve` — Rust API server
+- `likecodex code` / `likecodex --tui` — terminal UI
+- `likecodex doctor [--security] [--json]` — environment diagnostics
+- `likecodex serve` — Rust API server only
 - `likecodex config` — redacted config
 
 ## Development

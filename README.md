@@ -430,20 +430,26 @@ port = 8080
 engine_url = "http://127.0.0.1:9090"
 ```
 
-### 2. Start dev stack
+### 2. Start (recommended)
+
+```bash
+likecodex setup
+likecodex start --web    # opens API :8080 and Web :3000
+```
+
+### 2b. Dev stack (contributors)
 
 ```bash
 ./scripts/dev.sh          # macOS / Linux
 .\scripts\dev.ps1         # Windows
-.\scripts\dev.ps1 -SkipWeb   # engine + server only
 ```
 
 ### 3. Run a task
 
 ```bash
-cargo run -p likecodex-cli -- "Create hello.py that prints 1..10 and run it"
-cargo run -p likecodex-cli -- --tui
-# or open http://localhost:3000
+likecodex "Create hello.py that prints 1..10 and run it"
+likecodex code            # TUI
+# or open http://localhost:3000 after `likecodex start --web`
 ```
 
 ---
