@@ -173,10 +173,11 @@ async fn respond_permission(
     url: &str,
     request_id: &str,
     approved: bool,
+    grant_scope: &str,
 ) -> Result<()> {
     let resp = client
         .post(format!("{url}/permissions/{request_id}/respond"))
-        .json(&serde_json::json!({ "approved": approved }))
+        .json(&serde_json::json!({ "approved": approved, "grant_scope": grant_scope }))
         .send()
         .await?;
     if !resp.status().is_success() {
@@ -193,8 +194,15 @@ async fn handle_permission(client: &Client, url: &str, content: &str) -> Result<
         println!("[permission] {content}");
         return Ok(());
     }
-    let approved = interaction::request_permission(&format!("Allow {tool}?"), None)?;
-    respond_permission(client, url, request_id, approved).await?;
+    let decision = interaction::request_permission_with_scope(&format!("Allow {tool}?"), None)?;
+    respond_permission(
+        client,
+        url,
+        request_id,
+        decision.approved,
+        &decision.grant_scope,
+    )
+    .await?;
     Ok(())
 }
 

@@ -1,6 +1,7 @@
 //! Basic terminal UI for LikeCodex interactive mode.
 
 use std::io;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
@@ -76,6 +77,13 @@ enum EngineEvent {
         label: String,
         files: Vec<String>,
     },
+    PlanModeChanged {
+        active: bool,
+        pending_exit: bool,
+    },
+    Ask {
+        content: String,
+    },
     Notice {
         content: String,
     },
@@ -99,6 +107,9 @@ pub struct App {
     cache_hit_tokens: u64,
     cache_miss_tokens: u64,
     status_line: String,
+    plan_mode_active: bool,
+    plan_mode_pending_exit: bool,
+    last_esc: Option<Instant>,
 }
 
 impl App {
@@ -112,6 +123,9 @@ impl App {
             cache_hit_tokens: 0,
             cache_miss_tokens: 0,
             status_line: "deepseek-v4-flash".to_string(),
+            plan_mode_active: false,
+            plan_mode_pending_exit: false,
+            last_esc: None,
         }
     }
 
@@ -233,6 +247,24 @@ impl App {
                 };
                 self.push_system(format!("[checkpoint] {label} → {checkpoint_id}{file_list}"))
             }
+            EngineEvent::PlanModeChanged {
+                active,
+                pending_exit,
+            } => {
+                self.plan_mode_active = active;
+                self.plan_mode_pending_exit = pending_exit;
+                let state = if active {
+                    if pending_exit {
+                        "plan (pending approval)"
+                    } else {
+                        "plan"
+                    }
+                } else {
+                    "normal"
+                };
+                self.push_system(format!("[plan-mode] {state}"));
+            }
+            EngineEvent::Ask { content } => self.push_system(format!("[ask] {content}")),
             EngineEvent::Notice { content } => self.push_system(content),
             EngineEvent::Error { content } => self.push_system(format!("[error] {content}")),
             EngineEvent::CacheStats {
@@ -281,7 +313,7 @@ async fn run_tui_loop<B: Backend>(
 ) -> Result<()> {
     let mut app = App::new();
     app.push_system(
-        "Welcome to LikeCodex TUI. Type a task and press Enter. Press Ctrl+C or Esc to quit.",
+        "Welcome to LikeCodex TUI. Enter to send. Esc-Esc rewind. Ctrl+C quit. Shift+Tab plan.",
     );
 
     let (event_tx, mut event_rx) = mpsc::channel::<AppEvent>(128);
@@ -336,7 +368,30 @@ async fn run_tui_loop<B: Backend>(
                     {
                         break
                     }
-                    KeyCode::Esc => break,
+                    KeyCode::Esc => {
+                        let now = Instant::now();
+                        if let Some(prev) = app.last_esc {
+                            if now.duration_since(prev) < Duration::from_millis(500) {
+                                crossterm::terminal::disable_raw_mode()?;
+                                if let Err(e) = pick_and_rewind_checkpoint(&client, &engine_url).await
+                                {
+                                    app.push_system(format!("[rewind error] {e}"));
+                                }
+                                crossterm::terminal::enable_raw_mode()?;
+                                app.last_esc = None;
+                                continue;
+                            }
+                        }
+                        app.last_esc = Some(now);
+                        app.status_line = "Press Esc again to rewind (Ctrl+C to quit)".to_string();
+                    }
+                    KeyCode::Tab
+                        if key
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::SHIFT) =>
+                    {
+                        app.input = "/plan".to_string();
+                    }
                     KeyCode::Enter => {
                         let prompt = app.input.trim().to_string();
                         if prompt.eq_ignore_ascii_case("exit")
@@ -376,16 +431,60 @@ async fn run_tui_loop<B: Backend>(
                         let tool = parsed["tool"].as_str().unwrap_or("tool");
                         if !request_id.is_empty() {
                             crossterm::terminal::disable_raw_mode()?;
-                            let approved =
-                                interaction::request_permission(&format!("Allow {tool}?"), None)?;
+                            let decision = interaction::request_permission_with_scope(
+                                &format!("Allow {tool}?"),
+                                None,
+                            )?;
                             crossterm::terminal::enable_raw_mode()?;
                             let resp = client
                                 .post(format!("{engine_url}/permissions/{request_id}/respond"))
-                                .json(&serde_json::json!({ "approved": approved }))
+                                .json(&serde_json::json!({
+                                    "approved": decision.approved,
+                                    "grant_scope": decision.grant_scope,
+                                }))
                                 .send()
                                 .await;
                             if let Err(e) = resp {
                                 app.push_system(format!("[permission error] {e}"));
+                            }
+                        }
+                    }
+                    app.apply_engine_event(engine_event);
+                }
+                EngineEvent::Ask { content } => {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
+                        let request_id = parsed["request_id"].as_str().unwrap_or("");
+                        let question = parsed["question"].as_str().unwrap_or("Choose:");
+                        let multi = parsed["multi_select"].as_bool().unwrap_or(false);
+                        let options: Vec<String> = parsed["options"]
+                            .as_array()
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(str::to_string))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if !request_id.is_empty() && !options.is_empty() {
+                            crossterm::terminal::disable_raw_mode()?;
+                            let picks =
+                                interaction::ask_select(question, &options, multi)?;
+                            crossterm::terminal::enable_raw_mode()?;
+                            let answers: Vec<serde_json::Value> = picks
+                                .into_iter()
+                                .map(|i| {
+                                    serde_json::json!({
+                                        "question": question,
+                                        "selected": options.get(i).cloned().unwrap_or_default(),
+                                    })
+                                })
+                                .collect();
+                            let resp = client
+                                .post(format!("{engine_url}/ask/{request_id}/respond"))
+                                .json(&serde_json::json!({ "answers": answers }))
+                                .send()
+                                .await;
+                            if let Err(e) = resp {
+                                app.push_system(format!("[ask error] {e}"));
                             }
                         }
                     }
@@ -503,6 +602,23 @@ async fn stream_engine_events(
                 "tool_result" => EngineEvent::ToolResult { content },
                 "plan" => EngineEvent::Plan { content },
                 "permission" => EngineEvent::Permission { content },
+                "ask" => EngineEvent::Ask { content },
+                "plan_mode_changed" => {
+                    let active = event
+                        .get("metadata")
+                        .and_then(|v| v.get("active"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let pending_exit = event
+                        .get("metadata")
+                        .and_then(|v| v.get("pending_exit"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    EngineEvent::PlanModeChanged {
+                        active,
+                        pending_exit,
+                    }
+                }
                 "notice" => EngineEvent::Notice { content },
                 "usage" => EngineEvent::Notice { content },
                 "compaction_started" => {
@@ -572,6 +688,48 @@ async fn stream_engine_events(
     Ok(())
 }
 
+async fn pick_and_rewind_checkpoint(client: &Client, url: &str) -> Result<()> {
+    let resp = client.get(format!("{url}/checkpoints")).send().await?;
+    let body: serde_json::Value = resp.json().await?;
+    let empty: Vec<serde_json::Value> = vec![];
+    let checkpoints = body["checkpoints"].as_array().unwrap_or(&empty);
+    if checkpoints.is_empty() {
+        println!("[info] no checkpoints recorded yet");
+        return Ok(());
+    }
+    let labels: Vec<String> = checkpoints
+        .iter()
+        .map(|cp| {
+            format!(
+                "{} — {}",
+                cp["id"].as_str().unwrap_or("?"),
+                cp["label"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let idx = interaction::choose("Rewind checkpoint (mode=both):", &refs)?;
+    let cp_id = checkpoints[idx]["id"].as_str().unwrap_or("");
+    let rewind = client
+        .post(format!("{url}/checkpoints/rewind"))
+        .json(&serde_json::json!({
+            "checkpoint_id": cp_id,
+            "mode": "both",
+        }))
+        .send()
+        .await?;
+    let result: serde_json::Value = rewind.json().await?;
+    if result["rewound"].as_bool().unwrap_or(false) {
+        println!("[ok] rewound to {cp_id}");
+    } else {
+        println!(
+            "[warn] rewind failed: {}",
+            result["reason"].as_str().unwrap_or("unknown")
+        );
+    }
+    Ok(())
+}
+
 fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -582,12 +740,22 @@ fn draw(f: &mut Frame, app: &App) {
         ])
         .split(f.area());
 
+    let plan_badge = if app.plan_mode_active {
+        if app.plan_mode_pending_exit {
+            " | PLAN (pending)"
+        } else {
+            " | PLAN"
+        }
+    } else {
+        ""
+    };
     let status = format!(
-        " cache {:.1}% | hit={} miss={} | {}",
+        " cache {:.1}% | hit={} miss={} | {}{}",
         app.cache_hit_rate * 100.0,
         app.cache_hit_tokens,
         app.cache_miss_tokens,
-        app.status_line
+        app.status_line,
+        plan_badge
     );
     let status_bar = Paragraph::new(status).style(Style::default().fg(Color::Cyan));
     f.render_widget(status_bar, chunks[0]);
