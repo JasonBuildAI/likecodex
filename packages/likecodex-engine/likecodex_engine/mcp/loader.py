@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from likecodex_engine.mcp.client import McpClient
+from likecodex_engine.mcp.manager import global_mcp_manager
 from likecodex_engine.tools.registry import ToolRegistry
 
 
@@ -14,46 +14,103 @@ def _default_servers_path() -> Path:
     return Path(__file__).with_name("servers.json")
 
 
-async def register_mcp_tools(
-    registry: ToolRegistry,
-    config: dict[str, Any] | None = None,
-) -> list[str]:
-    """Discover MCP tools and register them on the registry."""
-    config = config or {}
+def _load_mcp_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
     servers: dict[str, Any] = {}
+    for name, cfg in data.get("mcpServers", {}).items():
+        if not isinstance(cfg, dict):
+            continue
+        command = cfg.get("command")
+        if not command:
+            continue
+        servers[name] = {
+            "command": command,
+            "args": cfg.get("args", []),
+            "env": cfg.get("env", {}),
+            "enabled": True,
+            "startup": "lazy",
+        }
+    return servers
+
+
+def discover_mcp_servers(config: dict[str, Any], working_dir: str | Path) -> dict[str, Any]:
+    """Merge MCP server definitions from config, JSON, and defaults."""
+    servers: dict[str, Any] = {}
+    working_dir = Path(working_dir)
 
     servers_path = Path(config.get("mcp_servers_path", _default_servers_path()))
     if servers_path.exists():
         servers.update(json.loads(servers_path.read_text(encoding="utf-8")))
 
-    servers.update(config.get("mcp_servers", {}))
+    for mcp_json in (working_dir / ".mcp.json", Path.home() / ".likecodex" / ".mcp.json"):
+        servers.update(_load_mcp_json(mcp_json))
+
+    raw_servers = config.get("mcp_servers") or {}
+    for name, cfg in raw_servers.items():
+        if isinstance(cfg, dict):
+            servers[name] = {**servers.get(name, {}), **cfg}
+
+    default_startup = str(config.get("mcp_startup", "lazy")).lower()
+    normalized: dict[str, Any] = {}
+    for name in sorted(servers.keys()):
+        cfg = dict(servers[name])
+        if not cfg.get("command"):
+            continue
+        cfg.setdefault("enabled", True)
+        cfg.setdefault("startup", default_startup)
+        normalized[name] = cfg
+    return normalized
+
+
+async def register_mcp_tools(
+    registry: ToolRegistry,
+    config: dict[str, Any] | None = None,
+    *,
+    eager_only: bool = False,
+) -> list[str]:
+    """Discover MCP tools and register them on the registry."""
+    config = config or {}
+    working_dir = config.get("working_dir", ".")
+    servers = discover_mcp_servers(config, working_dir)
+    manager = global_mcp_manager()
+    manager.configure(servers)
 
     registered: list[str] = []
-    for server_name in sorted(servers.keys()):
-        server_cfg = servers[server_name]
+    for server_name, server_cfg in servers.items():
         if not server_cfg.get("enabled", True):
             continue
-        command = server_cfg.get("command")
-        if not command:
+        startup = str(server_cfg.get("startup", "lazy")).lower()
+        if eager_only and startup != "eager":
             continue
-        client = McpClient(
-            command=command,
-            args=server_cfg.get("args", []),
-            env=server_cfg.get("env", {}),
-        )
-        tools = await client.list_tools()
+
+        try:
+            tools = await manager.list_tools(server_name)
+        except Exception as exc:
+            registry.register(
+                f"mcp__{server_name}__error",
+                {
+                    "description": f"MCP server {server_name} failed to connect: {exc}",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+                _error_handler(str(exc)),
+                read_only=True,
+            )
+            continue
+
         for tool in tools:
             tool_name = tool.get("name")
             if not tool_name:
                 continue
-            registered_name = f"mcp_{server_name}_{tool_name}"
+            registered_name = f"mcp__{server_name}__{tool_name}"
 
             async def handler(
-                _client: McpClient = client,
-                _tool_name: str = tool_name,
+                _server: str = server_name,
+                _tool: str = tool_name,
                 **kwargs: Any,
             ) -> str:
-                result = await _client.call_tool(_tool_name, kwargs)
+                result = await manager.call_tool(_server, _tool, kwargs)
                 return json.dumps(result)
 
             registry.register(
@@ -66,3 +123,10 @@ async def register_mcp_tools(
             )
             registered.append(registered_name)
     return registered
+
+
+def _error_handler(message: str):
+    async def handler(**_: Any) -> str:
+        return json.dumps({"error": message})
+
+    return handler
