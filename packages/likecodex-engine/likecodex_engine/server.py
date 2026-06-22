@@ -17,14 +17,14 @@ from likecodex_engine.agent.coordinator import Coordinator
 from likecodex_engine.agent.loop import AgentLoop, build_subagent_loop
 from likecodex_engine.agent.plan_state import PlanState
 from likecodex_engine.agent.planner import Planner
-from likecodex_engine.context.manager import ContextManager
+from likecodex_engine.config_loader import engine_config_from_env
 from likecodex_engine.context.instruction import load_host_checks_from_dir
+from likecodex_engine.context.manager import ContextManager
 from likecodex_engine.context.project_memory import load_project_memory
 from likecodex_engine.context.session_cache import SessionContextCache
 from likecodex_engine.context.session_resolver import session_id_for_dir
 from likecodex_engine.llm.base import LLMResponse
 from likecodex_engine.llm.cache_metrics import global_cache_metrics
-from likecodex_engine.config_loader import engine_config_from_env
 from likecodex_engine.llm.factory import create_provider
 from likecodex_engine.mcp.loader import register_mcp_tools
 from likecodex_engine.memory.vector import VectorMemory
@@ -35,12 +35,26 @@ from likecodex_engine.server_turn import prepare_turn, run_manual_compact_respon
 from likecodex_engine.skills.loader import discover_skills, skills_prefix_block
 from likecodex_engine.tools.registry import ToolRegistry
 
+# Web UI static files directory
+STATIC_DIR = Path(__file__).parent / "static"
+LITE_HTML = STATIC_DIR / "lite" / "index.html"
+
 APP_CONFIG = web.AppKey("config", dict)
 
 _ACTIVE_LOOPS: dict[str, AgentLoop] = {}
 _ACTIVE_COORDINATORS: dict[str, Coordinator] = {}
 _SESSION_STORE: SessionStore | None = None
 _CONTEXT_CACHE = SessionContextCache()
+
+# Track whether DeepSeek tools have been registered
+_DEEPSEEK_TOOLS_REGISTERED: bool = False
+
+
+def _set_current_deepseek_session(loop: Any, ctx: Any, session_id: str) -> None:
+    """Set the current session context for DeepSeek tools."""
+    from likecodex_engine.tools.deepseek_tools import set_current_session
+
+    set_current_session(loop, ctx, session_id)
 
 
 def _session_store() -> SessionStore:
@@ -257,23 +271,40 @@ def _make_agent(
     tools.set_session_log_provider(lambda: loop.context.messages)
     tools.set_session_id(sid)
 
+    # Register DeepSeek-specific tools when using DeepSeek provider
+    global _DEEPSEEK_TOOLS_REGISTERED
+    provider = cfg.get("provider", "deepseek")
+    if provider == "deepseek" and not _DEEPSEEK_TOOLS_REGISTERED:
+        from likecodex_engine.tools.deepseek_tools import TOOL_DEFINITIONS
+
+        for tool_name, tool_def in TOOL_DEFINITIONS.items():
+            tools.register(
+                tool_name,
+                {
+                    "description": tool_def["description"],
+                    "parameters": tool_def["parameters"],
+                },
+                tool_def["handler"],
+                read_only=tool_def.get("read_only", True),
+            )
+        _DEEPSEEK_TOOLS_REGISTERED = True
+        _set_current_deepseek_session(loop, context, sid)
+
     # Inject project_checks from LIKECODEX.md / AGENTS.md
     host_checks = load_host_checks_from_dir(Path(working_dir))
     if host_checks:
         loop.project_checks = [
-            {"command": check.command, "source_path": check.source_path, "line": check.line}
-            for check in host_checks
+            {"command": check.command, "source_path": check.source_path, "line": check.line} for check in host_checks
         ]
 
     _ACTIVE_LOOPS[sid] = loop
     if enable_planner and planner_llm is not None:
         planning_context = context.prefix.project_memories if hasattr(context, "prefix") else ""
-        
+
         # Create classifier LLM if auto_plan_classifier is configured
         classifier_llm = None
         auto_plan_classifier_model = cfg.get("auto_plan_classifier")
         if auto_plan_classifier_model:
-            from likecodex_engine.llm.factory import create_provider
             classifier_llm = create_provider(
                 cfg.get("provider", "deepseek"),
                 auto_plan_classifier_model,
@@ -281,7 +312,7 @@ def _make_agent(
                 cfg.get("base_url"),
                 thinking=False,
             )
-        
+
         coordinator = Coordinator(
             loop,
             planner_llm,
@@ -318,6 +349,7 @@ async def chat(request: web.Request) -> web.StreamResponse:
     loop = _make_agent(cfg, session_id=sid, context=context, no_tools=no_tools)
     await _ensure_mcp(cfg, loop.tools)
     store.append_event(sid, SessionEvent(event_type="user", content=prompt, metadata={}))
+    _set_current_deepseek_session(loop, context, sid)
 
     runner = _get_runner(sid)
     prepared = prepare_turn(
@@ -341,28 +373,51 @@ async def chat(request: web.Request) -> web.StreamResponse:
     )
     await response.prepare(request)
 
-    if prepared.expanded.compact_trigger:
-        async for resp in _run_manual_compact(context, loop.llm, prepared.expanded.compact_focus):
+    # Keep-alive heartbeat to prevent proxy timeouts
+    keepalive_stop = asyncio.Event()
+
+    async def _keepalive() -> None:
+        try:
+            while not keepalive_stop.is_set():
+                await asyncio.wait_for(keepalive_stop.wait(), timeout=15)
+                if keepalive_stop.is_set():
+                    break
+                await response.write(b": keepalive\n\n")
+        except TimeoutError:
+            if not keepalive_stop.is_set():
+                await response.write(b": keepalive\n\n")
+        except Exception:
+            pass
+
+    keepalive_handle = asyncio.ensure_future(_keepalive())
+
+    try:
+        if prepared.expanded.compact_trigger:
+            async for resp in _run_manual_compact(context, loop.llm, prepared.expanded.compact_focus):
+                payload = json.dumps(_serialize_response(resp))
+                await response.write(f"data: {payload}\n\n".encode())
+            await response.write(b"data: [DONE]\n\n")
+            return response
+
+        for resp in prepared.early_responses:
             payload = json.dumps(_serialize_response(resp))
             await response.write(f"data: {payload}\n\n".encode())
+
+        if prepared.expanded.direct_reply is not None:
+            await response.write(b"data: [DONE]\n\n")
+            return response
+
+        async for resp in runner.run(prepared.prompt):
+            payload = json.dumps(_serialize_response(resp))
+            await response.write(f"data: {payload}\n\n".encode())
+        cache_stats = global_cache_metrics().to_dict()
+        cache_event = json.dumps({"type": "cache_stats", "content": "", "cache": cache_stats})
+        await response.write(f"data: {cache_event}\n\n".encode())
         await response.write(b"data: [DONE]\n\n")
-        return response
+    finally:
+        keepalive_stop.set()
+        keepalive_handle.done() or keepalive_handle.cancel()
 
-    for resp in prepared.early_responses:
-        payload = json.dumps(_serialize_response(resp))
-        await response.write(f"data: {payload}\n\n".encode())
-
-    if prepared.expanded.direct_reply is not None:
-        await response.write(b"data: [DONE]\n\n")
-        return response
-
-    async for resp in runner.run(prepared.prompt):
-        payload = json.dumps(_serialize_response(resp))
-        await response.write(f"data: {payload}\n\n".encode())
-    cache_stats = global_cache_metrics().to_dict()
-    cache_event = json.dumps({"type": "cache_stats", "content": "", "cache": cache_stats})
-    await response.write(f"data: {cache_event}\n\n".encode())
-    await response.write(b"data: [DONE]\n\n")
     return response
 
 
@@ -380,6 +435,7 @@ async def run_task(request: web.Request) -> web.Response:
     loop = _make_agent(cfg, session_id=sid, context=context)
     await _ensure_mcp(cfg, loop.tools)
     store.append_event(sid, SessionEvent(event_type="user", content=prompt, metadata={}))
+    _set_current_deepseek_session(loop, context, sid)
 
     runner = _get_runner(sid)
     prepared = prepare_turn(
@@ -667,6 +723,7 @@ async def get_session_events(request: web.Request) -> web.Response:
 
 # ── New ACP-compatible handler functions ───────────────────────────
 
+
 async def toggle_plan_mode(request: web.Request) -> web.Response:
     """Toggle plan mode for a session."""
     data = await request.json()
@@ -676,11 +733,13 @@ async def toggle_plan_mode(request: web.Request) -> web.Response:
         return web.json_response({"error": "Session not found"}, status=404)
     if hasattr(loop, "plan_state"):
         loop.plan_state.active = not loop.plan_state.active
-        return web.json_response({
-            "ok": True,
-            "active": loop.plan_state.active,
-            "session_id": session_id,
-        })
+        return web.json_response(
+            {
+                "ok": True,
+                "active": loop.plan_state.active,
+                "session_id": session_id,
+            }
+        )
     return web.json_response({"error": "Plan mode not supported"}, status=400)
 
 
@@ -720,12 +779,15 @@ async def fork_session(request: web.Request) -> web.Response:
     events = store.list_events(session_id)
     if not events:
         return web.json_response({"error": "Source session not found"}, status=404)
-    store.create_session(new_id, {
-        "working_dir": ".",
-        "status": "active",
-        "forked_from": session_id,
-        "label": label,
-    })
+    store.create_session(
+        new_id,
+        {
+            "working_dir": ".",
+            "status": "active",
+            "forked_from": session_id,
+            "label": label,
+        },
+    )
     for e in events:
         store.append_event(new_id, e)
     return web.json_response({"ok": True, "session_id": new_id, "forked_from": session_id})
@@ -778,12 +840,14 @@ async def resume_session(request: web.Request) -> web.Response:
     if not events:
         return web.json_response({"error": "Session not found"}, status=404)
     metadata = store.get_session_metadata(session_id) or {}
-    return web.json_response({
-        "ok": True,
-        "session_id": session_id,
-        "event_count": len(events),
-        "metadata": metadata,
-    })
+    return web.json_response(
+        {
+            "ok": True,
+            "session_id": session_id,
+            "event_count": len(events),
+            "metadata": metadata,
+        }
+    )
 
 
 async def delete_session(request: web.Request) -> web.Response:
@@ -806,17 +870,195 @@ async def list_skills(request: web.Request) -> web.Response:
     cfg = _resolve_config(request.app[APP_CONFIG])
     working_dir = cfg.get("working_dir", ".")
     skills = discover_skills(working_dir)
-    return web.json_response({
-        "skills": [
-            {"name": s.name, "description": s.description, "source": s.source}
-            for s in skills
+    return web.json_response(
+        {"skills": [{"name": s.name, "description": s.description, "source": s.source} for s in skills]}
+    )
+
+
+# ── DeepSeek-specific API handlers ────────────────────────────
+
+
+async def deepseek_cache_stats(request: web.Request) -> web.Response:
+    """Return current DeepSeek prefix cache metrics."""
+    metrics = global_cache_metrics()
+    from likecodex_engine.context.cache_shape import capture_prefix_shape
+
+    shape = capture_prefix_shape()
+    return web.json_response(
+        {
+            "hit_rate": metrics.hit_rate,
+            "recent_hit_rate": metrics.recent_hit_rate,
+            "request_count": metrics.request_count,
+            "total_hit_tokens": metrics.total_hit_tokens,
+            "total_miss_tokens": metrics.total_miss_tokens,
+            "prefix_shape": shape,
+        }
+    )
+
+
+async def deepseek_api_switch_model(request: web.Request) -> web.Response:
+    """Switch the model for an active session via the DeepSeek API."""
+    data = await request.json()
+    session_id = data.get("session_id", "")
+    model = data.get("model", "")
+
+    if not session_id:
+        return web.json_response({"error": "session_id is required"}, status=400)
+
+    loop = _resolve_loop(session_id)
+    if loop is None:
+        return web.json_response({"error": "Session not found"}, status=404)
+
+    valid = {"deepseek-v4-flash", "deepseek-v4-pro", "flash", "pro"}
+    if model not in valid:
+        return web.json_response(
+            {"error": f"Invalid model '{model}'. Valid: {sorted(valid)}"},
+            status=400,
+        )
+
+    from likecodex_engine.llm.factory import create_provider
+
+    model_map = {"flash": "deepseek-v4-flash", "pro": "deepseek-v4-pro"}
+    resolved = model_map.get(model, model)
+
+    old_model = getattr(loop.llm, "model", "unknown")
+    loop.llm = create_provider(
+        provider="deepseek",
+        model=resolved,
+    )
+    return web.json_response(
+        {
+            "ok": True,
+            "session_id": session_id,
+            "switched_from": old_model,
+            "switched_to": resolved,
+        }
+    )
+
+
+async def deepseek_session_cost(request: web.Request) -> web.Response:
+    """Return cumulative cost tracking for the active session."""
+    session_id = request.query.get("session_id", "")
+    if not session_id:
+        cfg = _resolve_config(request.app[APP_CONFIG])
+        working_dir = cfg.get("working_dir", ".")
+        session_id = session_id_for_dir(working_dir)
+
+    from likecodex_engine.llm.cache_metrics import global_cache_metrics
+
+    metrics = global_cache_metrics()
+    from likecodex_engine.llm.deepseek import DeepSeekUsage
+
+    usage = DeepSeekUsage(
+        prompt_tokens=metrics.total_hit_tokens + metrics.total_miss_tokens,
+        completion_tokens=0,
+        cache_hit_tokens=metrics.total_hit_tokens,
+        cache_miss_tokens=metrics.total_miss_tokens,
+        model="deepseek-v4-flash",
+    )
+    return web.json_response(
+        {
+            "session_id": session_id,
+            "cache_metrics": {
+                "hit_rate": round(metrics.hit_rate, 4),
+                "total_requests": metrics.request_count,
+            },
+            "cost": {
+                "input_cost": round(usage.input_cost, 6),
+                "output_cost": round(usage.output_cost, 6),
+                "total_cost": round(usage.total_cost, 6),
+                "currency": "USD",
+            },
+            "usage": {
+                "cache_hit_tokens": metrics.total_hit_tokens,
+                "cache_miss_tokens": metrics.total_miss_tokens,
+                "cache_hit_rate": round(usage.cache_hit_rate, 4),
+                "reasoning_tokens": 0,
+            },
+        }
+    )
+
+
+async def deepseek_diagnostics(request: web.Request) -> web.Response:
+    """Return DeepSeek-specific diagnostics for debugging."""
+    session_id = request.query.get("session_id", "")
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    sid = session_id or session_id_for_dir(working_dir)
+
+    store = _session_store()
+    context = _get_or_create_context(sid, store)
+
+    from likecodex_engine.context.cache_shape import capture_prefix_shape
+    from likecodex_engine.llm.deepseek import DeepSeekProvider
+
+    system_prompt = DeepSeekProvider.load_system_prompt()
+    has_custom_prompt = bool(system_prompt)
+
+    shape = {}
+    if hasattr(context, "capture_prefix_shape"):
+        shape = capture_prefix_shape(
+            context.prefix.combined if hasattr(context, "prefix") else "",
+            [],
+            getattr(context, "rewrite_version", 0),
+        )
+
+    return web.json_response(
+        {
+            "session_id": sid,
+            "provider": cfg.get("provider", "deepseek"),
+            "system_prompt": {
+                "has_custom_deepseek_prompt": has_custom_prompt,
+                "length": len(system_prompt) if has_custom_prompt else 0,
+                "source": "deepseek_v4_system.txt" if has_custom_prompt else "default",
+            },
+            "cache": {
+                "prefix_stable": shape.get("stable", True) if shape else None,
+                "rewrite_version": getattr(context, "rewrite_version", 0),
+                "log_size": len(getattr(context, "messages", [])),
+            },
+            "deepseek_tools_registered": _DEEPSEEK_TOOLS_REGISTERED,
+            "config": {
+                "api_key_set": bool(os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("LIKECODEX_LLM_API_KEY")),
+            },
+        }
+    )
+
+
+async def warmup_deepseek_cache() -> None:
+    """Background warmup: prime DeepSeek prefix cache on startup."""
+    from likecodex_engine.llm.deepseek import DeepSeekProvider
+
+    try:
+        system_prompt = DeepSeekProvider.load_system_prompt()
+        if not system_prompt:
+            return
+        provider = DeepSeekProvider(
+            model="deepseek-v4-flash",
+            api_key=os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("LIKECODEX_LLM_API_KEY"),
+        )
+        from likecodex_engine.llm.base import Message, Role
+
+        warmup_msgs = [
+            Message(role=Role.SYSTEM, content=system_prompt),
+            Message(role=Role.USER, content="."),
         ]
-    })
+        await provider.complete(warmup_msgs, max_tokens=5)
+    except Exception:
+        pass  # Warmup is best-effort
 
 
 def create_app(config: dict | None = None) -> web.Application:
     app = web.Application()
     app[APP_CONFIG] = config or {}
+
+    # Background cache warmup on startup
+    async def _startup_warmup(app: web.Application) -> None:
+        cfg = _resolve_config(app[APP_CONFIG])
+        if cfg.get("provider", "deepseek") == "deepseek":
+            asyncio.create_task(warmup_deepseek_cache())
+
+    app.on_startup.append(_startup_warmup)
     app.router.add_get("/health", health)
     app.router.add_get("/metrics", metrics)
     app.router.add_post("/chat", chat)
@@ -843,6 +1085,29 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_post("/resume", resume_session)
     app.router.add_post("/sessions/delete", delete_session)
     app.router.add_get("/skills", list_skills)
+
+    # ── DeepSeek-specific API endpoints ──────────────────────
+    app.router.add_get("/api/deepseek/cache-stats", deepseek_cache_stats)
+    app.router.add_post("/api/deepseek/switch-model", deepseek_api_switch_model)
+    app.router.add_get("/api/deepseek/session-cost", deepseek_session_cost)
+    app.router.add_get("/api/deepseek/diagnostics", deepseek_diagnostics)
+
+    # ── Web UI static file serving ──────────────────────────
+    if STATIC_DIR.exists():
+        app.router.add_static("/static/", path=str(STATIC_DIR), name="static")
+
+        async def spa_handler(request: web.Request) -> web.FileResponse:
+            return web.FileResponse(STATIC_DIR / "index.html")
+
+        app.router.add_get("/", spa_handler)
+
+        if LITE_HTML.exists():
+
+            async def lite_handler(request: web.Request) -> web.FileResponse:
+                return web.FileResponse(LITE_HTML)
+
+            app.router.add_get("/lite", lite_handler)
+
     return app
 
 
