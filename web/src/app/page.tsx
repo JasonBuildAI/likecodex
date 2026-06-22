@@ -15,6 +15,17 @@ import { SkillPanel } from '@/components/SkillPanel';
 import { FileTree } from '@/components/FileTree';
 import { EditorPanel } from '@/components/EditorPanel';
 import { StatusBar } from '@/components/StatusBar';
+import { MentionPicker } from '@/ide/context/MentionPicker';
+import type { ContextMention } from '@/ide/context/types';
+import { ComposerPanel } from '@/ide/composer/ComposerPanel';
+import { useComposerStore } from '@/ide/composer/composerStore';
+import { GitPanel } from '@/ide/git/GitPanel';
+import { SearchPanel } from '@/ide/search/SearchPanel';
+import { TerminalPanel } from '@/ide/terminal/TerminalPanel';
+import { TestRunnerPanel } from '@/ide/debug/TestRunnerPanel';
+import { DebugToolbar } from '@/ide/debug/DebugToolbar';
+import { IDESettingsPanel } from '@/ide/settings/IDESettingsPanel';
+import { ExtensionLoader } from '@/ide/extensions/extensionLoader';
 import {
   fetchCacheMetrics,
   fetchConfig,
@@ -34,7 +45,14 @@ export default function Home() {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [chatOpen, setChatOpen] = useState(true);
   const [diffOpen, setDiffOpen] = useState(false);
-  const [leftPanel, setLeftPanel] = useState<'files' | 'sessions' | 'search' | 'skills'>('files');
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [leftPanel, setLeftPanel] = useState<'files' | 'sessions' | 'search' | 'git' | 'tests' | 'skills'>('files');
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [ideSettingsOpen, setIdeSettingsOpen] = useState(false);
+  const [showMentions, setShowMentions] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionPos, setMentionPos] = useState({ top: 0, left: 0 });
+  const [mentions, setMentions] = useState<ContextMention[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -53,6 +71,8 @@ export default function Home() {
   const currentSessionId = useAppStore((s) => s.currentSessionId);
   const openFiles = useAppStore((s) => s.openFiles);
   const activeFilePath = useAppStore((s) => s.activeFilePath);
+  const composerOpen = useComposerStore((s) => s.isOpen);
+  const toggleComposer = useComposerStore((s) => s.toggleComposer);
 
   const setCollaborationMode = useAppStore((s) => s.setCollaborationMode);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
@@ -76,6 +96,11 @@ export default function Home() {
   const setCurrentSessionId = useAppStore((s) => s.setCurrentSessionId);
   const setMessages = useAppStore((s) => s.setMessages);
   const addToast = useAppStore((s) => s.addToast);
+
+  // ── Load extensions on mount ──────────────────────────────────
+  useEffect(() => {
+    ExtensionLoader.loadExtensions();
+  }, []);
 
   // ── Initialization ──────────────────────────────────────────────────
   useEffect(() => {
@@ -245,6 +270,56 @@ export default function Home() {
     }
   };
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setInput(value);
+
+    // @ mention detection
+    const cursor = e.target.selectionStart;
+    const beforeCursor = value.slice(0, cursor);
+    const atIndex = beforeCursor.lastIndexOf('@');
+
+    if (atIndex !== -1 && (atIndex === 0 || beforeCursor[atIndex - 1] === ' ' || beforeCursor[atIndex - 1] === '\n')) {
+      const query = beforeCursor.slice(atIndex + 1);
+      if (!query.includes(' ') && !query.includes('\n') && query.length <= 50) {
+        setShowMentions(true);
+        setMentionQuery(query);
+        // Calculate position near cursor
+        const rect = textareaRef.current?.getBoundingClientRect();
+        if (rect) {
+          setMentionPos({
+            top: rect.bottom - 60,
+            left: rect.left + 20,
+          });
+        }
+        return;
+      }
+    }
+    setShowMentions(false);
+  };
+
+  const handleMentionSelect = (mention: ContextMention) => {
+    const cursor = textareaRef.current?.selectionStart || input.length;
+    const beforeCursor = input.slice(0, cursor);
+    const atIndex = beforeCursor.lastIndexOf('@');
+    if (atIndex === -1) return;
+
+    const afterCursor = input.slice(cursor);
+    const mentionTag = `@[${mention.label}](${mention.id}) `;
+    const newInput = input.slice(0, atIndex) + mentionTag + afterCursor;
+    setInput(newInput);
+    setShowMentions(false);
+
+    // Focus back to textarea and position cursor after mention
+    setTimeout(() => {
+      if (textareaRef.current) {
+        const newCursor = atIndex + mentionTag.length;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(newCursor, newCursor);
+      }
+    }, 0);
+  };
+
   // ── Global keyboard shortcuts ───────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -257,6 +332,16 @@ export default function Home() {
       if (e.key === 'b' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         useAppStore.getState().toggleSidebar();
+        return;
+      }
+      if (e.key === 'p' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+        e.preventDefault();
+        setIdeSettingsOpen(true);
+        return;
+      }
+      if (e.key === ',' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setIdeSettingsOpen(true);
         return;
       }
       if (e.key === 'n' && (e.ctrlKey || e.metaKey) && !isInput) {
@@ -306,7 +391,7 @@ export default function Home() {
         <div className="flex items-center gap-1.5 text-xs text-muted">
           {/* Left panel tabs */}
           <div className="flex gap-0.5 mr-2">
-            {(['files', 'sessions', 'search', 'skills'] as const).map((tab) => (
+            {(['files', 'sessions', 'search', 'git', 'tests', 'skills'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setLeftPanel(tab)}
@@ -314,7 +399,7 @@ export default function Home() {
                   leftPanel === tab ? 'bg-primary/20 text-primary' : 'hover:bg-accent/10'
                 }`}
               >
-                {tab === 'files' ? 'Files' : tab === 'sessions' ? 'History' : tab === 'search' ? 'Search' : 'Skills'}
+                {tab === 'files' ? 'Files' : tab === 'sessions' ? 'History' : tab === 'search' ? 'Search' : tab === 'git' ? 'Git' : tab === 'tests' ? 'Tests' : 'Skills'}
               </button>
             ))}
           </div>
@@ -350,6 +435,24 @@ export default function Home() {
             title="Toggle chat panel"
           >
             Chat
+          </button>
+
+          {/* Terminal toggle */}
+          <button
+            onClick={() => setTerminalOpen(!terminalOpen)}
+            className={`px-1.5 py-0.5 rounded border text-[10px] transition-colors ${terminalOpen ? 'border-primary text-primary' : 'border-border'}`}
+            title="Toggle terminal (Ctrl+J)"
+          >
+            Terminal
+          </button>
+
+          {/* Debug toggle */}
+          <button
+            onClick={() => setDebugOpen(!debugOpen)}
+            className={`px-1.5 py-0.5 rounded border text-[10px] transition-colors ${debugOpen ? 'border-primary text-primary' : 'border-border'}`}
+            title="Toggle debug toolbar"
+          >
+            Debug
           </button>
 
           {/* Command palette */}
@@ -396,7 +499,11 @@ export default function Home() {
               </div>
             </div>
           ) : leftPanel === 'search' ? (
-            <CodeGraphSearch />
+            <SearchPanel />
+          ) : leftPanel === 'git' ? (
+            <GitPanel />
+          ) : leftPanel === 'tests' ? (
+            <TestRunnerPanel />
           ) : (
             <SkillPanel />
           )}
@@ -404,6 +511,9 @@ export default function Home() {
 
         {/* Center: Editor + Diff */}
         <section className="flex-1 flex flex-col min-w-0">
+          {/* Debug toolbar */}
+          {debugOpen && <DebugToolbar />}
+
           {/* Editor */}
           <div className={`flex-1 min-h-0 ${diffOpen && hasDiff ? '' : 'flex-1'}`}>
             <EditorPanel />
@@ -428,6 +538,26 @@ export default function Home() {
               </div>
             </div>
           )}
+
+          {/* Terminal panel (collapsible bottom) */}
+          {terminalOpen && (
+            <div className="h-1/3 min-h-[120px] border-t border-border flex flex-col">
+              <div className="flex items-center justify-between px-3 py-1 bg-surface/50 shrink-0">
+                <span className="text-[10px] font-semibold text-muted/60 uppercase tracking-wider">
+                  Terminal
+                </span>
+                <button
+                  onClick={() => setTerminalOpen(false)}
+                  className="text-[10px] text-muted hover:text-foreground"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="flex-1 min-h-0">
+                <TerminalPanel />
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Right Panel: Chat */}
@@ -444,9 +574,9 @@ export default function Home() {
                 <textarea
                   ref={textareaRef}
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={handleInputChange}
                   onKeyDown={handleKeyDown}
-                  placeholder="Describe your coding task..."
+                  placeholder="Describe your task... Use @ to reference files"
                   className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-primary resize-none min-h-[36px] max-h-[160px]"
                   rows={1}
                   disabled={isStreaming}
@@ -468,6 +598,33 @@ export default function Home() {
           </aside>
         )}
       </div>
+
+      {/* Composer Panel */}
+      <ComposerPanel />
+
+      {/* Composer toggle button */}
+      {!composerOpen && (
+        <button
+          onClick={toggleComposer}
+          className="fixed bottom-12 right-4 z-50 px-3 py-1.5 bg-blue-600 text-white text-xs rounded-full shadow-lg hover:bg-blue-700 transition-colors"
+          title="Open Composer (Cmd+I)"
+        >
+          ✨ Composer
+        </button>
+      )}
+
+      {/* @ Mention Picker */}
+      {showMentions && (
+        <MentionPicker
+          triggerPosition={mentionPos}
+          query={mentionQuery}
+          onSelect={handleMentionSelect}
+          onClose={() => setShowMentions(false)}
+        />
+      )}
+
+      {/* IDE Settings Panel */}
+      <IDESettingsPanel open={ideSettingsOpen} onClose={() => setIdeSettingsOpen(false)} />
 
       {/* Status bar */}
       <StatusBar />
