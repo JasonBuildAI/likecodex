@@ -109,8 +109,9 @@ interface AppState {
   currentSessionId: string | null;
   planModeActive: boolean;
   planModePendingExit: boolean;
-  collaborationMode: 'normal' | 'plan' | 'goal';
-
+  collaborationMode: 'normal' | "plan" | "goal";
+  agentMode: 'ask' | 'agent' | 'manual';
+  
   // NEW: UI state
   toasts: Toast[];
   theme: 'dark' | 'light';
@@ -150,6 +151,7 @@ interface AppState {
   removePendingAsk: (requestId: string) => void;
   setPlanMode: (active: boolean, pendingExit?: boolean) => void;
   setCollaborationMode: (mode: 'normal' | 'plan' | 'goal') => void;
+  setAgentMode: (mode: 'ask' | 'agent' | 'manual') => void;
   setPlanSteps: (steps: PlanStep[]) => void;
   updatePlanStep: (id: string, update: Partial<PlanStep>) => void;
   setActiveDiff: (diff: { before: string; after: string } | null) => void;
@@ -215,6 +217,7 @@ export const useAppStore = create<AppState>((set) => ({
   approvalMode: 'auto',
   skills: [],
   codeGraphResults: [],
+  agentMode: 'agent',
 
   // UI settings
   settingsOpen: false,
@@ -323,6 +326,7 @@ export const useAppStore = create<AppState>((set) => ({
   setPlanMode: (active, pendingExit = false) =>
     set({ planModeActive: active, planModePendingExit: pendingExit }),
   setCollaborationMode: (mode) => set({ collaborationMode: mode }),
+  setAgentMode: (mode) => set({ agentMode: mode }),
   setPlanSteps: (steps) => set({ planSteps: steps }),
   updatePlanStep: (id, update) =>
     set((state) => ({

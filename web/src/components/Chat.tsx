@@ -1,10 +1,11 @@
 'use client';
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Message } from '@/lib/store';
 import { useAppStore } from '@/lib/store';
 import { ToolCallCard } from '@/components/ToolCallCard';
+import { AgentActivity, extractActivities, type ActivityEntry } from '@/components/AgentActivity';
 
 // ── ReasoningBlock ─────────────────────────────────────────────────────
 const ReasoningBlock = memo(function ReasoningBlock({ content }: { content: string }) {
@@ -64,6 +65,12 @@ const MessageBubble = memo(function MessageBubble({ msg }: { msg: Message }) {
   );
 });
 
+// ── ActivityGroup: renders a group of tool calls as Agent activity ────
+const ActivityGroup = memo(function ActivityGroup({ messages }: { messages: Message[] }) {
+  const activities = useMemo(() => extractActivities(messages), [messages]);
+  return <AgentActivity activities={activities} />;
+});
+
 // ── ChatMessages (virtualized) ─────────────────────────────────────────
 interface ChatMessagesProps {
   scrollRef: React.RefObject<HTMLDivElement | null>;
@@ -71,29 +78,51 @@ interface ChatMessagesProps {
 
 export const ChatMessages = memo(function ChatMessages({ scrollRef }: ChatMessagesProps) {
   const messages = useAppStore((s) => s.messages);
-  const estimateSize = useCallback(() => 120, []);
-  const prevLengthRef = useRef(messages.length);
+  // Pre-process: group consecutive tool messages into activity blocks
+  const groupedItems = useMemo(() => {
+    const items: Array<{ type: 'message'; msg: Message } | { type: 'activity'; messages: Message[] }> = [];
+    let toolBuffer: Message[] = [];
+
+    for (const msg of messages) {
+      if (msg.eventType === 'tool_call' || msg.eventType === 'tool_dispatch' || msg.eventType === 'tool_result') {
+        toolBuffer.push(msg);
+      } else {
+        if (toolBuffer.length > 0) {
+          items.push({ type: 'activity', messages: [...toolBuffer] });
+          toolBuffer = [];
+        }
+        items.push({ type: 'message', msg });
+      }
+    }
+    if (toolBuffer.length > 0) {
+      items.push({ type: 'activity', messages: toolBuffer });
+    }
+    return items;
+  }, [messages]);
+
+  const estimateSize = useCallback(() => 80, []);
+  const prevLengthRef = useRef(groupedItems.length);
 
   const virtualizer = useVirtualizer({
-    count: messages.length,
+    count: groupedItems.length,
     getScrollElement: () => scrollRef.current,
     estimateSize,
     overscan: 5,
   });
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new items
   useEffect(() => {
-    if (messages.length > prevLengthRef.current && scrollRef.current) {
+    if (groupedItems.length > prevLengthRef.current && scrollRef.current) {
       const el = scrollRef.current;
       const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
       if (isNearBottom) {
-        virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+        virtualizer.scrollToIndex(groupedItems.length - 1, { align: 'end' });
       }
     }
-    prevLengthRef.current = messages.length;
-  }, [messages.length, virtualizer, scrollRef]);
+    prevLengthRef.current = groupedItems.length;
+  }, [groupedItems.length, virtualizer, scrollRef]);
 
-  if (messages.length === 0) {
+  if (groupedItems.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center text-muted">
@@ -115,10 +144,10 @@ export const ChatMessages = memo(function ChatMessages({ scrollRef }: ChatMessag
       }}
     >
       {virtualizer.getVirtualItems().map((virtualItem) => {
-        const msg = messages[virtualItem.index];
+        const item = groupedItems[virtualItem.index];
         return (
           <div
-            key={msg.id}
+            key={item.type === 'message' ? item.msg.id : `activity-${virtualItem.index}`}
             style={{
               position: 'absolute',
               top: 0,
@@ -130,7 +159,11 @@ export const ChatMessages = memo(function ChatMessages({ scrollRef }: ChatMessag
             data-index={virtualItem.index}
           >
             <div className="px-1 py-1.5">
-              <MessageBubble msg={msg} />
+              {item.type === 'message' ? (
+                <MessageBubble msg={item.msg} />
+              ) : (
+                <ActivityGroup messages={item.messages} />
+              )}
             </div>
           </div>
         );
