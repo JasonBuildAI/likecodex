@@ -270,6 +270,24 @@ export function parseRustEvent(data: RustEvent): {
         taskId,
         reasoningContent: String(payload.content || ''),
       };
+    case 'agent_activity': {
+      return {
+        kind: 'agent_activity',
+        taskId,
+        content: String(payload.description || ''),
+        call: {
+          id: '',
+          name: String(payload.tool_name || ''),
+          arguments: (payload.metadata as Record<string, unknown>) || {},
+        },
+      };
+    }
+    case 'agent_thinking':
+      return {
+        kind: 'agent_thinking',
+        taskId,
+        content: String(payload.content || ''),
+      };
     case 'error':
       return {
         kind: 'error',
@@ -465,6 +483,27 @@ function applyParsedEvent(
         handlers.onReasoningDelta?.(parsed.reasoningContent);
       }
       break;
+    case 'agent_activity':
+      if (parsed.call) {
+        handlers.onMessage?.({
+          id: `agent-activity-${Date.now()}`,
+          role: 'tool',
+          content: parsed.content || `Agent: ${parsed.call.name}`,
+          toolCalls: [parsed.call],
+          eventType: 'agent_activity',
+          timestamp: Date.now(),
+        });
+      }
+      break;
+    case 'agent_thinking':
+      handlers.onMessage?.({
+        id: `agent-thinking-${Date.now()}`,
+        role: 'system',
+        content: parsed.content || '',
+        eventType: 'agent_thinking',
+        timestamp: Date.now(),
+      });
+      break;
     default:
       break;
   }
@@ -533,14 +572,18 @@ export async function streamChat(
   prompt: string,
   sessionId: string | null,
   handlers: EventHandler,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  agentMode: 'ask' | 'agent' | 'manual' = 'agent',
+  activeFiles?: string[],
 ): Promise<void> {
   const resp = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: buildHeaders(),
     body: JSON.stringify({
       prompt,
+      agent_mode: agentMode,
       ...(sessionId ? { session_id: sessionId } : {}),
+      ...(activeFiles && activeFiles.length > 0 ? { active_files: activeFiles } : {}),
     }),
     signal,
   });

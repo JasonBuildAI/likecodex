@@ -26,6 +26,7 @@ import { TestRunnerPanel } from '@/ide/debug/TestRunnerPanel';
 import { DebugToolbar } from '@/ide/debug/DebugToolbar';
 import { IDESettingsPanel } from '@/ide/settings/IDESettingsPanel';
 import { ExtensionLoader } from '@/ide/extensions/extensionLoader';
+import { AgentSidebar } from '@/components/AgentSidebar';
 import {
   fetchCacheMetrics,
   fetchConfig,
@@ -46,7 +47,7 @@ export default function Home() {
   const [chatOpen, setChatOpen] = useState(true);
   const [diffOpen, setDiffOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const [leftPanel, setLeftPanel] = useState<'files' | 'sessions' | 'search' | 'git' | 'tests' | 'skills'>('files');
+  const [leftPanel, setLeftPanel] = useState<'files' | 'agents' | 'sessions' | 'search' | 'git' | 'tests' | 'skills'>('files');
   const [debugOpen, setDebugOpen] = useState(false);
   const [ideSettingsOpen, setIdeSettingsOpen] = useState(false);
   const [showMentions, setShowMentions] = useState(false);
@@ -96,6 +97,8 @@ export default function Home() {
   const setCurrentSessionId = useAppStore((s) => s.setCurrentSessionId);
   const setMessages = useAppStore((s) => s.setMessages);
   const addToast = useAppStore((s) => s.addToast);
+  const agentMode = useAppStore((s) => s.agentMode);
+  const setAgentMode = useAppStore((s) => s.setAgentMode);
 
   // ── Load extensions on mount ──────────────────────────────────
   useEffect(() => {
@@ -173,6 +176,13 @@ export default function Home() {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
 
+    // Get active files from store to inject into context
+    const { openFiles, activeFilePath } = useAppStore.getState();
+    const activeFiles = openFiles
+      .filter((f) => f.path === activeFilePath || f.modified)
+      .map((f) => f.path)
+      .slice(0, 5); // Limit to 5 files
+
     try {
       await streamChat(
         prompt,
@@ -204,7 +214,9 @@ export default function Home() {
             }
           },
         },
-        abortRef.current.signal
+        abortRef.current.signal,
+        agentMode,
+        activeFiles
       );
     } catch (err) {
       addMessage({
@@ -220,7 +232,7 @@ export default function Home() {
     isStreaming, currentSessionId, setCurrentSessionId, addMessage, setIsStreaming, setPlanSteps,
     appendToLastMessage, upsertToolDispatch, setTasks, setCurrentTaskId,
     updateTask, setSessions, addPendingPermission, addPendingAsk, removePendingAsk,
-    setPlanMode, updatePlanStep, addToast,
+    setPlanMode, updatePlanStep, addToast, agentMode,
   ]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -391,7 +403,7 @@ export default function Home() {
         <div className="flex items-center gap-1.5 text-xs text-muted">
           {/* Left panel tabs */}
           <div className="flex gap-0.5 mr-2">
-            {(['files', 'sessions', 'search', 'git', 'tests', 'skills'] as const).map((tab) => (
+            {(['files', 'agents', 'sessions', 'search', 'git', 'tests', 'skills'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setLeftPanel(tab)}
@@ -399,7 +411,7 @@ export default function Home() {
                   leftPanel === tab ? 'bg-primary/20 text-primary' : 'hover:bg-accent/10'
                 }`}
               >
-                {tab === 'files' ? 'Files' : tab === 'sessions' ? 'History' : tab === 'search' ? 'Search' : tab === 'git' ? 'Git' : tab === 'tests' ? 'Tests' : 'Skills'}
+                {tab === 'files' ? 'Files' : tab === 'agents' ? 'Agents' : tab === 'sessions' ? 'History' : tab === 'search' ? 'Search' : tab === 'git' ? 'Git' : tab === 'tests' ? 'Tests' : 'Skills'}
               </button>
             ))}
           </div>
@@ -482,6 +494,13 @@ export default function Home() {
         <aside className="w-56 border-r border-border bg-surface/30 overflow-y-auto shrink-0 flex flex-col">
           {leftPanel === 'files' ? (
             <FileTree />
+          ) : leftPanel === 'agents' ? (
+            <AgentSidebar
+              sessions={sessions}
+              tasks={tasks}
+              activeSessionId={currentSessionId}
+              onSessionSelect={handleSessionSelect}
+            />
           ) : leftPanel === 'sessions' ? (
             <div className="p-2 overflow-y-auto">
               <div className="text-[10px] font-semibold uppercase tracking-wider text-muted/60 mb-2 px-1">
@@ -568,15 +587,70 @@ export default function Home() {
               <ChatMessages scrollRef={scrollRef} />
             </div>
 
-            {/* Chat input */}
-            <form onSubmit={handleSubmit} className="border-t border-border p-2 bg-surface/50 shrink-0">
-              <div className="flex gap-2 items-end">
+            {/* Agent mode selector + Chat input */}
+            <form onSubmit={handleSubmit} className="border-t border-border bg-surface/50 shrink-0">
+              {/* Mode selector bar */}
+              <div className="flex items-center gap-1 px-2 pt-2 pb-1">
+                <div className="flex rounded-lg border border-border overflow-hidden">
+                  {(['ask', 'agent', 'manual'] as const).map((mode) => {
+                    const isActive = agentMode === mode;
+                    const colors = {
+                      ask: isActive ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : '',
+                      agent: isActive ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : '',
+                      manual: isActive ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' : '',
+                    };
+                    const icons = {
+                      ask: '💬',
+                      agent: '🤖',
+                      manual: '✋',
+                    };
+                    const labels = {
+                      ask: 'Ask',
+                      agent: 'Agent',
+                      manual: 'Manual',
+                    };
+                    const tooltips = {
+                      ask: 'Ask mode: read-only Q&A, no code changes',
+                      agent: 'Agent mode: autonomous execution with full tool access',
+                      manual: 'Manual mode: confirm each action before execution',
+                    };
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setAgentMode(mode)}
+                        title={tooltips[mode]}
+                        className={`px-2 py-1 text-[10px] font-medium transition-all ${
+                          isActive
+                            ? colors[mode]
+                            : 'text-muted hover:text-foreground hover:bg-accent/10'
+                        }`}
+                      >
+                        <span className="mr-0.5">{icons[mode]}</span>
+                        {labels[mode]}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex-1" />
+                <span className="text-[9px] text-muted/50">
+                  {agentMode === 'ask' ? 'Read-only' : agentMode === 'manual' ? 'Confirm each step' : 'Auto-execute'}
+                </span>
+              </div>
+              {/* Input area */}
+              <div className="flex gap-2 items-end px-2 pb-2">
                 <textarea
                   ref={textareaRef}
                   value={input}
                   onChange={handleInputChange}
                   onKeyDown={handleKeyDown}
-                  placeholder="Describe your task... Use @ to reference files"
+                  placeholder={
+                    agentMode === 'ask'
+                      ? 'Ask a question about your code...'
+                      : agentMode === 'manual'
+                        ? 'Describe your task (each step requires approval)...'
+                        : 'Describe your task... Use @ to reference files'
+                  }
                   className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-primary resize-none min-h-[36px] max-h-[160px]"
                   rows={1}
                   disabled={isStreaming}
@@ -584,14 +658,20 @@ export default function Home() {
                 <button
                   type="submit"
                   disabled={isStreaming || !input.trim()}
-                  className="rounded-md bg-primary px-3 py-2 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50 shrink-0 transition-colors"
+                  className={`rounded-md px-3 py-2 text-xs font-medium text-white shrink-0 transition-colors disabled:opacity-50 ${
+                    agentMode === 'ask'
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : agentMode === 'manual'
+                        ? 'bg-amber-600 hover:bg-amber-700'
+                        : 'bg-primary hover:bg-blue-600'
+                  }`}
                 >
                   {isStreaming ? (
                     <span className="flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
                       ...
                     </span>
-                  ) : 'Send'}
+                  ) : agentMode === 'ask' ? 'Ask' : 'Send'}
                 </button>
               </div>
             </form>
