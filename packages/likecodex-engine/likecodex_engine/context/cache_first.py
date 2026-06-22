@@ -96,6 +96,9 @@ class CacheFirstContext:
         self.cache_reset_count = 0
         self.rewrite_version = 0
         self._soft_notice_emitted = False
+        self._log_version = 0
+        self._build_cache: list[Message] | None = None
+        self._build_cache_log_version = -1
 
         if messages is not None:
             self._log: list[Message] = list(messages)
@@ -124,14 +127,17 @@ class CacheFirstContext:
 
     def add_user_message(self, content: str) -> None:
         self._log.append(Message(role=Role.USER, content=content))
+        self._log_version += 1
 
     def add_context_block(self, content: str) -> None:
         block = content if content.startswith(CONTEXT_PREFIX) else f"{CONTEXT_PREFIX}{content}"
         self._log.append(Message(role=Role.USER, content=block))
+        self._log_version += 1
 
     def add_plan_block(self, content: str) -> None:
         block = content if content.startswith(PLAN_PREFIX) else f"{PLAN_PREFIX}{content}"
         self._log.append(Message(role=Role.USER, content=block))
+        self._log_version += 1
 
     def add_system_note(self, content: str) -> None:
         self.add_context_block(content)
@@ -155,14 +161,17 @@ class CacheFirstContext:
                 reasoning_content=reasoning_content,
             )
         )
+        self._log_version += 1
 
     def add_tool_result(self, tool_call_id: str, content: str) -> None:
         self._log.append(Message(role=Role.TOOL, content=content, tool_call_id=tool_call_id))
+        self._log_version += 1
 
     def update_tool_result(self, tool_call_id: str, content: str) -> bool:
         for msg in reversed(self._log):
             if msg.role == Role.TOOL and msg.tool_call_id == tool_call_id:
                 msg.content = content
+                self._log_version += 1
                 return True
         return False
 
@@ -187,14 +196,14 @@ class CacheFirstContext:
         force: bool = False,
     ) -> dict[str, Any]:
         """LLM compaction with archive and advanced strategies.
-        
+
         Args:
             instructions: Optional focus instructions for LLM summary
             force: If True, bypass fold_economics (used by /compact command and force-ratio)
         """
         # Prune stale tool results first
         self._log, prune_stats = prune_stale_tool_results(self._log)
-        
+
         # Check if compactor is stuck (consecutive no-op compacts)
         if self.compactor.compact_stuck():
             return {
@@ -202,12 +211,12 @@ class CacheFirstContext:
                 "reason": "compact_stuck",
                 "message": "Compaction paused: consecutive compactions produced no meaningful reduction",
             }
-        
+
         # Split into pinned vs foldable
         pinned, foldable = self.compactor.split_compactable(self._log)
         if not foldable:
             return {"compacted": False, "reason": "nothing_to_fold"}
-        
+
         # Apply fold economics (skip if foldable is too small) unless forced
         if not force and not self.compactor.fold_economics(foldable):
             return {
@@ -215,14 +224,14 @@ class CacheFirstContext:
                 "reason": "fold_economics_skip",
                 "message": "Foldable content too small to justify compaction overhead",
             }
-        
+
         # Track log size before compaction for economics calculation
         total_foldable_chars = sum(len(m.content) for m in foldable)
         self.compactor._last_log_size = total_foldable_chars
-        
+
         # Archive foldable messages
         archive_path = self.compactor.archive_messages(foldable)
-        
+
         # Attempt LLM summary with fallback to mechanical summary
         summary: str
         if self._compact_llm is not None:
@@ -237,25 +246,26 @@ class CacheFirstContext:
                 summary = self.compactor.summarize_log(foldable)
         else:
             summary = self.compactor.summarize_log(foldable)
-        
+
         # Rebuild log with pinned + summary
         new_log = [*pinned, Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
-        
+
         # Check if compaction actually reduced size
         old_size = sum(len(m.content) for m in self._log)
         new_size = sum(len(m.content) for m in new_log)
-        
+
         if new_size >= old_size * 0.95:
             # Compaction produced minimal reduction (<5% savings)
             self.compactor._consecutive_noop_compacts += 1
         else:
             # Successful compaction, reset counter
             self.compactor._consecutive_noop_compacts = 0
-        
+
         self._log = new_log
         self.cache_reset_count += 1
         self.rewrite_version += 1
-        
+        self._log_version += 1
+
         return {
             "compacted": True,
             "archive": str(archive_path) if archive_path else None,
@@ -270,47 +280,48 @@ class CacheFirstContext:
         # Check if compactor is stuck
         if self.compactor.compact_stuck():
             return
-        
+
         self._log, _ = prune_stale_tool_results(self._log)
         pinned, foldable = self.compactor.split_compactable(self._log)
         if not foldable:
             return
-        
+
         # Apply fold economics for sync compaction
         if not self.compactor.fold_economics(foldable):
             return
-        
+
         # Track log size
         total_foldable_chars = sum(len(m.content) for m in foldable)
         self.compactor._last_log_size = total_foldable_chars
-        
+
         # Archive and summarize
         self.compactor.archive_messages(foldable)
         summary = self.compactor.summarize_log(foldable)
-        
+
         # Rebuild log
         new_log = [*pinned, Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
-        
+
         # Check reduction
         old_size = sum(len(m.content) for m in self._log)
         new_size = sum(len(m.content) for m in new_log)
-        
+
         if new_size >= old_size * 0.95:
             self.compactor._consecutive_noop_compacts += 1
         else:
             self.compactor._consecutive_noop_compacts = 0
-        
+
         self._log = new_log
         self.cache_reset_count += 1
         self.rewrite_version += 1
 
     def build_for_llm(self) -> list[Message]:
+        """Cached build: reuses previous result when nothing changed."""
+        if self._build_cache is not None and self._build_cache_log_version == self._log_version:
+            return self._build_cache
         out: list[Message] = [Message(role=Role.SYSTEM, content=self.prefix.combined)]
         for message in sanitize_tool_pairing(self._log):
             if message.role == Role.ASSISTANT and message.tool_calls:
-                tool_calls = (
-                    json.loads(message.raw_tool_calls) if message.raw_tool_calls else message.tool_calls
-                )
+                tool_calls = json.loads(message.raw_tool_calls) if message.raw_tool_calls else message.tool_calls
                 out.append(
                     Message(
                         role=message.role,
@@ -321,6 +332,8 @@ class CacheFirstContext:
                 )
             else:
                 out.append(message.model_copy(deep=True))
+        self._build_cache = out
+        self._build_cache_log_version = self._log_version
         return out
 
     def get_messages(self) -> list[Message]:

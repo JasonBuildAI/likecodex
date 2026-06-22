@@ -29,7 +29,6 @@ from likecodex_engine.agent.guards import (
     finish_reason_notice,
     has_visible_final_answer,
 )
-from likecodex_engine.tools.ask import AskToolHandler
 from likecodex_engine.agent.output_limit import limit_tool_output
 from likecodex_engine.agent.plan_mode import plan_mode_block_reason, plan_mode_tool_result
 from likecodex_engine.agent.plan_state import PlanState
@@ -59,6 +58,7 @@ from likecodex_engine.permissions.evaluator import (
     ExecutionMode,
     PermissionEvaluator,
 )
+from likecodex_engine.tools.ask import AskToolHandler
 from likecodex_engine.tools.registry import ToolRegistry
 
 
@@ -336,15 +336,15 @@ class AgentLoop:
             have_last_prefix_shape = True
             if hasattr(self.context, "record_prompt_tokens"):
                 self.context.record_prompt_tokens(response.usage)
-                
+
                 # Three-tier compaction strategy (Reasonix parity):
                 # 1. soft_compact_ratio (0.5) -> one-time notice
                 # 2. compact_ratio (0.8) -> normal compaction
                 # 3. compact_force_ratio (0.9) -> forced compaction
-                
+
                 prompt_tokens = getattr(self.context, "last_prompt_tokens", 0)
                 compactor = self.context.compactor
-                
+
                 # Tier 3: Force compact (highest priority)
                 if hasattr(self.context, "compact_async") and compactor.should_force_compact(prompt_tokens):
                     yield self._emit(
@@ -521,6 +521,8 @@ class AgentLoop:
                 self.context.update_tool_result(tool_call_id, new_output)
                 self._turn_outcomes[0].output = new_output
                 yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
+            # Prefetch: build context cache for next iteration while idle
+            self.context.get_messages()
             iteration += 1
         if hit_max_iterations:
             yield self._emit(
@@ -735,9 +737,7 @@ class AgentLoop:
             )
         )
 
-    async def respond_permission(
-        self, request_id: str, approved: bool, grant_scope: str = "once"
-    ) -> bool:
+    async def respond_permission(self, request_id: str, approved: bool, grant_scope: str = "once") -> bool:
         future = self.pending_permissions.get(request_id)
         if future is None or future.done():
             return False
