@@ -122,6 +122,49 @@ class CacheFirstContext:
     def set_project_memories(self, content: str) -> None:
         self.prefix.project_memories = content
 
+    def inject_active_files(self, file_paths: list[str], working_dir: str = ".") -> None:
+        """Inject content from active files into context.
+
+        Args:
+            file_paths: List of file paths to read and inject
+            working_dir: Base directory for resolving relative paths
+        """
+        if not file_paths:
+            return
+
+        from pathlib import Path
+
+        file_contents = []
+        base_dir = Path(working_dir).resolve()
+
+        for file_path in file_paths[:10]:  # Limit to 10 files max
+            try:
+                # Resolve path relative to working_dir if not absolute
+                path = Path(file_path)
+                if not path.is_absolute():
+                    path = base_dir / path
+
+                if path.exists() and path.is_file():
+                    # Read file with size limit (max 50KB per file)
+                    content = path.read_text(encoding="utf-8", errors="ignore")
+                    if len(content) > 50000:
+                        content = content[:50000] + "\n... [truncated]"
+
+                    # Use relative path for display if possible
+                    try:
+                        display_path = str(path.relative_to(base_dir))
+                    except ValueError:
+                        display_path = str(path)
+
+                    file_contents.append(f"### {display_path}\n```\n{content}\n```")
+            except Exception:
+                # Skip files that can't be read
+                pass
+
+        if file_contents:
+            block = "## Active Files\n" + "\n\n".join(file_contents)
+            self.add_context_block(block)
+
     def add_scratch(self, content: str) -> None:
         self.scratch.add(content)
 

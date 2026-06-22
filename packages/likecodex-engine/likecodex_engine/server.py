@@ -159,6 +159,7 @@ def _make_agent(
     session_id: str | None = None,
     context: ContextManager | None = None,
     no_tools: bool = False,
+    agent_mode: str = "agent",
 ) -> AgentLoop:
     cfg = _resolve_config(config)
     working_dir = cfg.get("working_dir", ".")
@@ -173,6 +174,11 @@ def _make_agent(
     tools = ToolRegistry(working_dir, config=cfg)
     memory = VectorMemory(cfg.get("memory_path", ".likecodex/memory.jsonl"))
     approval_mode = cfg.get("approval_mode", "auto")
+    # Override approval mode based on agent_mode
+    if agent_mode == "manual":
+        approval_mode = "ask"
+    elif agent_mode == "ask":
+        approval_mode = "read-only"
     policy = Policy.from_config(cfg)
     evaluator = PermissionEvaluator(ApprovalMode(approval_mode), policy, working_dir)
     planner = None
@@ -265,6 +271,7 @@ def _make_agent(
         no_tools=no_tools,
         plan_state=PlanState(),
         goal_state=goal_state,
+        agent_mode=agent_mode,
     )
     loop_holder["loop"] = loop
     tools.set_agent_factory(agent_factory)
@@ -338,7 +345,11 @@ async def chat(request: web.Request) -> web.StreamResponse:
     data = await request.json()
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
+    agent_mode = data.get("agent_mode", "agent")
+    active_files = data.get("active_files", [])
     no_tools = bool(data.get("no_tools", False))
+    if agent_mode == "ask":
+        no_tools = True
     cfg = _resolve_config(request.app[APP_CONFIG])
     cfg = _merge_request_config(cfg, data)
     working_dir = cfg.get("working_dir", ".")
@@ -346,8 +357,21 @@ async def chat(request: web.Request) -> web.StreamResponse:
     sid = session_id or session_id_for_dir(working_dir)
     store = _session_store()
     context = _get_or_create_context(sid, store)
-    loop = _make_agent(cfg, session_id=sid, context=context, no_tools=no_tools)
+    loop = _make_agent(cfg, session_id=sid, context=context, no_tools=no_tools, agent_mode=agent_mode)
     await _ensure_mcp(cfg, loop.tools)
+
+    # Inject active files into context if provided
+    if active_files and isinstance(active_files, list):
+        context.inject_active_files(active_files, working_dir)
+
+    # Inject mode-specific system instructions per turn
+    if agent_mode in ("ask", "agent", "manual"):
+        _mode_prompt_file = Path(__file__).parent / "prompts" / f"{agent_mode}_mode.txt"
+        if _mode_prompt_file.exists():
+            _mode_prompt = _mode_prompt_file.read_text(encoding="utf-8").strip()
+            if _mode_prompt:
+                context.add_context_block(f"[Agent Mode: {agent_mode.upper()}]\n{_mode_prompt}")
+
     store.append_event(sid, SessionEvent(event_type="user", content=prompt, metadata={}))
     _set_current_deepseek_session(loop, context, sid)
 
@@ -425,6 +449,8 @@ async def run_task(request: web.Request) -> web.Response:
     data = await request.json()
     prompt = data.get("prompt", "")
     session_id = data.get("session_id")
+    agent_mode = data.get("agent_mode", "agent")
+    active_files = data.get("active_files", [])
     cfg = _resolve_config(request.app[APP_CONFIG])
     cfg = _merge_request_config(cfg, data)
     working_dir = cfg.get("working_dir", ".")
@@ -432,8 +458,13 @@ async def run_task(request: web.Request) -> web.Response:
     sid = session_id or session_id_for_dir(working_dir)
     store = _session_store()
     context = _get_or_create_context(sid, store)
-    loop = _make_agent(cfg, session_id=sid, context=context)
+    loop = _make_agent(cfg, session_id=sid, context=context, agent_mode=agent_mode)
     await _ensure_mcp(cfg, loop.tools)
+
+    # Inject active files into context if provided
+    if active_files and isinstance(active_files, list):
+        context.inject_active_files(active_files, working_dir)
+
     store.append_event(sid, SessionEvent(event_type="user", content=prompt, metadata={}))
     _set_current_deepseek_session(loop, context, sid)
 

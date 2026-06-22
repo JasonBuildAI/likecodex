@@ -84,6 +84,7 @@ class AgentLoop:
         goal_state: GoalState | None = None,
         is_subagent: bool = False,
         executor_handoff_guard: bool = False,
+        agent_mode: str = "agent",
     ) -> None:
         self.llm = llm
         self.tools = tools
@@ -99,6 +100,7 @@ class AgentLoop:
         self.on_event = on_event
         self.agent_factory = agent_factory
         self.no_tools = no_tools
+        self.agent_mode = agent_mode
         self.checkpoints = checkpoints or CheckpointManager(tools.working_dir)
         self.pending_permissions: dict[str, asyncio.Future[bool]] = {}
         self.loop_guard = LoopGuard()
@@ -570,6 +572,30 @@ class AgentLoop:
                 self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
                 yield self._emit(LLMResponse(content=result, model="tool-result", event_type="tool_result"))
                 return
+
+        # Agent mode: ask mode only allows read-only tools
+        if self.agent_mode == "ask" and not self.tools.is_read_only(tool_call.name):
+            result = json.dumps({
+                "error": f"Tool '{tool_call.name}' is not allowed in ask mode. Only read-only tools are permitted."
+            })
+            self._turn_outcomes.append(
+                classify_turn_outcome(
+                    tool_call.id,
+                    tool_call.name,
+                    result,
+                    blocked=True,
+                    loop_guard=self.loop_guard,
+                )
+            )
+            self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
+            yield self._emit(
+                LLMResponse(
+                    content=f"Tool '{tool_call.name}' blocked: ask mode only allows read-only operations.",
+                    model="permission",
+                    event_type="permission",
+                )
+            )
+            return
 
         if tool_call.name == "ask":
             async for resp in self._handle_ask_tool(tool_call):
