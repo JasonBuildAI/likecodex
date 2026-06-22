@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 
+// ── Core types ─────────────────────────────────────────────────────────
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
@@ -53,7 +54,30 @@ export interface SessionSummary {
   metadata?: Record<string, unknown>;
 }
 
+// ── NEW types ──────────────────────────────────────────────────────────
+export interface Toast {
+  id: string;
+  type: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  duration?: number;
+}
+
+export interface Skill {
+  name: string;
+  description: string;
+  source?: string;
+}
+
+export interface SearchResult {
+  name: string;
+  kind: string;
+  path: string;
+  line?: number;
+}
+
+// ── App state ──────────────────────────────────────────────────────────
 interface AppState {
+  // Core
   messages: Message[];
   tasks: Task[];
   currentTaskId: string | null;
@@ -69,14 +93,26 @@ interface AppState {
   planModeActive: boolean;
   planModePendingExit: boolean;
   collaborationMode: 'normal' | 'plan' | 'goal';
-  reasoningContent: string;
+
+  // NEW: UI state
+  toasts: Toast[];
+  theme: 'dark' | 'light';
+  sidebarOpen: boolean;
+  commandPaletteOpen: boolean;
+  approvalMode: string;
+  skills: Skill[];
+  codeGraphResults: SearchResult[];
+
   // UI settings
   settingsOpen: boolean;
   apiKey: string;
-  selectedModel: 'deepseek-v4-flash' | 'deepseek-v4-pro';
+  selectedModel: string;
+  reasoningContent: string;
+
+  // Core actions
   setSettingsOpen: (open: boolean) => void;
   setApiKey: (key: string) => void;
-  setSelectedModel: (model: 'deepseek-v4-flash' | 'deepseek-v4-pro') => void;
+  setSelectedModel: (model: string) => void;
   setCacheHitRate: (rate: number | null) => void;
   addMessage: (message: Message) => void;
   appendToLastMessage: (content: string) => void;
@@ -101,9 +137,21 @@ interface AppState {
   setMessages: (messages: Message[]) => void;
   appendReasoningContent: (content: string) => void;
   flushReasoningToLastMessage: () => void;
+
+  // NEW actions
+  addToast: (toast: Omit<Toast, 'id'>) => void;
+  removeToast: (id: string) => void;
+  setTheme: (theme: 'dark' | 'light') => void;
+  toggleSidebar: () => void;
+  setSidebarOpen: (open: boolean) => void;
+  setCommandPaletteOpen: (open: boolean) => void;
+  setApprovalMode: (mode: string) => void;
+  setSkills: (skills: Skill[]) => void;
+  setCodeGraphResults: (results: SearchResult[]) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
+  // Core state
   messages: [],
   tasks: [],
   currentTaskId: null,
@@ -120,9 +168,22 @@ export const useAppStore = create<AppState>((set) => ({
   planModePendingExit: false,
   collaborationMode: 'normal',
   reasoningContent: '',
+
+  // NEW state defaults
+  toasts: [],
+  theme: 'dark',
+  sidebarOpen: true,
+  commandPaletteOpen: false,
+  approvalMode: 'auto',
+  skills: [],
+  codeGraphResults: [],
+
+  // UI settings
   settingsOpen: false,
   apiKey: typeof window !== 'undefined' ? localStorage.getItem('likecodex_api_key') || '' : '',
-  selectedModel: (typeof window !== 'undefined' ? (localStorage.getItem('likecodex_model') as 'deepseek-v4-flash' | 'deepseek-v4-pro') : null) || 'deepseek-v4-flash',
+  selectedModel: typeof window !== 'undefined' ? localStorage.getItem('likecodex_model') || 'deepseek-v4-flash' : 'deepseek-v4-flash',
+
+  // ── Core actions ───────────────────────────────────────────────────
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setApiKey: (key) => {
     if (typeof window !== 'undefined') localStorage.setItem('likecodex_api_key', key);
@@ -238,4 +299,21 @@ export const useAppStore = create<AppState>((set) => ({
   clearMessages: () => set({ messages: [], currentTaskId: null }),
   setCurrentSessionId: (id) => set({ currentSessionId: id }),
   setMessages: (messages) => set({ messages }),
+
+  // ── NEW actions ───────────────────────────────────────────────────
+  addToast: (toast) =>
+    set((state) => ({
+      toasts: [...state.toasts, { ...toast, id: `toast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` }],
+    })),
+  removeToast: (id) =>
+    set((state) => ({
+      toasts: state.toasts.filter((t) => t.id !== id),
+    })),
+  setTheme: (theme) => set({ theme }),
+  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+  setSidebarOpen: (open) => set({ sidebarOpen: open }),
+  setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+  setApprovalMode: (mode) => set({ approvalMode: mode }),
+  setSkills: (skills) => set({ skills }),
+  setCodeGraphResults: (results) => set({ codeGraphResults: results }),
 }));

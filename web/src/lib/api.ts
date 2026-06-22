@@ -1,25 +1,81 @@
 import {
-  AskRequest,
-  Message,
-  PermissionRequest,
-  PlanStep,
-  SessionSummary,
-  Task,
-  ToolCall,
+  type AskRequest,
+  type Message,
+  type PermissionRequest,
+  type PlanStep,
+  type SessionSummary,
+  type Skill,
+  type Task,
+  type ToolCall,
+  type SearchResult,
 } from './store';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 
-/** Build headers with optional API key and model selection from the store. */
+// ── Helper: build headers ──────────────────────────────────────────────
+function getStoreApiKey(): string {
+  if (typeof window === 'undefined') return '';
+  // try zustand store first, fallback to localStorage
+  try {
+    const { useAppStore } = require('./store');
+    return useAppStore.getState().apiKey || localStorage.getItem('likecodex_api_key') || '';
+  } catch {
+    return localStorage.getItem('likecodex_api_key') || '';
+  }
+}
+
+function getStoreModel(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const { useAppStore } = require('./store');
+    return useAppStore.getState().selectedModel || localStorage.getItem('likecodex_model') || '';
+  } catch {
+    return localStorage.getItem('likecodex_model') || '';
+  }
+}
+
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (typeof window !== 'undefined') {
-    const apiKey = localStorage.getItem('likecodex_api_key');
-    const model = localStorage.getItem('likecodex_model');
-    if (apiKey) headers['X-LikeCodex-Api-Key'] = apiKey;
-    if (model) headers['X-LikeCodex-Model'] = model;
-  }
+  const apiKey = getStoreApiKey();
+  const model = getStoreModel();
+  if (apiKey) headers['X-LikeCodex-Api-Key'] = apiKey;
+  if (model) headers['X-LikeCodex-Model'] = model;
   return headers;
+}
+
+// ── Helper: fetch with timeout + retry ─────────────────────────────────
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit = {},
+  retries = 2,
+  timeoutMs = 10000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const fetchOptions: RequestInit = {
+    ...options,
+    signal: controller.signal,
+  };
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const resp = await fetch(url, fetchOptions);
+      clearTimeout(timeout);
+      return resp;
+    } catch (err) {
+      clearTimeout(timeout);
+      if (attempt === retries) throw err;
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+    }
+  }
+  throw new Error('fetchWithRetry: unreachable');
+}
+
+// ── Event types ────────────────────────────────────────────────────────
+export interface RustEvent {
+  type: string;
+  payload: Record<string, unknown>;
 }
 
 export function formatRetryMessage(reason: string, attempt: number, max: number): string {
@@ -30,11 +86,6 @@ export function formatRetryMessage(reason: string, attempt: number, max: number)
         ? 'Stream interrupted'
         : 'Retrying';
   return `${label} — retrying (${attempt}/${max})`;
-}
-
-export interface RustEvent {
-  type: string;
-  payload: Record<string, unknown>;
 }
 
 export function parseRustEvent(data: RustEvent): {
@@ -229,22 +280,7 @@ export function parseRustEvent(data: RustEvent): {
   }
 }
 
-export async function createTask(prompt: string, sessionId?: string | null): Promise<Task> {
-  const resp = await fetch(`${API_BASE}/tasks`, {
-    method: 'POST',
-    headers: buildHeaders(),
-    body: JSON.stringify({
-      prompt,
-      ...(sessionId ? { session_id: sessionId } : {}),
-    }),
-  });
-  if (!resp.ok) {
-    throw new Error(`Failed to create task: ${resp.statusText}`);
-  }
-  const data = await resp.json();
-  return data.task as Task;
-}
-
+// ── applyParsedEvent ───────────────────────────────────────────────────
 function applyParsedEvent(
   parsed: ReturnType<typeof parseRustEvent>,
   handlers: EventHandler
@@ -311,6 +347,9 @@ function applyParsedEvent(
       break;
     case 'ask':
       if (parsed.askRequest) handlers.onAsk?.(parsed.askRequest);
+      break;
+    case 'ask_responded':
+      if (parsed.content) handlers.onAskResponded?.(parsed.content);
       break;
     case 'stream_chunk':
       if (parsed.content?.startsWith('[retrying]')) {
@@ -430,42 +469,33 @@ function applyParsedEvent(
   }
 }
 
-/** Stream a chat turn via POST /chat SSE (primary Web path). */
-export async function streamChat(
-  prompt: string,
-  sessionId: string | null,
-  handlers: EventHandler,
-  signal?: AbortSignal
-): Promise<void> {
-  const resp = await fetch(`${API_BASE}/chat`, {
-    method: 'POST',
-    headers: buildHeaders(),
-    body: JSON.stringify({
-      prompt,
-      ...(sessionId ? { session_id: sessionId } : {}),
-    }),
-    signal,
-  });
-  if (!resp.ok || !resp.body) {
-    throw new Error(`Chat stream failed: ${resp.statusText}`);
-  }
+// ── Event handler type ─────────────────────────────────────────────────
+export type EventHandler = {
+  onMessage: (msg: Message) => void;
+  onAppend?: (content: string) => void;
+  onTaskStarted?: (task: Task) => void;
+  onTaskCompleted?: (taskId: string, failed: boolean) => void;
+  onStreamFinished?: () => void;
+  onPermission?: (req: PermissionRequest) => void;
+  onPermissionResponded?: (requestId: string, approved: boolean) => void;
+  onAsk?: (req: AskRequest) => void;
+  onAskResponded?: (requestId: string) => void;
+  onPlanModeChanged?: (active: boolean, pendingExit: boolean) => void;
+  onPlanStep?: (step: PlanStep) => void;
+  onToolCall?: (call: ToolCall) => void;
+  onUpsertToolDispatch?: (call: ToolCall, partial: boolean) => void;
+  onDiff?: (before: string, after: string) => void;
+  onError?: (error: Error) => void;
+  onReasoningDelta?: (content: string) => void;
+};
 
-  const reader = resp.body.getReader();
+// ── SSE stream reader shared helper ────────────────────────────────────
+async function readSSEStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  handlers: EventHandler
+): Promise<void> {
   const decoder = new TextDecoder();
   let buffer = '';
-
-  handlers.onTaskStarted?.({
-    id: sessionId || `chat-${Date.now()}`,
-    prompt,
-    status: 'running',
-    outputs: [],
-  });
-  handlers.onMessage?.({
-    id: `assistant-${Date.now()}`,
-    role: 'assistant',
-    content: '',
-    timestamp: Date.now(),
-  });
 
   try {
     while (true) {
@@ -497,10 +527,96 @@ export async function streamChat(
   }
 }
 
+// ── Core: streamChat ───────────────────────────────────────────────────
+export async function streamChat(
+  prompt: string,
+  sessionId: string | null,
+  handlers: EventHandler,
+  signal?: AbortSignal
+): Promise<void> {
+  const resp = await fetch(`${API_BASE}/chat`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({
+      prompt,
+      ...(sessionId ? { session_id: sessionId } : {}),
+    }),
+    signal,
+  });
+  if (!resp.ok || !resp.body) {
+    throw new Error(`Chat stream failed: ${resp.statusText}`);
+  }
+
+  handlers.onTaskStarted?.({
+    id: sessionId || `chat-${Date.now()}`,
+    prompt,
+    status: 'running',
+    outputs: [],
+  });
+  handlers.onMessage?.({
+    id: `assistant-${Date.now()}`,
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+  });
+
+  await readSSEStream(resp.body.getReader(), handlers);
+}
+
+// ── Global events: subscribeEvents (fetch SSE, replaces EventSource) ───
+export function subscribeEvents(handlers: EventHandler): () => void {
+  let aborted = false;
+  const abortController = new AbortController();
+
+  async function connect() {
+    while (!aborted) {
+      try {
+        const resp = await fetch(`${API_BASE}/events`, {
+          headers: buildHeaders(),
+          signal: abortController.signal,
+        });
+        if (!resp.ok || !resp.body) {
+          if (!aborted) handlers.onError?.(new Error(`Events stream failed: ${resp.statusText}`));
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
+        await readSSEStream(resp.body.getReader(), handlers);
+      } catch (err) {
+        if (aborted) break;
+        handlers.onError?.(err instanceof Error ? err : new Error(String(err)));
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+  }
+
+  connect();
+
+  return () => {
+    aborted = true;
+    abortController.abort();
+  };
+}
+
+// ── Task ───────────────────────────────────────────────────────────────
+export async function createTask(prompt: string, sessionId?: string | null): Promise<Task> {
+  const resp = await fetchWithRetry(`${API_BASE}/tasks`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({
+      prompt,
+      ...(sessionId ? { session_id: sessionId } : {}),
+    }),
+  });
+  if (!resp.ok) throw new Error(`Failed to create task: ${resp.statusText}`);
+  const data = await resp.json();
+  return data.task as Task;
+}
+
+// ── Checkpoints ────────────────────────────────────────────────────────
 export async function fetchCheckpoints(): Promise<
   Array<{ id: string; label: string; created_at: number; files: string[] }>
 > {
-  const resp = await fetch(`${API_BASE}/checkpoints`);
+  const resp = await fetchWithRetry(`${API_BASE}/checkpoints`);
   if (!resp.ok) return [];
   const data = await resp.json();
   return (data.checkpoints || []) as Array<{
@@ -515,7 +631,7 @@ export async function rewindCheckpoint(
   checkpointId: string | null,
   mode: 'code' | 'conversation' | 'both' | 'fork' | 'summarize_from' | 'summarize_upto' = 'code'
 ): Promise<Record<string, unknown>> {
-  const resp = await fetch(`${API_BASE}/checkpoints/rewind`, {
+  const resp = await fetchWithRetry(`${API_BASE}/checkpoints/rewind`, {
     method: 'POST',
     headers: buildHeaders(),
     body: JSON.stringify({ checkpoint_id: checkpointId, mode }),
@@ -523,22 +639,22 @@ export async function rewindCheckpoint(
   return resp.json();
 }
 
+// ── Ask ────────────────────────────────────────────────────────────────
 export async function respondAsk(
   requestId: string,
   answers: Array<{ questionIndex: number; selected: string[] }>
 ): Promise<void> {
-  const resp = await fetch(`${API_BASE}/ask/${requestId}/respond`, {
+  const resp = await fetchWithRetry(`${API_BASE}/ask/${requestId}/respond`, {
     method: 'POST',
     headers: buildHeaders(),
     body: JSON.stringify({ answers }),
   });
-  if (!resp.ok) {
-    throw new Error(`Ask response failed: ${resp.statusText}`);
-  }
+  if (!resp.ok) throw new Error(`Ask response failed: ${resp.statusText}`);
 }
 
+// ── Config & Metrics ───────────────────────────────────────────────────
 export async function fetchConfig(): Promise<Record<string, unknown>> {
-  const resp = await fetch(`${API_BASE}/config`);
+  const resp = await fetchWithRetry(`${API_BASE}/config`);
   if (!resp.ok) return {};
   return resp.json();
 }
@@ -547,13 +663,14 @@ export async function fetchCacheMetrics(): Promise<{
   hit_rate?: number;
   recent_hit_rate?: number;
 }> {
-  const resp = await fetch(`${API_BASE}/metrics`);
+  const resp = await fetchWithRetry(`${API_BASE}/metrics`);
   if (!resp.ok) return {};
   return resp.json();
 }
 
+// ── Sessions ───────────────────────────────────────────────────────────
 export async function fetchSessions(): Promise<SessionSummary[]> {
-  const resp = await fetch(`${API_BASE}/sessions`);
+  const resp = await fetchWithRetry(`${API_BASE}/sessions`);
   if (!resp.ok) return [];
   const data = await resp.json();
   return (data.sessions || []) as SessionSummary[];
@@ -569,13 +686,13 @@ export interface DoctorReport {
 }
 
 export async function fetchDoctor(): Promise<DoctorReport | null> {
-  const resp = await fetch(`${API_BASE}/doctor`);
+  const resp = await fetchWithRetry(`${API_BASE}/doctor`);
   if (!resp.ok) return null;
   return resp.json() as Promise<DoctorReport>;
 }
 
 export async function fetchSessionEvents(sessionId: string): Promise<Message[]> {
-  const resp = await fetch(`${API_BASE}/sessions/${sessionId}/events`);
+  const resp = await fetchWithRetry(`${API_BASE}/sessions/${sessionId}/events`);
   if (!resp.ok) return [];
   const data = await resp.json();
   const events = (data.events || []) as Array<{
@@ -599,58 +716,138 @@ export async function fetchSessionEvents(sessionId: string): Promise<Message[]> 
   }));
 }
 
+// ── NEW: Session management ────────────────────────────────────────────
+export async function createNewSession(cwd?: string): Promise<{ ok: boolean; session_id: string; cwd?: string }> {
+  const resp = await fetchWithRetry(`${API_BASE}/new`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify(cwd ? { cwd } : {}),
+  });
+  if (!resp.ok) throw new Error(`Failed to create session: ${resp.statusText}`);
+  return resp.json();
+}
+
+export async function resumeSession(sessionId: string): Promise<{ ok: boolean; session_id: string }> {
+  const resp = await fetchWithRetry(`${API_BASE}/resume`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  if (!resp.ok) throw new Error(`Failed to resume session: ${resp.statusText}`);
+  return resp.json();
+}
+
+export async function forkSession(sessionId: string, label?: string): Promise<{ ok: boolean; session_id: string; forked_from: string }> {
+  const resp = await fetchWithRetry(`${API_BASE}/fork`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ session_id: sessionId, ...(label ? { label } : {}) }),
+  });
+  if (!resp.ok) throw new Error(`Failed to fork session: ${resp.statusText}`);
+  return resp.json();
+}
+
+export async function deleteSession(sessionId: string): Promise<{ ok: boolean; session_id: string }> {
+  const resp = await fetchWithRetry(`${API_BASE}/sessions/${sessionId}`, {
+    method: 'DELETE',
+    headers: buildHeaders(),
+  });
+  if (!resp.ok) throw new Error(`Failed to delete session: ${resp.statusText}`);
+  return resp.json();
+}
+
+export async function summarizeSession(sessionId: string): Promise<{
+  session_id: string;
+  message_count: number;
+  user_turns: number;
+  assistant_turns: number;
+  first_user_message?: string;
+  last_assistant_message?: string;
+}> {
+  const resp = await fetchWithRetry(`${API_BASE}/summarize`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  if (!resp.ok) throw new Error(`Failed to summarize session: ${resp.statusText}`);
+  return resp.json();
+}
+
+export async function compactSession(sessionId: string, focus?: string): Promise<{ ok: boolean; session_id: string }> {
+  const resp = await fetchWithRetry(`${API_BASE}/compact`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ session_id: sessionId, ...(focus ? { focus } : {}) }),
+  });
+  if (!resp.ok) throw new Error(`Failed to compact session: ${resp.statusText}`);
+  return resp.json();
+}
+
+// ── NEW: Approval mode ─────────────────────────────────────────────────
+export async function setApprovalMode(sessionId: string, mode: string): Promise<{ ok: boolean; session_id: string; mode: string }> {
+  const resp = await fetchWithRetry(`${API_BASE}/tool-approval-mode`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ session_id: sessionId, mode }),
+  });
+  if (!resp.ok) throw new Error(`Failed to set approval mode: ${resp.statusText}`);
+  return resp.json();
+}
+
+// ── NEW: Skills ────────────────────────────────────────────────────────
+export async function fetchSkills(): Promise<Skill[]> {
+  const resp = await fetchWithRetry(`${API_BASE}/skills`);
+  if (!resp.ok) return [];
+  const data = await resp.json();
+  return (data.skills || []) as Skill[];
+}
+
+// ── NEW: CodeGraph & Index search ──────────────────────────────────────
+export async function searchCodeGraph(pattern: string): Promise<{ pattern: string; results: SearchResult[]; files?: string[] }> {
+  const resp = await fetchWithRetry(`${API_BASE}/codegraph/search?pattern=${encodeURIComponent(pattern)}`);
+  if (!resp.ok) return { pattern, results: [] };
+  return resp.json();
+}
+
+export async function searchIndex(pattern: string): Promise<{ pattern: string; results: Array<{ path: string; language: string; size: number }> }> {
+  const resp = await fetchWithRetry(`${API_BASE}/index/search?pattern=${encodeURIComponent(pattern)}`);
+  if (!resp.ok) return { pattern, results: [] };
+  return resp.json();
+}
+
+// ── NEW: Execute ───────────────────────────────────────────────────────
+export async function executeCommand(command: string, workingDir?: string): Promise<{
+  command: string;
+  stdout: string;
+  stderr: string;
+  exit_code: number;
+  timed_out: boolean;
+  duration_ms: number;
+}> {
+  const resp = await fetchWithRetry(`${API_BASE}/execute`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ command, working_dir: workingDir }),
+  });
+  if (!resp.ok) throw new Error(`Execute failed: ${resp.statusText}`);
+  return resp.json();
+}
+
+// ── Permission ─────────────────────────────────────────────────────────
 export async function respondPermission(
   requestId: string,
   approved: boolean,
   grantScope: 'once' | 'session' | 'prefix' = 'once'
 ): Promise<void> {
-  const resp = await fetch(`${API_BASE}/permissions/${requestId}/respond`, {
+  const resp = await fetchWithRetry(`${API_BASE}/permissions/${requestId}/respond`, {
     method: 'POST',
     headers: buildHeaders(),
     body: JSON.stringify({ approved, grant_scope: grantScope }),
   });
-  if (!resp.ok) {
-    throw new Error(`Permission response failed: ${resp.statusText}`);
-  }
+  if (!resp.ok) throw new Error(`Permission response failed: ${resp.statusText}`);
 }
 
-export type EventHandler = {
-  onMessage: (msg: Message) => void;
-  onAppend?: (content: string) => void;
-  onTaskStarted?: (task: Task) => void;
-  onTaskCompleted?: (taskId: string, failed: boolean) => void;
-  onStreamFinished?: () => void;
-  onPermission?: (req: PermissionRequest) => void;
-  onPermissionResponded?: (requestId: string, approved: boolean) => void;
-  onAsk?: (req: AskRequest) => void;
-  onPlanModeChanged?: (active: boolean, pendingExit: boolean) => void;
-  onPlanStep?: (step: PlanStep) => void;
-  onToolCall?: (call: ToolCall) => void;
-  onUpsertToolDispatch?: (call: ToolCall, partial: boolean) => void;
-  onDiff?: (before: string, after: string) => void;
-  onError?: (error: Error) => void;
-  onReasoningDelta?: (content: string) => void;
-};
-
-export function subscribeEvents(handlers: EventHandler): () => void {
-  const eventSource = new EventSource(`${API_BASE}/events`);
-
-  eventSource.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data) as RustEvent;
-      applyParsedEvent(parseRustEvent(data), handlers);
-    } catch {
-      // Ignore malformed events
-    }
-  };
-
-  eventSource.onerror = () => {
-    handlers.onError?.(new Error('EventSource error'));
-  };
-
-  return () => eventSource.close();
-}
-
+// ── Utility ────────────────────────────────────────────────────────────
 export function parseToolCalls(toolCalls?: ToolCall[]): string {
   if (!toolCalls || toolCalls.length === 0) return '';
   return toolCalls.map((tc) => `[tool] ${tc.name}`).join('\n');
