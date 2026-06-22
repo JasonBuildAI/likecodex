@@ -7,6 +7,7 @@ import type { OpenFile } from '@/lib/store';
 import { writeWorkspaceFile } from '@/lib/api';
 import { InlineEditInput } from './InlineEditInput';
 import type { InlineEditState } from './InlineEditInput';
+import { GhostTextManager } from '@/ide/editor/GhostTextManager';
 
 // Dynamic import of Monaco to avoid SSR issues
 const MonacoEditor = dynamic(
@@ -137,6 +138,7 @@ export function EditorPanel() {
   const [saving, setSaving] = useState(false);
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
+  const ghostTextRef = useRef<GhostTextManager | null>(null);
 
   // ── Inline edit state ────────────────────────────────────────────────
   const [inlineEdit, setInlineEdit] = useState<InlineEditState>({
@@ -190,11 +192,17 @@ export function EditorPanel() {
     [activeFilePath, updateFileContent]
   );
 
-  // ── Monaco mount: register Ctrl+K action ─────────────────────────────
+  // ── Monaco mount: register Ctrl+K action + Ghost Text ────────────────
   const handleMount = useCallback(
     (editor: any, monaco: any) => {
       editorRef.current = editor;
       monacoRef.current = monaco;
+
+      // Initialize Ghost Text Manager for AI inline completion
+      if (ghostTextRef.current) {
+        ghostTextRef.current.destroy();
+      }
+      ghostTextRef.current = new GhostTextManager(editor, monaco);
 
       // Register Ctrl+K for inline AI editing
       editor.addAction({
@@ -260,6 +268,16 @@ export function EditorPanel() {
     },
     [addToast]
   );
+
+  // Clean up ghost text manager on unmount
+  useEffect(() => {
+    return () => {
+      if (ghostTextRef.current) {
+        ghostTextRef.current.destroy();
+        ghostTextRef.current = null;
+      }
+    };
+  }, []);
 
   // ── Apply AI edit result ─────────────────────────────────────────────
   const handleInlineApply = useCallback(
