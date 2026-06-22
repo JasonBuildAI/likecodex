@@ -75,6 +75,23 @@ export interface SearchResult {
   line?: number;
 }
 
+// ── File tree types ─────────────────────────────────────────────────────
+export interface FileNode {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  size?: number;
+  children?: FileNode[];
+}
+
+export interface OpenFile {
+  path: string;
+  name: string;
+  content: string;
+  savedContent: string;
+  modified: boolean;
+}
+
 // ── App state ──────────────────────────────────────────────────────────
 interface AppState {
   // Core
@@ -102,6 +119,12 @@ interface AppState {
   approvalMode: string;
   skills: Skill[];
   codeGraphResults: SearchResult[];
+
+  // ── File tree & editor state ──────────────────────────────
+  fileTree: FileNode | null;
+  fileTreeLoading: boolean;
+  openFiles: OpenFile[];
+  activeFilePath: string | null;
 
   // UI settings
   settingsOpen: boolean;
@@ -148,6 +171,15 @@ interface AppState {
   setApprovalMode: (mode: string) => void;
   setSkills: (skills: Skill[]) => void;
   setCodeGraphResults: (results: SearchResult[]) => void;
+
+  // ── File tree & editor actions ─────────────────────────────
+  setFileTree: (tree: FileNode | null) => void;
+  setFileTreeLoading: (loading: boolean) => void;
+  openFile: (file: { path: string; name: string; content: string }) => void;
+  closeFile: (path: string) => void;
+  setActiveFile: (path: string | null) => void;
+  updateFileContent: (path: string, content: string) => void;
+  markFileSaved: (path: string) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -168,6 +200,12 @@ export const useAppStore = create<AppState>((set) => ({
   planModePendingExit: false,
   collaborationMode: 'normal',
   reasoningContent: '',
+
+  // ── File tree & editor defaults ────────────────────────────
+  fileTree: null,
+  fileTreeLoading: false,
+  openFiles: [],
+  activeFilePath: null,
 
   // NEW state defaults
   toasts: [],
@@ -316,4 +354,57 @@ export const useAppStore = create<AppState>((set) => ({
   setApprovalMode: (mode) => set({ approvalMode: mode }),
   setSkills: (skills) => set({ skills }),
   setCodeGraphResults: (results) => set({ codeGraphResults: results }),
+
+  // ── File tree & editor actions ───────────────────────────────────
+  setFileTree: (tree) => set({ fileTree: tree }),
+  setFileTreeLoading: (loading) => set({ fileTreeLoading: loading }),
+  openFile: (file) =>
+    set((state) => {
+      const existing = state.openFiles.find((f) => f.path === file.path);
+      if (existing) {
+        return { activeFilePath: file.path };
+      }
+      return {
+        openFiles: [
+          ...state.openFiles,
+          {
+            path: file.path,
+            name: file.name,
+            content: file.content,
+            savedContent: file.content,
+            modified: false,
+          },
+        ],
+        activeFilePath: file.path,
+      };
+    }),
+  closeFile: (path) =>
+    set((state) => {
+      const newOpenFiles = state.openFiles.filter((f) => f.path !== path);
+      let newActive = state.activeFilePath;
+      if (state.activeFilePath === path) {
+        const idx = state.openFiles.findIndex((f) => f.path === path);
+        if (newOpenFiles.length === 0) {
+          newActive = null;
+        } else if (idx > 0) {
+          newActive = newOpenFiles[Math.min(idx - 1, newOpenFiles.length - 1)].path;
+        } else {
+          newActive = newOpenFiles[0]?.path ?? null;
+        }
+      }
+      return { openFiles: newOpenFiles, activeFilePath: newActive };
+    }),
+  setActiveFile: (path) => set({ activeFilePath: path }),
+  updateFileContent: (path, content) =>
+    set((state) => ({
+      openFiles: state.openFiles.map((f) =>
+        f.path === path ? { ...f, content, modified: content !== f.savedContent } : f
+      ),
+    })),
+  markFileSaved: (path) =>
+    set((state) => ({
+      openFiles: state.openFiles.map((f) =>
+        f.path === path ? { ...f, savedContent: f.content, modified: false } : f
+      ),
+    })),
 }));
