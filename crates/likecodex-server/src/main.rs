@@ -39,6 +39,8 @@ struct CreateTaskRequest {
     session_id: Option<String>,
     #[serde(default)]
     no_tools: bool,
+    #[serde(default)]
+    agent_mode: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -430,7 +432,7 @@ async fn chat_stream(
         .filter(|s| !s.is_empty());
 
     let initial = match bridge
-        .chat_stream(&req.prompt, req.session_id.as_deref(), req.no_tools, api_key, model)
+        .chat_stream(&req.prompt, req.session_id.as_deref(), req.no_tools, api_key, model, req.agent_mode.as_deref())
         .await
     {
         Ok(stream) => Some(stream),

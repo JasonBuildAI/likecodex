@@ -83,6 +83,7 @@ impl EngineBridge {
         no_tools: bool,
         api_key: Option<&str>,
         model: Option<&str>,
+        agent_mode: Option<&str>,
     ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<String>> + Send>>> {
         let url = format!("{}/chat", self.base_url);
         let mut body = serde_json::json!({
@@ -95,6 +96,9 @@ impl EngineBridge {
         }
         if let Some(m) = model {
             body["model"] = serde_json::Value::String(m.to_string());
+        }
+        if let Some(mode) = agent_mode {
+            body["agent_mode"] = serde_json::Value::String(mode.to_string());
         }
         let resp = self
             .client

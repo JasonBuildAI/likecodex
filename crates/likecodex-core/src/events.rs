@@ -83,6 +83,16 @@ pub enum Event {
         task_id: String,
         content: String,
     },
+    AgentActivity {
+        task_id: String,
+        tool_name: String,
+        description: String,
+        metadata: serde_json::Value,
+    },
+    AgentThinking {
+        task_id: String,
+        content: String,
+    },
     Error {
         task_id: Option<String>,
         message: String,

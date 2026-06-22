@@ -314,6 +314,24 @@ pub fn map_engine_output(task_id: &str, output: &Value) -> Event {
             task_id: task_id.to_string(),
             content,
         },
+        "agent_activity" => {
+            let meta = output.get("metadata").cloned().unwrap_or(Value::Null);
+            let tool_name = meta
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Event::AgentActivity {
+                task_id: task_id.to_string(),
+                tool_name,
+                description: content,
+                metadata: meta,
+            }
+        }
+        "agent_thinking" => Event::AgentThinking {
+            task_id: task_id.to_string(),
+            content,
+        },
         "error" => Event::Error {
             task_id: Some(task_id.to_string()),
             message: content,
