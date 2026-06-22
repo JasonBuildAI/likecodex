@@ -1,0 +1,421 @@
+'use client';
+
+/**
+ * GitPanel — Version control panel with changes list, diff preview, commit area.
+ *
+ * Features:
+ * - Staged/unstaged changes list
+ * - Stage/unstage/discard individual files
+ * - Diff preview with Monaco DiffEditor
+ * - Commit message input + AI generation button
+ * - Branch switcher
+ * - Commit history timeline
+ */
+
+import { useState, useEffect, useCallback } from 'react';
+import { DiffViewer } from '@/components/DiffViewer';
+import { useGitStore } from './gitStore';
+
+const CHANGE_ICONS: Record<string, string> = {
+  modified: 'M',
+  added: 'A',
+  deleted: 'D',
+  untracked: 'U',
+  renamed: 'R',
+  'both-added': '!',
+};
+
+const CHANGE_COLORS: Record<string, string> = {
+  modified: 'text-yellow-400',
+  added: 'text-green-400',
+  deleted: 'text-red-400',
+  untracked: 'text-blue-400',
+  renamed: 'text-purple-400',
+  'both-added': 'text-orange-400',
+};
+
+export function GitPanel() {
+  const {
+    changes,
+    currentBranch,
+    isRepo,
+    commits,
+    branches,
+    selectedDiff,
+    selectedPath,
+    isLoading,
+    error,
+    refreshStatus,
+    refreshLog,
+    refreshBranches,
+    selectFile,
+    stageFile,
+    unstageFile,
+    stageAll,
+    commit,
+    discardChanges,
+    checkoutBranch,
+  } = useGitStore();
+
+  const [commitMessage, setCommitMessage] = useState('');
+  const [view, setView] = useState<'changes' | 'history' | 'branches'>('changes');
+  const [newBranchName, setNewBranchName] = useState('');
+  const [showNewBranch, setShowNewBranch] = useState(false);
+
+  // Auto-refresh on mount
+  useEffect(() => {
+    refreshStatus();
+    refreshBranches();
+  }, [refreshStatus, refreshBranches]);
+
+  // Auto-refresh every 5s when viewing changes
+  useEffect(() => {
+    if (view !== 'changes') return;
+    const timer = setInterval(() => refreshStatus(), 5000);
+    return () => clearInterval(timer);
+  }, [view, refreshStatus]);
+
+  const stagedChanges = changes.filter((c) => c.staged);
+  const unstagedChanges = changes.filter((c) => !c.staged);
+
+  const handleCommit = useCallback(async () => {
+    if (!commitMessage.trim()) return;
+    const success = await commit(commitMessage);
+    if (success) {
+      setCommitMessage('');
+    }
+  }, [commitMessage, commit]);
+
+  if (!isRepo) {
+    return (
+      <div className="p-4 text-center text-sm text-gray-500">
+        <p>当前目录不是 Git 仓库</p>
+        <p className="text-xs mt-2">请在项目根目录初始化 Git 仓库</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-white">Git</span>
+          <span className="text-[10px] text-blue-400 bg-blue-900/30 px-1.5 py-0.5 rounded">
+            {currentBranch || 'unknown'}
+          </span>
+        </div>
+        <div className="flex gap-0.5">
+          {(['changes', 'history', 'branches'] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => {
+                setView(v);
+                if (v === 'history') refreshLog();
+                if (v === 'branches') refreshBranches();
+              }}
+              className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
+                view === v ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700'
+              }`}
+            >
+              {v === 'changes' ? '变更' : v === 'history' ? '历史' : '分支'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="px-3 py-1 text-[10px] text-red-400 bg-red-900/20 border-b border-red-800/30">
+          {error}
+        </div>
+      )}
+
+      {/* Content */}
+      {view === 'changes' && (
+        <>
+          {/* Changes list */}
+          <div className="flex-1 overflow-y-auto min-h-0">
+            {/* Staged changes */}
+            {stagedChanges.length > 0 && (
+              <div className="border-b border-gray-700">
+                <div className="flex items-center justify-between px-3 py-1 bg-gray-800/50">
+                  <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">
+                    暂存 ({stagedChanges.length})
+                  </span>
+                  <button
+                    onClick={() => stagedChanges.forEach((c) => unstageFile(c.path))}
+                    className="text-[10px] text-gray-500 hover:text-white"
+                  >
+                    全部取消暂存
+                  </button>
+                </div>
+                {stagedChanges.map((c) => (
+                  <ChangeItem
+                    key={c.path}
+                    change={c}
+                    selected={selectedPath === c.path}
+                    onClick={() => selectFile(c.path, true)}
+                    actionIcon="−"
+                    actionTitle="取消暂存"
+                    onAction={() => unstageFile(c.path)}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Unstaged changes */}
+            <div>
+              <div className="flex items-center justify-between px-3 py-1 bg-gray-800/50">
+                <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">
+                  变更 ({unstagedChanges.length})
+                </span>
+                {unstagedChanges.length > 0 && (
+                  <button
+                    onClick={() => stageAll()}
+                    className="text-[10px] text-gray-500 hover:text-white"
+                  >
+                    全部暂存
+                  </button>
+                )}
+              </div>
+              {unstagedChanges.length === 0 && stagedChanges.length === 0 && (
+                <div className="px-3 py-6 text-center text-xs text-gray-500">
+                  没有未提交的变更
+                </div>
+              )}
+              {unstagedChanges.map((c) => (
+                <ChangeItem
+                  key={c.path}
+                  change={c}
+                  selected={selectedPath === c.path}
+                  onClick={() => selectFile(c.path, false)}
+                  actionIcon="+"
+                  actionTitle="暂存"
+                  onAction={() => stageFile(c.path)}
+                  onDiscard={
+                    c.changeType !== 'untracked'
+                      ? () => discardChanges(c.path)
+                      : undefined
+                  }
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Diff preview */}
+          {selectedDiff && (
+            <div className="h-[200px] border-t border-gray-700 shrink-0">
+              <DiffViewer
+                oldText={selectedDiff.originalContent}
+                newText={selectedDiff.modifiedContent}
+                language={detectLang(selectedDiff.path)}
+                title={selectedDiff.path}
+              />
+            </div>
+          )}
+
+          {/* Commit area */}
+          <div className="border-t border-gray-700 p-2 shrink-0">
+            <textarea
+              value={commitMessage}
+              onChange={(e) => setCommitMessage(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                  e.preventDefault();
+                  handleCommit();
+                }
+              }}
+              placeholder="提交信息 (Ctrl+Enter 提交)"
+              className="w-full bg-gray-800 text-gray-200 text-xs border border-gray-700 rounded px-2 py-1.5 resize-none focus:outline-none focus:border-blue-500"
+              rows={2}
+              disabled={stagedChanges.length === 0}
+            />
+            <button
+              onClick={handleCommit}
+              disabled={!commitMessage.trim() || stagedChanges.length === 0}
+              className="w-full mt-1.5 px-3 py-1.5 bg-green-600 text-white text-xs rounded hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              提交 ({stagedChanges.length} 个文件已暂存)
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* History view */}
+      {view === 'history' && (
+        <div className="flex-1 overflow-y-auto min-h-0">
+          {commits.length === 0 ? (
+            <div className="px-3 py-6 text-center text-xs text-gray-500">
+              加载中...
+            </div>
+          ) : (
+            commits.map((c) => (
+              <div
+                key={c.hash}
+                className="px-3 py-2 border-b border-gray-800 hover:bg-gray-800/50 cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-gray-500 font-mono">{c.shortHash}</span>
+                  <span className="text-xs text-gray-200 flex-1 truncate">{c.message}</span>
+                </div>
+                <div className="text-[10px] text-gray-500 mt-0.5">
+                  {c.author} · {c.date}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* Branches view */}
+      {view === 'branches' && (
+        <div className="flex-1 overflow-y-auto min-h-0">
+          {showNewBranch && (
+            <div className="px-3 py-2 border-b border-gray-700 bg-gray-800/50">
+              <input
+                type="text"
+                value={newBranchName}
+                onChange={(e) => setNewBranchName(e.target.value)}
+                placeholder="新分支名称"
+                className="w-full bg-gray-800 text-gray-200 text-xs border border-gray-700 rounded px-2 py-1 focus:outline-none focus:border-blue-500"
+                autoFocus
+              />
+              <div className="flex gap-2 mt-1.5">
+                <button
+                  onClick={async () => {
+                    if (newBranchName.trim()) {
+                      await useGitStore.getState().createBranch(newBranchName.trim());
+                      setNewBranchName('');
+                      setShowNewBranch(false);
+                    }
+                  }}
+                  className="flex-1 px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                >
+                  创建
+                </button>
+                <button
+                  onClick={() => setShowNewBranch(false)}
+                  className="px-2 py-1 bg-gray-700 text-gray-300 text-xs rounded hover:bg-gray-600"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!showNewBranch && (
+            <button
+              onClick={() => setShowNewBranch(true)}
+              className="w-full px-3 py-2 text-xs text-blue-400 hover:bg-gray-800/50 border-b border-gray-800"
+            >
+              + 新建分支
+            </button>
+          )}
+
+          {branches.map((b) => (
+            <div
+              key={b.name}
+              className={`px-3 py-2 border-b border-gray-800 hover:bg-gray-800/50 ${
+                b.current ? 'bg-blue-900/20' : ''
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {b.current && <span className="text-green-400 text-xs">●</span>}
+                <span className={`text-xs flex-1 truncate ${b.current ? 'text-blue-300' : 'text-gray-300'}`}>
+                  {b.name}
+                </span>
+                {!b.current && !b.remote && (
+                  <button
+                    onClick={() => checkoutBranch(b.name)}
+                    className="text-[10px] text-gray-500 hover:text-white"
+                  >
+                    切换
+                  </button>
+                )}
+              </div>
+              {b.lastCommit && (
+                <div className="text-[10px] text-gray-600 truncate mt-0.5">{b.lastCommit}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Helper components ──────────────────────────────────────────────
+
+function ChangeItem({
+  change,
+  selected,
+  onClick,
+  actionIcon,
+  actionTitle,
+  onAction,
+  onDiscard,
+}: {
+  change: { path: string; changeType: string; staged: boolean };
+  selected: boolean;
+  onClick: () => void;
+  actionIcon: string;
+  actionTitle: string;
+  onAction: () => void;
+  onDiscard?: () => void;
+}) {
+  return (
+    <div
+      onClick={onClick}
+      className={`flex items-center px-3 py-1 cursor-pointer border-b border-gray-800/50 ${
+        selected ? 'bg-blue-900/30' : 'hover:bg-gray-800/50'
+      }`}
+    >
+      <span className={`text-[10px] w-4 font-mono ${CHANGE_COLORS[change.changeType] || 'text-gray-400'}`}>
+        {CHANGE_ICONS[change.changeType] || '?'}
+      </span>
+      <span className="text-xs text-gray-300 flex-1 truncate ml-1">
+        {change.path.split('/').pop()}
+      </span>
+      <span className="text-[10px] text-gray-600 ml-1 mr-2 hidden sm:inline">
+        {change.path.split('/').slice(0, -1).join('/')}
+      </span>
+      <div className="flex items-center gap-1">
+        {onDiscard && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDiscard();
+            }}
+            className="text-[10px] text-red-500 hover:text-red-400 px-1"
+            title="丢弃变更"
+          >
+            ✕
+          </button>
+        )}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onAction();
+          }}
+          className="text-xs text-gray-400 hover:text-white px-1"
+          title={actionTitle}
+        >
+          {actionIcon}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function detectLang(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase();
+  const map: Record<string, string> = {
+    ts: 'typescript', tsx: 'typescript',
+    js: 'javascript', jsx: 'javascript',
+    py: 'python', rs: 'rust', go: 'go',
+    json: 'json', css: 'css', html: 'html',
+    md: 'markdown', yaml: 'yaml', yml: 'yaml',
+  };
+  return map[ext || ''] || 'plaintext';
+}
