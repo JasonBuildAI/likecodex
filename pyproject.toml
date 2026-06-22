@@ -1,12 +1,17 @@
 [project]
 name = "likecodex"
 version = "0.1.0"
-description = "LikeCodex - A production-grade Codex-like coding agent"
+description = "LikeCodex - DeepSeek V4 native AI coding assistant"
 readme = "README.md"
 requires-python = ">=3.11"
+
 dependencies = [
     "likecodex-engine",
+    "rich>=13.0",
 ]
+
+[project.scripts]
+likecodex = "likecodex_engine.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -15,6 +20,12 @@ dev = [
     "pytest-asyncio>=0.23",
     "mypy>=1.10",
 ]
+
+[tool.setuptools.packages.find]
+include = ["likecodex_engine*"]
+
+[tool.setuptools.package-data]
+likecodex_engine = ["static/*", "static/**/*", "prompts/*"]
 
 [tool.uv.workspace]
 members = ["packages/likecodex-engine"]
