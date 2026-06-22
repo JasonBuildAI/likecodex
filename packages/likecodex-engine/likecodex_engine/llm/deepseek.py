@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from openai import AsyncOpenAI
 
-from likecodex_engine.llm.base import LLMProvider, LLMResponse, Message, Role, ToolCall
+from likecodex_engine.llm.base import LLMProvider, LLMResponse, Message, ToolCall
 from likecodex_engine.llm.openai_stream import complete_with_reconnect, stream_openai_chat_with_reconnect
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
@@ -23,8 +25,118 @@ def resolve_api_key(api_key: str | None) -> str | None:
     return os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("LIKECODEX_LLM_API_KEY")
 
 
+# ── Cost tracking ──────────────────────────────────────────────
+
+DS_FLASH_INPUT = 0.15 / 1_000_000  # $ per token
+DS_FLASH_OUTPUT = 0.60 / 1_000_000
+DS_PRO_INPUT = 1.00 / 1_000_000
+DS_PRO_OUTPUT = 4.00 / 1_000_000
+DS_CACHE_HIT_DISCOUNT = 0.10  # ~90% cheaper for cached prefix tokens
+
+
+@dataclass
+class DeepSeekUsage:
+    """Token usage breakdown with DeepSeek-specific cost calculation."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+    reasoning_tokens: int = 0
+    model: str = "deepseek-v4-flash"
+
+    @property
+    def cache_hit_rate(self) -> float:
+        if self.prompt_tokens == 0:
+            return 0.0
+        hit = self.cache_hit_tokens + self.cache_miss_tokens
+        return (self.cache_hit_tokens / hit) if hit > 0 else 0.0
+
+    @property
+    def input_cost(self) -> float:
+        """Calculate input cost accounting for cache hit discount."""
+        is_pro = "pro" in self.model.lower()
+        full_price = DS_PRO_INPUT if is_pro else DS_FLASH_INPUT
+        # Cache-miss tokens pay full price
+        miss_cost = self.cache_miss_tokens * full_price
+        # Cache-hit tokens get ~90% discount
+        hit_cost = self.cache_hit_tokens * full_price * DS_CACHE_HIT_DISCOUNT
+        return miss_cost + hit_cost
+
+    @property
+    def output_cost(self) -> float:
+        is_pro = "pro" in self.model.lower()
+        return self.completion_tokens * (DS_PRO_OUTPUT if is_pro else DS_FLASH_OUTPUT)
+
+    @property
+    def total_cost(self) -> float:
+        return self.input_cost + self.output_cost
+
+    @classmethod
+    def from_api_usage(cls, usage: dict[str, int] | None, model: str = "deepseek-v4-flash") -> DeepSeekUsage:
+        """Build from the usage dict returned by the DeepSeek API."""
+        if not usage:
+            return cls(model=model)
+        return cls(
+            prompt_tokens=int(usage.get("prompt_tokens", 0)),
+            completion_tokens=int(usage.get("completion_tokens", 0)),
+            cache_hit_tokens=int(usage.get("prompt_cache_hit_tokens", 0)),
+            cache_miss_tokens=int(usage.get("prompt_cache_miss_tokens", 0)),
+            reasoning_tokens=int(usage.get("reasoning_tokens", 0)),
+            model=model,
+        )
+
+
+# ── Provider config templates ──────────────────────────────────
+
+
+@dataclass
+class DeepSeekProviderConfig:
+    """DeepSeek-specific provider configuration for different modes."""
+
+    model: str = DEFAULT_MODEL
+    base_url: str = DEFAULT_BASE_URL
+    thinking: bool = False
+    reasoning_effort: str = ""
+    max_tokens: int = 16_384
+    temperature: float = 0.0
+
+    @classmethod
+    def flash_default(cls) -> DeepSeekProviderConfig:
+        """Fast, cost-effective mode for routine tasks."""
+        return cls(
+            model="deepseek-v4-flash",
+            thinking=False,
+            max_tokens=8_192,
+            temperature=0.0,
+        )
+
+    @classmethod
+    def pro_default(cls) -> DeepSeekProviderConfig:
+        """Deep reasoning mode for complex architecture/refactoring."""
+        return cls(
+            model="deepseek-v4-pro",
+            thinking=True,
+            reasoning_effort="high",
+            max_tokens=32_768,
+            temperature=0.0,
+        )
+
+    @classmethod
+    def pro_light(cls) -> DeepSeekProviderConfig:
+        """Pro model without thinking, for mid-complexity tasks."""
+        return cls(
+            model="deepseek-v4-pro",
+            thinking=False,
+            max_tokens=16_384,
+            temperature=0.0,
+        )
+
+
 class DeepSeekProvider(LLMProvider):
     """DeepSeek V4 provider with context-cache usage tracking."""
+
+    _system_prompt: str | None = None
 
     def __init__(
         self,
@@ -39,6 +151,18 @@ class DeepSeekProvider(LLMProvider):
         self.thinking = thinking
         self.reasoning_effort = reasoning_effort
         self.client = AsyncOpenAI(api_key=resolved_key, base_url=self.base_url)
+
+    @staticmethod
+    def load_system_prompt() -> str:
+        """Load the DeepSeek V4 optimized system prompt."""
+        if DeepSeekProvider._system_prompt is not None:
+            return DeepSeekProvider._system_prompt
+        prompt_path = Path(__file__).parent.parent / "prompts" / "deepseek_v4_system.txt"
+        if prompt_path.exists():
+            DeepSeekProvider._system_prompt = prompt_path.read_text(encoding="utf-8")
+        else:
+            DeepSeekProvider._system_prompt = ""
+        return DeepSeekProvider._system_prompt
 
     def _to_openai_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
         """Convert internal messages to OpenAI wire format.
