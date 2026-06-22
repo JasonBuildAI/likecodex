@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from likecodex_engine.agent.subagent_registry import subagent_tool_registry
 from likecodex_engine.context.manager import ContextManager
-from likecodex_engine.llm.base import LLMResponse
+from likecodex_engine.llm.base import LLMProvider, LLMResponse
 from likecodex_engine.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from likecodex_engine.agent.loop import AgentLoop
-    from likecodex_engine.llm.base import LLMProvider
 
 GREETING_PATTERNS = re.compile(
     r"^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|help)\b",
@@ -120,7 +120,7 @@ class Coordinator:
         should_plan_fn=None,
         planning_context: str = "",
         auto_plan: str = "off",
-        auto_plan_classifier: "LLMProvider | None" = None,
+        auto_plan_classifier: LLMProvider | None = None,
     ) -> None:
         self.executor = executor
         self.planner_llm = planner_llm
@@ -131,7 +131,7 @@ class Coordinator:
         self._planner_context = ContextManager(system_prompt=planner_prompt_with_context(planning_context))
         if hasattr(self._planner_context, "set_working_dir"):
             self._planner_context.set_working_dir(executor.tools.working_dir)
-        
+
         # Set up should_plan function based on auto_plan config
         if should_plan_fn is not None:
             self.should_plan = should_plan_fn
@@ -172,13 +172,13 @@ class Coordinator:
                     return False
                 # If borderline, use classifier
                 from likecodex_engine.agent.auto_plan_classifier import AutoPlanClassifier, is_borderline_task
-                
+
                 if is_borderline_task(prompt):
                     classifier = AutoPlanClassifier(self.auto_plan_classifier)
                     needs_plan, _ = await classifier.needs_plan(prompt)
                     return needs_plan
                 return True
-            
+
             # Return sync wrapper for compatibility
             return lambda prompt: True  # Simplified for now
         else:
@@ -225,9 +225,7 @@ class Coordinator:
     def goal_state(self):
         return self.executor.goal_state
 
-    async def respond_permission(
-        self, request_id: str, approved: bool, grant_scope: str = "once"
-    ) -> bool:
+    async def respond_permission(self, request_id: str, approved: bool, grant_scope: str = "once") -> bool:
         return await self.executor.respond_permission(request_id, approved, grant_scope=grant_scope)
 
     async def respond_ask(self, request_id: str, answers: list) -> bool:
@@ -244,3 +242,101 @@ class Coordinator:
 
     def rewind(self, checkpoint_id: str | None = None) -> dict:
         return self.executor.rewind(checkpoint_id)
+
+
+# ── SmartRouter: Flash-based task complexity classifier ────────
+
+SIMPLE_TASK_KEYWORDS = frozenset(
+    {
+        "explain",
+        "what is",
+        "what does",
+        "how does",
+        "show me",
+        "list",
+        "find",
+        "search",
+        "where is",
+        "tell me",
+        "quick",
+        "simple",
+        "small change",
+        "typo",
+        "format",
+    }
+)
+
+COMPLEX_TASK_KEYWORDS = frozenset(
+    {
+        "refactor",
+        "redesign",
+        "rewrite",
+        "migrate",
+        "upgrade",
+        "implement",
+        "build",
+        "create",
+        "develop",
+        "write a",
+        "architecture",
+        "design pattern",
+        "optimize",
+        "restructure",
+        "multi-step",
+        "workflow",
+        "pipeline",
+        "integration",
+    }
+)
+
+
+@dataclass
+class RouteDecision:
+    """Result of SmartRouter classification."""
+
+    use_planner: bool
+    confidence: str  # "high" | "low"
+    reason: str = ""
+
+
+class SmartRouter:
+    """Two-level classifier: keyword heuristic → optional Flash model call.
+
+    For obvious simple/complex tasks the heuristic decides immediately;
+    borderline cases request a second opinion from Flash.
+    """
+
+    def __init__(self, classifier_llm: LLMProvider | None = None) -> None:
+        self._classifier_llm = classifier_llm
+
+    def route(self, prompt: str) -> RouteDecision:
+        """Classify a prompt and return a routing decision."""
+        text = prompt.strip().lower()
+        if not text or len(text) < 5:
+            return RouteDecision(use_planner=False, confidence="high", reason="empty_or_trivial")
+
+        # Quick greeting check — never use planner
+        if GREETING_PATTERNS.match(text):
+            return RouteDecision(use_planner=False, confidence="high", reason="greeting")
+
+        # Heuristic keyword matching
+        simple_score = sum(1 for kw in SIMPLE_TASK_KEYWORDS if kw in text)
+        complex_score = sum(1 for kw in COMPLEX_TASK_KEYWORDS if kw in text)
+
+        if complex_score >= 2:
+            return RouteDecision(use_planner=True, confidence="high", reason=f"complex_keywords({complex_score})")
+        if simple_score >= 2 and complex_score == 0:
+            return RouteDecision(use_planner=False, confidence="high", reason=f"simple_keywords({simple_score})")
+
+        # Borderline: use classifier if available
+        if self._classifier_llm is not None and len(text) > 40:
+            from likecodex_engine.agent.auto_plan_classifier import is_borderline_task
+
+            if is_borderline_task(prompt):
+                return RouteDecision(use_planner=True, confidence="low", reason="borderline_use_classifier")
+
+        # Default: for multi-line / long prompts, use planner
+        if text.count("\n") >= 2 or len(text) > 200:
+            return RouteDecision(use_planner=True, confidence="low", reason="length_indicator")
+
+        return RouteDecision(use_planner=False, confidence="low", reason="default_direct")
