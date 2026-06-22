@@ -1,15 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Message } from '@/lib/store';
 import { useAppStore } from '@/lib/store';
 import { ToolCallCard } from '@/components/ToolCallCard';
 
-interface ChatMessagesProps {
-  messages: Message[];
-}
-
-function ReasoningBlock({ content }: { content: string }) {
+// ── ReasoningBlock ─────────────────────────────────────────────────────
+const ReasoningBlock = memo(function ReasoningBlock({ content }: { content: string }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (
@@ -34,43 +32,121 @@ function ReasoningBlock({ content }: { content: string }) {
         </svg>
       </button>
       {isExpanded && (
-        <div className="border-t border-amber-500/20 px-3 py-2 text-xs text-amber-900/80 whitespace-pre-wrap">
+        <div className="border-t border-amber-500/20 px-3 py-2 text-xs text-amber-900/80 whitespace-pre-wrap max-h-64 overflow-y-auto">
           {content}
         </div>
       )}
     </div>
   );
-}
+});
 
-export function ChatMessages({ messages }: ChatMessagesProps) {
+// ── MessageBubble ──────────────────────────────────────────────────────
+const MessageBubble = memo(function MessageBubble({ msg }: { msg: Message }) {
   return (
-    <div className="space-y-4">
-      {messages.map((msg) => (
-        <div
-          key={msg.id}
-          className={`rounded-lg p-4 ${
-            msg.role === 'user' ? 'bg-primary/10' : 'bg-surface'
-          }`}
-        >
-          <div className="text-xs text-muted mb-1 uppercase">{msg.role}</div>
-          {msg.content ? (
-            <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
-          ) : null}
-          {msg.reasoningContent && (
-            <ReasoningBlock content={msg.reasoningContent} />
-          )}
-          {msg.toolCalls?.map((call) => (
-            <div key={call.id || call.name} className="mt-2">
-              <ToolCallCard call={call} />
-            </div>
-          ))}
+    <div
+      className={`rounded-lg p-4 ${
+        msg.role === 'user' ? 'bg-primary/10' : 'bg-surface'
+      }`}
+    >
+      <div className="text-xs text-muted mb-1 uppercase">{msg.role}</div>
+      {msg.content ? (
+        <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
+      ) : null}
+      {msg.reasoningContent && (
+        <ReasoningBlock content={msg.reasoningContent} />
+      )}
+      {msg.toolCalls?.map((call) => (
+        <div key={call.id || call.name} className="mt-2">
+          <ToolCallCard call={call} />
         </div>
       ))}
     </div>
   );
+});
+
+// ── ChatMessages (virtualized) ─────────────────────────────────────────
+interface ChatMessagesProps {
+  scrollRef: React.RefObject<HTMLDivElement | null>;
 }
 
+export const ChatMessages = memo(function ChatMessages({ scrollRef }: ChatMessagesProps) {
+  const messages = useAppStore((s) => s.messages);
+  const estimateSize = useCallback(() => 120, []);
+  const prevLengthRef = useRef(messages.length);
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize,
+    overscan: 5,
+  });
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    if (messages.length > prevLengthRef.current && scrollRef.current) {
+      const el = scrollRef.current;
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
+      if (isNearBottom) {
+        virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+      }
+    }
+    prevLengthRef.current = messages.length;
+  }, [messages.length, virtualizer, scrollRef]);
+
+  if (messages.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center text-muted">
+          <p className="text-lg">What would you like to build?</p>
+          <p className="text-sm mt-2">
+            Try: /plan then describe a refactor, or ask to fix failing tests
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        height: `${virtualizer.getTotalSize()}px`,
+        width: '100%',
+        position: 'relative',
+      }}
+    >
+      {virtualizer.getVirtualItems().map((virtualItem) => {
+        const msg = messages[virtualItem.index];
+        return (
+          <div
+            key={msg.id}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualItem.start}px)`,
+            }}
+            ref={virtualizer.measureElement}
+            data-index={virtualItem.index}
+          >
+            <div className="px-1 py-1.5">
+              <MessageBubble msg={msg} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+// ── Legacy Chat (kept for compatibility) ───────────────────────────────
 export function Chat() {
   const messages = useAppStore((s) => s.messages);
-  return <ChatMessages messages={messages} />;
+  return (
+    <div className="space-y-4">
+      {messages.map((msg) => (
+        <MessageBubble key={msg.id} msg={msg} />
+      ))}
+    </div>
+  );
 }

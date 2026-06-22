@@ -1,5 +1,48 @@
 'use client';
 
+import dynamic from 'next/dynamic';
+import { useState } from 'react';
+
+const MonacoDiff = dynamic(
+  () => import('@monaco-editor/react').then((mod) => {
+    const { DiffEditor } = mod;
+    return function MonacoDiffWrapper({ original, modified }: { original: string; modified: string }) {
+      return (
+        <DiffEditor
+          height="100%"
+          original={original}
+          modified={modified}
+          language="text"
+          theme="vs-dark"
+          options={{
+            readOnly: true,
+            renderSideBySide: true,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            fontSize: 12,
+            lineNumbers: 'on',
+            folding: true,
+            wordWrap: 'on',
+          }}
+          loading={
+            <div className="flex items-center justify-center h-full text-sm text-muted">
+              Loading diff editor...
+            </div>
+          }
+        />
+      );
+    };
+  }),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center h-full text-sm text-muted">
+        Loading diff editor...
+      </div>
+    ),
+  }
+);
+
 interface DiffViewerProps {
   oldText?: string;
   newText?: string;
@@ -15,12 +58,29 @@ export function DiffViewer({
 }: DiffViewerProps) {
   const left = oldText ?? before ?? '';
   const right = newText ?? after ?? '';
+  const [sideBySide, setSideBySide] = useState(true);
+
+  if (!left && !right) {
+    return (
+      <div className="text-sm text-muted p-4 text-center">
+        Diff will appear when files change.
+      </div>
+    );
+  }
+
   return (
-    <div className="bg-surface border border-border rounded-lg p-4">
-      <h2 className="text-sm font-semibold mb-3">Diff</h2>
-      <div className="grid grid-cols-2 gap-4 text-xs">
-        <pre className="bg-red-950/30 p-2 rounded border border-red-900/50 overflow-auto">{left}</pre>
-        <pre className="bg-green-950/30 p-2 rounded border border-green-900/50 overflow-auto">{right}</pre>
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between mb-2 px-1">
+        <h2 className="text-sm font-semibold">Diff</h2>
+        <button
+          onClick={() => setSideBySide(!sideBySide)}
+          className="text-xs text-primary hover:underline"
+        >
+          {sideBySide ? 'Inline' : 'Side by side'}
+        </button>
+      </div>
+      <div className="flex-1 min-h-0 rounded-lg border border-border overflow-hidden">
+        <MonacoDiff original={left} modified={right} />
       </div>
     </div>
   );
