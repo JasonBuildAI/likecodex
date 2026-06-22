@@ -48,7 +48,7 @@ LikeCodex 按职责分层，而不是把所有逻辑堆在一起：
 
 | 关注点 | 层级 | 语言 | 为何放这里 |
 |--------|------|------|-----------|
-| 用户界面 | CLI、TUI、Web | Rust + TypeScript | 启动快、体验好 |
+| 用户界面 | CLI、TUI、Web、Tauri 桌面 | Rust + TypeScript | 启动快、体验好 |
 | HTTP 桥接、SSE、沙箱网关 | 控制平面 | Rust | 安全 I/O、统一事件总线 |
 | LLM 循环、工具、规划、记忆 | Agent 引擎 | Python | Agent 逻辑迭代快 |
 | Shell/Git 执行、Docker 隔离 | 执行层 | Rust | 路径约束、低开销 |
@@ -63,8 +63,8 @@ LikeCodex 按职责分层，而不是把所有逻辑堆在一起：
 
 Rust 不直接调 LLM；Python 不绕过权限检查随意 spawn Docker。各层职责清晰：
 
-- **Rust** — HTTP、SSE 广播、会话代理、本地/沙箱执行、配置加载。
-- **Python** — `AgentLoop`、工具注册表、上下文组装、压缩、LLM 流式。
+- **Rust** — HTTP、SSE 广播、会话代理、本地/沙箱执行、配置加载、代码索引、ACP 协议。
+- **Python** — `AgentLoop`、工具注册表、上下文组装与压缩、LLM 流式、MCP 集成、记忆管理。
 
 改 Agent 行为（Python）不必重写安全边界（Rust）。
 
@@ -90,7 +90,7 @@ DeepSeek **自动上下文缓存** 只有在 prompt 前缀（从 token 0 起）*
 
 ### 4. 纵深防御
 
-文件工具限制在工作区内；Shell 命令按风险分级；审批模式控制写入与执行；高风险命令可走 **Docker 沙箱**；写入前 **Checkpoint** 快照，支持回滚。
+文件工具限制在工作区内；Shell 命令按风险分级；审批模式控制写入与执行；高风险命令可走 **Docker 沙箱**；写入前 **Checkpoint** 快照，支持回滚；配置支持 per-tool 的 allow/ask/deny 策略规则。
 
 ---
 
@@ -101,6 +101,8 @@ flowchart TB
   subgraph L1 [第 1 层 — 交互层]
     CLI["likecodex-cli\n单次 / TUI"]
     WEB["Next.js Web UI\n:3000"]
+    DSC["likecodex-desktop\nTauri 桌面应用"]
+    ACP["likecodex-acp\nACP stdio 协议"]
   end
 
   subgraph L2 [第 2 层 — 控制平面 :8080]
@@ -112,18 +114,23 @@ flowchart TB
 
   subgraph L3 [第 3 层 — Agent 引擎 :9090]
     LOOP["AgentLoop"]
-    TOOLS["ToolRegistry"]
+    TOOLS["ToolRegistry\n40+ 内置工具"]
     CTX["ContextManager\n缓存优先"]
     PERM["PermissionEvaluator"]
+    MCP["MCP Manager\n插件协议"]
+    MEM["VectorMemory\n向量记忆"]
   end
 
   subgraph L4 [外部服务]
     DS["DeepSeek V4 API"]
-    MCP["MCP 插件服务器"]
+    MCP_SRV["MCP 插件服务器"]
+    DOCKER["Docker 沙箱"]
   end
 
   CLI -->|HTTP 直连或经桥接| SRV
   WEB -->|"/api" 代理| SRV
+  DSC --> SRV
+  ACP -->|stdio JSON-RPC| SRV
   SRV -->|转发 /tasks /chat| LOOP
   SRV --> EXEC
   SRV --> SBX
@@ -133,8 +140,10 @@ flowchart TB
   LOOP --> PERM
   LOOP -->|流式 + 工具| DS
   TOOLS --> MCP
+  MCP --> MCP_SRV
   TOOLS --> EXEC
   TOOLS --> SBX
+  TOOLS --> MEM
 ```
 
 **日常启动（推荐）：**
@@ -145,7 +154,7 @@ likecodex start --web    # 引擎 :9090 + 服务 :8080 + Web :3000
 likecodex code           # 纯终端 TUI
 ```
 
-开发者仍可用 `scripts/dev.sh` / `scripts/dev.ps1` 做热重载开发。
+开发者仍可用 `scripts/dev.ps1` / `scripts/dev.sh` 做热重载开发。
 
 ---
 
@@ -157,6 +166,8 @@ likecodex code           # 纯终端 TUI
 |------|------|------|
 | **likecodex-cli** | `likecodex`、`likecodex code`、`likecodex start` | 单次任务、Ratatui TUI、栈编排、`setup` / `doctor` |
 | **web/** | http://127.0.0.1:3000 | 三栏 UI：会话 / 对话 / Diff；权限弹窗；会话续聊 |
+| **likecodex-desktop** | Tauri 桌面应用 | 原生窗口包装 Web UI，1280x800 |
+| **likecodex-acp** | stdio JSON-RPC | Agent Client Protocol v1，供编辑器（VS Code、Zed）集成 |
 
 CLI 可**直连** Python 引擎（`--engine-url http://127.0.0.1:9090`），也可走 Rust 服务（与 Web 相同路径）。
 
@@ -176,9 +187,9 @@ Rust Axum 服务，默认 **8080 端口**：
 |-------|------|
 | `likecodex-core` | 共享 `Config`、`Event`、`Task`、事件总线类型 |
 | `likecodex-server` | HTTP 服务 + 引擎桥接 + SSE 映射 |
-| `likecodex-executor` | 工作目录内的本地 shell/git |
-| `likecodex-sandbox` | Docker 隔离执行 |
-| `likecodex-indexer` | 文件索引 + CodeGraph 搜索 |
+| `likecodex-executor` | 工作目录内的本地 shell/git 执行 |
+| `likecodex-sandbox` | Docker 隔离执行（支持回退到本地） |
+| `likecodex-indexer` | 文件索引 + CodeGraph 代码符号图 |
 
 ### 第 3 层 — Agent 引擎（`likecodex-engine`）
 
@@ -187,19 +198,82 @@ Python aiohttp 服务，**9090 端口**，系统**大脑**：
 | 模块 | 职责 |
 |------|------|
 | `agent/loop.py` | 核心循环：LLM → 工具调用 → 结果 → 重复 |
-| `agent/coordinator.py` | 双模型：Pro 规划会话 → Flash 执行会话 |
+| `agent/coordinator.py` | 双模型协调：Pro 规划器 + Flash 执行器 |
 | `agent/planner.py` | 可选 JSON 步骤规划器 |
-| `agent/guards.py` | 循环/风暴/重复 guard、空回答保护 |
 | `agent/plan_mode.py` | 只读规划模式：批准前禁止写入 |
-| `agent/checkpoints.py` | 写入前快照；支持 rewind |
-| `tools/registry.py` | 40+ 内置工具 + MCP + economy 模式 |
+| `agent/plan_state.py` | 规划状态跟踪 |
+| `agent/auto_plan_classifier.py` | 自动判断是否需要规划 |
+| `agent/goal.py` | 目标管理 |
+| `agent/task.py` | 任务生命周期管理 |
+| `agent/subagent.py` | 子 Agent 调用 |
+| `agent/subagent_registry.py` | 子 Agent 注册 |
+| `agent/subagent_store.py` | 子 Agent 状态存储 |
+| `agent/autoresearch.py` | 自动研究模式 |
+| `agent/guards.py` | 循环/风暴/重复 guard、空回答保护 |
+| `agent/dispatch.py` | 并行工具调度 |
+| `agent/streaming.py` | SSE 流处理与自动恢复 |
+| `agent/checkpoints.py` | 写入前快照 |
+| `agent/rewind.py` | 回滚恢复 |
+| `agent/readiness.py` | 就绪检查 |
+| `agent/evidence.py` | 证据账本 — 跟踪 todo/步骤完成 |
+| `agent/commands.py` | 命令处理 |
+| `agent/output_limit.py` | 输出长度限制 |
 | `context/cache_first.py` | 不可变前缀 + 只追加日志 |
 | `context/compaction.py` | 上下文接近上限时压缩尾部 |
-| `llm/deepseek.py` | 流式、缓存 token 指标、thinking 模式 |
-| `permissions/` | 审批模式 + allow/ask/deny 策略 |
-| `persistence/` | SQLite 会话 + JSONL 事件历史 |
-| `mcp/` | 持久 stdio MCP 客户端、`.mcp.json` 发现 |
-| `skills/` | Markdown 剧本（`explore`、`review` 等） |
+| `context/manager.py` | 上下文组装 |
+| `context/session_cache.py` | 会话缓存管理 |
+| `context/session_resolver.py` | 会话解析 |
+| `context/cache_shape.py` | 缓存形态分析 |
+| `context/project_memory.py` | 项目记忆管理 |
+| `context/instruction.py` | 指令管理 |
+| `context/prune.py` | 上下文裁剪 |
+| `tools/registry.py` | 40+ 内置工具注册 |
+| `tools/filesystem.py` | 文件系统工具 |
+| `tools/edit_file.py` | 文件编辑工具 |
+| `tools/shell.py` | Shell 命令工具 |
+| `tools/git.py` | Git 工具 |
+| `tools/web_search.py` | 网络搜索 |
+| `tools/web_fetch.py` | 网页抓取 |
+| `tools/codegraph.py` | CodeGraph 代码图查询 |
+| `tools/code_search.py` | 代码搜索 |
+| `tools/code_index.py` | 代码索引 |
+| `tools/lsp.py` | LSP 客户端 |
+| `tools/lsp_tools.py` | LSP 工具集成 |
+| `tools/agent_memory.py` | Agent 记忆工具 |
+| `tools/ask.py` | 向用户提问 |
+| `tools/todo.py` | Todo 管理 |
+| `tools/plan_progress.py` | 规划进度跟踪 |
+| `tools/history.py` | 历史记录 |
+| `tools/cache.py` | 缓存管理 |
+| `tools/notebook.py` | Notebook 集成 |
+| `tools/code_review.py` | 代码审查 |
+| `tools/deepseek_tools.py` | DeepSeek 专用工具 |
+| `tools/encoding.py` | 编码检测 |
+| `tools/path_utils.py` | 路径工具 |
+| `permissions/evaluator.py` | 审批模式评估 |
+| `permissions/policy.py` | 策略规则引擎 |
+| `permissions/classifier.py` | Shell 风险分类 |
+| `permissions/bash_readonly.py` | Bash 只读命令检测 |
+| `llm/deepseek.py` | DeepSeek 供应商（流式、缓存指标、thinking 模式） |
+| `llm/openai.py` | OpenAI 兼容供应商 |
+| `llm/openai_stream.py` | OpenAI 流式处理 |
+| `llm/factory.py` | LLM 供应商工厂 |
+| `llm/base.py` | LLM 基类 |
+| `llm/cache_metrics.py` | 缓存指标收集 |
+| `llm/retry.py` | 重试逻辑 |
+| `llm/tool_repair.py` | 工具调用修复 |
+| `llm/errors.py` | LLM 错误类型 |
+| `llm/mock.py` | Mock LLM 用于测试 |
+| `mcp/client.py` | MCP 客户端（stdio JSON-RPC） |
+| `mcp/manager.py` | MCP 连接管理器 |
+| `mcp/loader.py` | MCP 配置加载（`.mcp.json` 发现） |
+| `persistence/session.py` | SQLite 会话持久化 |
+| `memory/vector.py` | 向量记忆（Chromadb/Faiss） |
+| `skills/loader.py` | Skill 发现与加载 |
+| `skills/runner.py` | Skill 执行引擎 |
+| `hooks/runner.py` | 钩子系统（前置/后置执行） |
+| `lsp/client.py` | LSP 客户端实现 |
+| `lsp/manager.py` | LSP 连接管理器 |
 
 ### 第 4 层 — 外部服务
 
@@ -271,7 +345,7 @@ Python aiohttp 服务，**9090 端口**，系统**大脑**：
   最终回答               权限闸门
  （+ 就绪检查）                │
                          允许 → 写入前 checkpoint
-                              → 执行工具
+                              → 执行工具（只读工具可并行）
                               → 追加结果
                               → 循环（默认最多 50 步）
 ```
@@ -281,12 +355,13 @@ Python aiohttp 服务，**9090 端口**，系统**大脑**：
 | 机制 | 作用 |
 |------|------|
 | **并行调度** | 连续只读工具并发执行 |
-| **Guard** | 检测死循环、工具风暴、重复成功 |
+| **Guard** | 检测死循环、工具风暴、重复成功、空回答 |
 | **流恢复** | SSE 中断时重试一次，保留部分 assistant 文本 |
 | **压缩** | 上下文超约 80% 窗口时摘要尾部，前缀不变 |
 | **Evidence 账本** | 跟踪 todo/步骤完成与验证命令 |
 | **Checkpoint** | `write_file` / `edit_file` 前快照；`likecodex rewind` 回滚 |
 | **Plan 模式** | 规划阶段仅只读工具，批准后才可写入 |
+| **工具修复** | LLM 返回格式错误的工具调用时自动修复 |
 
 ---
 
@@ -443,13 +518,13 @@ cargo build --workspace
 ### 配置与运行
 
 ```bash
-likecodex setup                    # 交互式向导
-likecodex start --web              # 全栈启动
+likecodex setup                    # 交互式向导（API Key、配置等）
+likecodex start --web              # 全栈启动（引擎 + 服务 + Web）
 likecodex doctor                   # 健康检查（含修复建议）
 
 # 或纯终端：
-likecodex code
-likecodex "修复 src/ 里失败的测试"
+likecodex code                     # TUI 交互模式
+likecodex "修复 src/ 里失败的测试"  # 单次任务
 ```
 
 Windows：先安装 MSVC Build Tools — `.\scripts\check-prerequisites.ps1`
@@ -505,13 +580,15 @@ allow_fallback = true
 |------|------|
 | 文件系统 | `read_file`、`write_file`、`edit_file`、`multi_edit`、`glob`、`ls`、`move_file` |
 | Shell | `run_command`、`bgjobs`、`bash_output`、`kill_shell`、`wait_job` |
-| 搜索 | `grep_files`、`codegraph_*`、`code_index`、LSP 工具 |
-| Git | `git_status`、`git_diff`、`git_log`、`git_branch`、`git_commit` |
+| 搜索 | `grep_files`、`codegraph_search`、`codegraph_related`、`code_index`、`code_search`、LSP 工具 |
+| Git | `git_status`、`git_diff`、`git_log`、`git_branch`、`git_commit`、`git_push` |
 | 网络 | `web_search`、`web_fetch` |
-| Agent 元 | `task`、`parallel_tasks`、`run_skill`、`todo_write`、`complete_step` |
+| Agent 元 | `task`、`parallel_tasks`、`run_skill`、`todo_write`、`complete_step`、`ask` |
 | 记忆 | `remember`、`forget`、`memory_search`、`history` |
+| 代码审查 | `code_review`、`autoresearch` |
 | 经济模式 | `connect_tool_source`（`token_mode = "economy"` 时） |
 | MCP | `mcp__<server>__<tool>`（配置后） |
+| Notebook | `notebook_cell`、`notebook_run` |
 
 ---
 
@@ -519,27 +596,38 @@ allow_fallback = true
 
 ```text
 likecodex/
-├── crates/                      # Rust 工作区
+├── crates/                      # Rust 工作区（8 个 crate）
 │   ├── likecodex-core/          # 配置、事件、共享类型
 │   ├── likecodex-cli/           # CLI、TUI、start/setup/doctor
 │   ├── likecodex-server/        # HTTP/SSE 控制平面
 │   ├── likecodex-acp/           # Agent Client Protocol (ACP v1) stdio 服务端
 │   ├── likecodex-executor/      # 本地命令执行
-│   ├── likecodex-sandbox/       # Docker 沙箱
-│   └── likecodex-indexer/       # 文件 + CodeGraph 索引
-├── packages/likecodex-engine/   # Python Agent 引擎
+│   ├── likecodex-sandbox/       # Docker 沙箱（支持回退到本地）
+│   ├── likecodex-indexer/       # 文件索引 + CodeGraph 代码符号图
+│   └── likecodex-desktop/       # Tauri 桌面应用包装
+├── packages/likecodex-engine/   # Python Agent 引擎（核心智能层）
 │   └── likecodex_engine/
-│       ├── agent/               # 循环、guard、规划器、协调器
-│       ├── tools/               # 工具注册表 + 内置工具
-│       ├── context/             # 缓存优先上下文 + 压缩
-│       ├── llm/                 # DeepSeek 提供商 + 流式
-│       ├── mcp/                 # MCP 客户端 + 加载器
-│       └── skills/              # Skill 发现 + 内置包
-├── web/                         # Next.js 三栏 UI
-├── docs/                        # 架构、API、事件、缓存规范
-├── tests/                       # 集成 + E2E
-├── benchmarks/                  # 缓存 + Agent 回归门禁
-└── scripts/                     # dev.sh、dev.ps1、install、smoke_test
+│       ├── agent/               # 循环、guard、规划器、协调器、checkpoint
+│       ├── tools/               # 工具注册表 + 40+ 内置工具
+│       ├── context/             # 缓存优先上下文 + 压缩 + 记忆
+│       ├── llm/                 # LLM 供应商（DeepSeek、OpenAI、Mock）
+│       ├── permissions/         # 审批模式 + 策略引擎 + 风险分类
+│       ├── mcp/                 # MCP 客户端 + 加载器 + 管理器
+│       ├── memory/              # 向量记忆（Chromadb/Faiss）
+│       ├── persistence/         # SQLite 会话持久化
+│       ├── skills/              # Skill 发现 + 执行引擎 + 内置包
+│       ├── prompts/             # system.md 与提示词模板
+│       ├── hooks/               # 钩子系统
+│       ├── lsp/                 # LSP 语言服务客户端
+│       └── static/              # 静态文件（Web UI lite 版）
+├── web/                         # Next.js 15 三栏 UI
+├── docs/                        # 英文文档（架构、API、事件、规范）
+├── doc/                         # 中文设计文档（6 篇）
+├── docker/                      # Docker 镜像构建文件（sandbox + server）
+├── services/                    # 附加服务（imbot 审批机器人）
+├── benchmarks/                  # 基准测试（Agent + 缓存性能）
+├── scripts/                     # 开发/安装脚本（.ps1 + .sh）
+└── .github/                     # CI/CD 工作流 + Issue 模板
 ```
 
 ---
@@ -556,8 +644,13 @@ likecodex/
 | [docs/ACP.md](docs/ACP.md) | ACP v1 协议规范 |
 | [docs/EVENTS.md](docs/EVENTS.md) | SSE 事件 schema |
 | [docs/USAGE.md](docs/USAGE.md) | 详细使用指南 |
+| [docs/SECURITY.md](docs/SECURITY.md) | 安全策略 |
 | [docs/PARITY-CHECKLIST.md](docs/PARITY-CHECKLIST.md) | 功能 ↔ 测试对照 |
-| [SECURITY.md](SECURITY.md) | 安全策略 |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | 路线图 |
+| [doc/](doc/) | 中文设计文档（6 篇架构与优化方案） |
+| [CHANGELOG.md](CHANGELOG.md) | 更新日志 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | 行为准则 |
 
 ---
 
