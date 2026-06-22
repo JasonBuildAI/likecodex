@@ -1025,6 +1025,205 @@ async def deepseek_diagnostics(request: web.Request) -> web.Response:
     )
 
 
+# ── Inline Edit API (for AI inline code editing) ──────────────
+
+
+INLINE_EDIT_SYSTEM = """You are an expert code editor. Your task is to modify the given code according to the user's instruction.
+Output ONLY the modified code, wrapped in ```<language> code ``` markers. Do NOT include explanations or commentary — just the code block."""
+
+INLINE_EDIT_USER = """Language: {language}
+
+{context_section}---
+
+## Code to modify:
+```{language}
+{code}
+```
+
+## Instruction:
+{instruction}
+
+## Modified code:"""
+
+
+async def inline_edit(request: web.Request) -> web.Response:
+    """AI-powered inline code editing (Cursor-like Ctrl+K)."""
+    data = await request.json()
+    code: str = data.get("code", "")
+    instruction: str = data.get("instruction", "")
+    language: str = data.get("language", "plaintext")
+    full_content: str | None = data.get("full_content")
+    file_path: str | None = data.get("file_path")
+
+    if not code or not instruction:
+        return web.json_response({"error": "code and instruction are required"}, status=400)
+
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    try:
+        llm = create_provider(
+            provider=cfg.get("provider", "deepseek"),
+            model=data.get("model") or cfg.get("model", "deepseek-v4-flash"),
+            api_key=data.get("api_key") or cfg.get("api_key"),
+            base_url=cfg.get("base_url"),
+        )
+    except Exception as e:
+        return web.json_response({"error": f"Failed to create LLM provider: {e}"}, status=500)
+
+    context_section = ""
+    if full_content:
+        import textwrap
+        snippet = textwrap.dedent(full_content)
+        context_section = f"## Full file context ({language}):\n```{language}\n{snippet}\n```\n\n"
+
+    from likecodex_engine.llm.base import Message, Role
+
+    messages = [
+        Message(role=Role.SYSTEM, content=INLINE_EDIT_SYSTEM),
+        Message(
+            role=Role.USER,
+            content=INLINE_EDIT_USER.format(
+                language=language,
+                context_section=context_section,
+                code=code,
+                instruction=instruction,
+            ),
+        ),
+    ]
+
+    try:
+        response = await llm.complete(messages, temperature=0.1, max_tokens=4096)
+    except Exception as e:
+        return web.json_response({"error": f"LLM call failed: {e}"}, status=502)
+
+    raw = response.content.strip()
+
+    # Extract code from markdown code block
+    import re
+    modified = raw
+    code_block_match = re.search(r"```(?:\w+)?\n(.*?)\n```", raw, re.DOTALL)
+    if code_block_match:
+        modified = code_block_match.group(1).strip()
+
+    return web.json_response({
+        "original": code,
+        "modified": modified,
+        "explanation": "",
+        "model": response.model,
+        "usage": response.usage,
+    })
+
+
+# ── Workspace API (for IDE file tree & editor) ────────────────────
+
+
+async def workspace_list(request: web.Request) -> web.Response:
+    """List files and directories in the workspace."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = Path(cfg.get("working_dir", "."))
+    rel_path = request.query.get("path", ".")
+    depth_str = request.query.get("depth", "1")
+
+    try:
+        depth = int(depth_str)
+    except ValueError:
+        depth = 1
+
+    target = (working_dir / rel_path).resolve()
+    # Security: ensure target is within working_dir
+    if not str(target).startswith(str(working_dir.resolve())):
+        return web.json_response({"error": "Path outside workspace"}, status=403)
+    if not target.exists():
+        return web.json_response({"error": "Path not found"}, status=404)
+
+    result: dict = {"name": target.name, "path": str(target.relative_to(working_dir)), "type": "directory" if target.is_dir() else "file"}
+
+    if target.is_dir():
+        children = []
+        try:
+            for entry in sorted(target.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+                # Skip hidden files/dirs (starting with .)
+                if entry.name.startswith(".") and entry.name not in (".gitignore", ".env.example", ".editorconfig"):
+                    continue
+                # Skip node_modules, target, __pycache__
+                if entry.name in ("node_modules", "target", "__pycache__", ".git", ".next", "out"):
+                    continue
+                child = {
+                    "name": entry.name,
+                    "path": str(entry.relative_to(working_dir)),
+                    "type": "directory" if entry.is_dir() else "file",
+                }
+                if entry.is_file():
+                    try:
+                        stat = entry.stat()
+                        child["size"] = stat.st_size
+                    except OSError:
+                        child["size"] = 0
+                children.append(child)
+                if len(children) >= 500:
+                    break
+        except PermissionError:
+            pass
+        result["children"] = children
+
+    return web.json_response(result)
+
+
+async def workspace_read(request: web.Request) -> web.Response:
+    """Read a file from the workspace."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = Path(cfg.get("working_dir", "."))
+    rel_path = request.query.get("path", "")
+
+    if not rel_path:
+        return web.json_response({"error": "path is required"}, status=400)
+
+    target = (working_dir / rel_path).resolve()
+    if not str(target).startswith(str(working_dir.resolve())):
+        return web.json_response({"error": "Path outside workspace"}, status=403)
+    if not target.exists() or not target.is_file():
+        return web.json_response({"error": "File not found"}, status=404)
+
+    try:
+        size_limit = 1024 * 1024  # 1MB
+        if target.stat().st_size > size_limit:
+            return web.json_response({"error": "File too large"}, status=413)
+        content = target.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return web.json_response({"error": f"Cannot read file: {e}"}, status=500)
+
+    return web.json_response({
+        "path": rel_path,
+        "name": target.name,
+        "content": content,
+        "size": target.stat().st_size,
+    })
+
+
+async def workspace_write(request: web.Request) -> web.Response:
+    """Write content to a file in the workspace."""
+    data = await request.json()
+    rel_path = data.get("path", "")
+    content = data.get("content", "")
+
+    if not rel_path:
+        return web.json_response({"error": "path is required"}, status=400)
+
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = Path(cfg.get("working_dir", "."))
+    target = (working_dir / rel_path).resolve()
+
+    if not str(target).startswith(str(working_dir.resolve())):
+        return web.json_response({"error": "Path outside workspace"}, status=403)
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    except Exception as e:
+        return web.json_response({"error": f"Cannot write file: {e}"}, status=500)
+
+    return web.json_response({"ok": True, "path": rel_path, "size": target.stat().st_size})
+
+
 async def warmup_deepseek_cache() -> None:
     """Background warmup: prime DeepSeek prefix cache on startup."""
     from likecodex_engine.llm.deepseek import DeepSeekProvider
@@ -1085,6 +1284,14 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_post("/resume", resume_session)
     app.router.add_post("/sessions/delete", delete_session)
     app.router.add_get("/skills", list_skills)
+
+    # ── Workspace API endpoints ─────────────────────────────
+    app.router.add_get("/workspace/list", workspace_list)
+    app.router.add_get("/workspace/read", workspace_read)
+    app.router.add_post("/workspace/write", workspace_write)
+
+    # ── Inline Edit API ──────────────────────────────────────
+    app.router.add_post("/inline-edit", inline_edit)
 
     # ── DeepSeek-specific API endpoints ──────────────────────
     app.router.add_get("/api/deepseek/cache-stats", deepseek_cache_stats)
