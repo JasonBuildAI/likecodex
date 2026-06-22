@@ -1224,6 +1224,731 @@ async def workspace_write(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "path": rel_path, "size": target.stat().st_size})
 
 
+# ── IDE Completion API (Tab completion) ────────────────────────
+
+# Lazy-initialized completion service
+_completion_service: "InlineCompletionService | None" = None
+
+
+def _get_completion_service():
+    global _completion_service
+    if _completion_service is None:
+        from likecodex_engine.completion.inline import InlineCompletionService
+        _completion_service = InlineCompletionService()
+    return _completion_service
+
+
+async def ide_inline_completion(request: web.Request) -> web.Response:
+    """Provide AI-powered inline code completion for the IDE."""
+    data = await request.json()
+
+    file_path = data.get("file_path", "")
+    language = data.get("language", "plaintext")
+    prefix = data.get("prefix", "")
+    suffix = data.get("suffix", "")
+    imports = data.get("imports", [])
+    current_scope = data.get("current_scope", "")
+    cursor_line = data.get("cursor_line", 0)
+    cursor_col = data.get("cursor_col", 0)
+
+    if not prefix:
+        return web.json_response({"text": None})
+
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    try:
+        llm = create_provider(
+            provider=cfg.get("provider", "deepseek"),
+            model=cfg.get("model", "deepseek-v4-flash"),
+            api_key=cfg.get("api_key"),
+            base_url=cfg.get("base_url"),
+        )
+    except Exception as e:
+        return web.json_response(
+            {"error": f"Failed to create LLM provider: {e}"}, status=500
+        )
+
+    from likecodex_engine.completion.inline import InlineCompletionRequest
+
+    req = InlineCompletionRequest(
+        file_path=file_path,
+        language=language,
+        prefix=prefix[-2000:],  # limit prefix to 2000 chars
+        suffix=suffix[:500],   # limit suffix to 500 chars
+        imports=imports if isinstance(imports, list) else [],
+        current_scope=current_scope,
+        cursor_line=cursor_line,
+        cursor_col=cursor_col,
+    )
+
+    service = _get_completion_service()
+    result = await service.complete(req, llm=llm)
+
+    if result:
+        return web.json_response({
+            "text": result.text,
+            "completion_id": result.completion_id,
+            "model": result.model,
+            "latency_ms": result.latency_ms,
+            "cache_hit": result.cache_hit,
+        })
+
+    return web.json_response({"text": None})
+
+
+async def ide_completion_accepted(request: web.Request) -> web.Response:
+    """Track completion acceptance (for future optimization)."""
+    return web.json_response({"ok": True})
+
+
+# ── IDE Context Search API (@ mentions) ────────────────────────
+
+async def ide_context_search(request: web.Request) -> web.Response:
+    """Search for @ mention targets (files, symbols, special context)."""
+    query = request.query.get("q", "")
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = Path(cfg.get("working_dir", "."))
+
+    from likecodex_engine.context.mention_search import MentionSearchService
+
+    service = MentionSearchService(working_dir)
+    results = await service.search(query, limit=20)
+
+    return web.json_response({"results": results})
+
+
+# ── IDE LSP API (definition, references, hover) ───────────────
+
+# Lazy-initialized LSP manager
+_lsp_manager: Any = None
+
+
+def _get_lsp_manager(working_dir: str):
+    global _lsp_manager
+    if _lsp_manager is None:
+        from likecodex_engine.lsp.manager import LspManager
+        _lsp_manager = LspManager(working_dir)
+    return _lsp_manager
+
+
+async def ide_lsp_definition(request: web.Request) -> web.Response:
+    """Get definition location for a symbol."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    data = await request.json()
+    file_path = data.get("file_path", "")
+    line = data.get("line", 1)
+    symbol = data.get("symbol", "")
+
+    if not file_path or not symbol:
+        return web.json_response({"error": "file_path and symbol are required"}, status=400)
+
+    manager = _get_lsp_manager(working_dir)
+    result = await manager.definition(file_path, line, symbol)
+    return web.json_response(json.loads(result) if isinstance(result, str) else {"result": result})
+
+
+async def ide_lsp_references(request: web.Request) -> web.Response:
+    """Get references for a symbol."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    data = await request.json()
+    file_path = data.get("file_path", "")
+    line = data.get("line", 1)
+    symbol = data.get("symbol", "")
+
+    if not file_path or not symbol:
+        return web.json_response({"error": "file_path and symbol are required"}, status=400)
+
+    manager = _get_lsp_manager(working_dir)
+    result = await manager.references(file_path, line, symbol)
+    return web.json_response(json.loads(result) if isinstance(result, str) else {"result": result})
+
+
+async def ide_lsp_hover(request: web.Request) -> web.Response:
+    """Get hover info for a symbol."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    data = await request.json()
+    file_path = data.get("file_path", "")
+    line = data.get("line", 1)
+    symbol = data.get("symbol", "")
+
+    if not file_path or not symbol:
+        return web.json_response({"error": "file_path and symbol are required"}, status=400)
+
+    manager = _get_lsp_manager(working_dir)
+    result = await manager.hover(file_path, line, symbol)
+    return web.json_response(json.loads(result) if isinstance(result, str) else {"result": result})
+
+
+async def ide_lsp_diagnostics(request: web.Request) -> web.Response:
+    """Get diagnostics for a file (placeholder — uses LSP server diagnostics)."""
+    return web.json_response({"diagnostics": []})
+
+
+async def ide_composer_chat(request: web.Request) -> web.StreamResponse:
+    """Composer SSE endpoint — multi-file AI editing with file change events."""
+    data = await request.json()
+    message = data.get("message", "")
+    mentions = data.get("mentions", [])
+    session_id = data.get("sessionId", f"composer-{uuid.uuid4()}")
+
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+
+    from likecodex_engine.composer.agent import ComposerAgent
+
+    agent = ComposerAgent(config=cfg, working_dir=working_dir)
+
+    response = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+    await response.prepare(request)
+
+    # Keepalive heartbeat
+    keepalive_stop = asyncio.Event()
+
+    async def _keepalive() -> None:
+        try:
+            while not keepalive_stop.is_set():
+                await asyncio.wait_for(keepalive_stop.wait(), timeout=15)
+                if keepalive_stop.is_set():
+                    break
+                await response.write(b": keepalive\n\n")
+        except TimeoutError:
+            if not keepalive_stop.is_set():
+                await response.write(b": keepalive\n\n")
+        except Exception:
+            pass
+
+    keepalive_handle = asyncio.ensure_future(_keepalive())
+
+    try:
+        async for event in agent.execute(
+            message=message,
+            mentions=mentions,
+            session_id=session_id,
+        ):
+            payload = json.dumps(event)
+            await response.write(f"data: {payload}\n\n".encode())
+    except Exception as exc:
+        error_event = json.dumps({"type": "error", "content": str(exc)})
+        await response.write(f"data: {error_event}\n\n".encode())
+    finally:
+        keepalive_stop.set()
+        keepalive_handle.done() or keepalive_handle.cancel()
+
+    await response.write(b"data: [DONE]\n\n")
+    return response
+
+
+# ── Git API handlers ───────────────────────────────────────────
+
+_git_service: Any = None
+
+
+def _get_git_service(working_dir: str):
+    """Lazy-load GitService."""
+    global _git_service
+    if _git_service is None:
+        from likecodex_engine.git_service import GitService
+        _git_service = GitService(working_dir)
+    return _git_service
+
+
+async def ide_git_status(request: web.Request) -> web.Response:
+    """Get git status for the workspace."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    result = await service.get_status()
+    return web.json_response(result)
+
+
+async def ide_git_diff(request: web.Request) -> web.Response:
+    """Get diff for a specific file."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    data = await request.json()
+    result = await service.get_diff(
+        path=data.get("path", ""),
+        staged=data.get("staged", False),
+    )
+    return web.json_response(result)
+
+
+async def ide_git_stage(request: web.Request) -> web.Response:
+    """Stage a file."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    data = await request.json()
+    result = await service.stage_file(data.get("path", ""))
+    return web.json_response(result)
+
+
+async def ide_git_unstage(request: web.Request) -> web.Response:
+    """Unstage a file."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    data = await request.json()
+    result = await service.unstage_file(data.get("path", ""))
+    return web.json_response(result)
+
+
+async def ide_git_stage_all(request: web.Request) -> web.Response:
+    """Stage all changes."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    result = await service.stage_all()
+    return web.json_response(result)
+
+
+async def ide_git_commit(request: web.Request) -> web.Response:
+    """Commit staged changes."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    data = await request.json()
+    result = await service.commit(
+        message=data.get("message", ""),
+        author=data.get("author", ""),
+        email=data.get("email", ""),
+    )
+    return web.json_response(result)
+
+
+async def ide_git_log(request: web.Request) -> web.Response:
+    """Get commit log."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    count = int(request.query.get("count", "50"))
+    result = await service.get_log(count=count)
+    return web.json_response(result)
+
+
+async def ide_git_branches(request: web.Request) -> web.Response:
+    """Get all branches."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    result = await service.get_branches()
+    return web.json_response(result)
+
+
+async def ide_git_checkout(request: web.Request) -> web.Response:
+    """Checkout a branch."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    data = await request.json()
+    result = await service.checkout_branch(data.get("name", ""))
+    return web.json_response(result)
+
+
+async def ide_git_create_branch(request: web.Request) -> web.Response:
+    """Create a new branch."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    data = await request.json()
+    result = await service.create_branch(data.get("name", ""))
+    return web.json_response(result)
+
+
+async def ide_git_discard(request: web.Request) -> web.Response:
+    """Discard changes to a file."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    data = await request.json()
+    result = await service.discard_changes(data.get("path", ""))
+    return web.json_response(result)
+
+
+async def ide_git_search(request: web.Request) -> web.Response:
+    """Search file contents."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    service = _get_git_service(working_dir)
+    query = request.query.get("q", "")
+    file_pattern = request.query.get("pattern", "")
+    result = await service.search_files(query=query, file_pattern=file_pattern)
+    return web.json_response(result)
+
+
+# ── Terminal API handlers ───────────────────────────────────────
+
+_terminal_manager: Any = None
+
+
+def _get_terminal_manager(working_dir: str):
+    """Lazy-load TerminalManager."""
+    global _terminal_manager
+    if _terminal_manager is None:
+        from likecodex_engine.terminal.pty_manager import TerminalManager
+        _terminal_manager = TerminalManager(working_dir)
+    return _terminal_manager
+
+
+async def ide_terminal_create(request: web.Request) -> web.Response:
+    """Create a new terminal session."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    manager = _get_terminal_manager(working_dir)
+    data = await request.json()
+    import uuid as _uuid
+    session_id = data.get("id") or f"term-{_uuid.uuid4()}"
+    cwd = data.get("cwd", working_dir)
+    session = manager.create_session(session_id, cwd=cwd)
+    return web.json_response({"id": session.id, "cwd": session.cwd, "shell": session.shell})
+
+
+async def ide_terminal_execute(request: web.Request) -> web.Response:
+    """Execute a command and return output (non-streaming)."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    manager = _get_terminal_manager(working_dir)
+    data = await request.json()
+    session_id = data.get("sessionId", "term-default")
+    command = data.get("command", "")
+    result = await manager.execute_command(session_id, command)
+    return web.json_response(result)
+
+
+async def ide_terminal_stream(request: web.Request) -> web.StreamResponse:
+    """Execute a command with streaming output via SSE."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    manager = _get_terminal_manager(working_dir)
+    data = await request.json()
+    session_id = data.get("sessionId", "term-default")
+    command = data.get("command", "")
+
+    response = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+    await response.prepare(request)
+
+    try:
+        async for event in manager.execute_command_stream(session_id, command):
+            payload = json.dumps(event)
+            await response.write(f"data: {payload}\n\n".encode())
+    except Exception as exc:
+        error_event = json.dumps({"type": "error", "content": str(exc)})
+        await response.write(f"data: {error_event}\n\n".encode())
+
+    await response.write(b"data: [DONE]\n\n")
+    return response
+
+
+async def ide_terminal_suggest(request: web.Request) -> web.Response:
+    """AI command suggestion — natural language to shell command."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    data = await request.json()
+    description = data.get("description", "")
+
+    if not description:
+        return web.json_response({"command": "", "error": "Description required"}, status=400)
+
+    from likecodex_engine.llm.factory import create_provider
+    from likecodex_engine.terminal.ai_assistant import TerminalAIAssistant
+
+    llm = create_provider(
+        cfg.get("provider", "deepseek"),
+        cfg.get("model", "deepseek-v4-flash"),
+        cfg.get("api_key"),
+        cfg.get("base_url"),
+        thinking=False,
+    )
+    assistant = TerminalAIAssistant(llm)
+    command = await assistant.suggest_command(description)
+    return web.json_response({"command": command})
+
+
+async def ide_terminal_diagnose(request: web.Request) -> web.Response:
+    """AI error diagnosis for terminal commands."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    data = await request.json()
+    command = data.get("command", "")
+    error_output = data.get("error", "")
+
+    from likecodex_engine.llm.factory import create_provider
+    from likecodex_engine.terminal.ai_assistant import TerminalAIAssistant
+
+    llm = create_provider(
+        cfg.get("provider", "deepseek"),
+        cfg.get("model", "deepseek-v4-flash"),
+        cfg.get("api_key"),
+        cfg.get("base_url"),
+        thinking=False,
+    )
+    assistant = TerminalAIAssistant(llm)
+    diagnosis = await assistant.diagnose_error(command, error_output)
+    return web.json_response({"diagnosis": diagnosis})
+
+
+async def ide_terminal_close(request: web.Request) -> web.Response:
+    """Close a terminal session."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    manager = _get_terminal_manager(working_dir)
+    data = await request.json()
+    session_id = data.get("sessionId", "")
+    success = manager.close_session(session_id)
+    return web.json_response({"success": success})
+
+
+# ── Debug / Test API handlers ───────────────────────────────────
+
+_test_runner: Any = None
+
+
+def _get_test_runner(working_dir: str):
+    """Lazy-load TestRunnerService."""
+    global _test_runner
+    if _test_runner is None:
+        from likecodex_engine.debug.test_runner import TestRunnerService
+        _test_runner = TestRunnerService(working_dir)
+    return _test_runner
+
+
+async def ide_tests_discover(request: web.Request) -> web.Response:
+    """Discover all test files and test cases."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    runner = _get_test_runner(working_dir)
+    result = await runner.discover_tests()
+    return web.json_response(result)
+
+
+async def ide_tests_run(request: web.Request) -> web.StreamResponse:
+    """Run tests with SSE streaming."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    runner = _get_test_runner(working_dir)
+    data = await request.json()
+    test_filter = data.get("filter", "")
+
+    response = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+    await response.prepare(request)
+
+    try:
+        async for event in runner.run_tests(test_filter=test_filter):
+            payload = json.dumps(event)
+            await response.write(f"data: {payload}\n\n".encode())
+    except Exception as exc:
+        error_event = json.dumps({"type": "error", "content": str(exc)})
+        await response.write(f"data: {error_event}\n\n".encode())
+
+    await response.write(b"data: [DONE]\n\n")
+    return response
+
+
+async def ide_debug_analyze(request: web.Request) -> web.Response:
+    """AI error analysis for debugging."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    data = await request.json()
+    error_message = data.get("errorMessage", "")
+    stack_trace = data.get("stackTrace", "")
+    relevant_code = data.get("relevantCode", "")
+    file_path = data.get("filePath", "")
+
+    from likecodex_engine.llm.factory import create_provider
+    from likecodex_engine.debug.ai_debug import AIDebugAssistant
+
+    llm = create_provider(
+        cfg.get("provider", "deepseek"),
+        cfg.get("model", "deepseek-v4-flash"),
+        cfg.get("api_key"),
+        cfg.get("base_url"),
+        thinking=False,
+    )
+    assistant = AIDebugAssistant(llm)
+    result = await assistant.analyze_error(
+        error_message=error_message,
+        stack_trace=stack_trace,
+        relevant_code=relevant_code,
+        file_path=file_path,
+    )
+    return web.json_response(result)
+
+
+# ── Settings API handlers ────────────────────────────────────────
+
+_settings_manager: Any = None
+
+
+def _get_settings_manager(working_dir: str):
+    """Lazy-load SettingsManager."""
+    global _settings_manager
+    if _settings_manager is None:
+        from likecodex_engine.settings.manager import SettingsManager
+        _settings_manager = SettingsManager(working_dir)
+    return _settings_manager
+
+
+async def ide_settings_get_all(request: web.Request) -> web.Response:
+    """Get all IDE settings with defaults applied."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    mgr = _get_settings_manager(working_dir)
+    return web.json_response({"settings": mgr.get_all()})
+
+
+async def ide_settings_categories(request: web.Request) -> web.Response:
+    """Get settings grouped by category."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    mgr = _get_settings_manager(working_dir)
+    return web.json_response({"categories": mgr.get_categories()})
+
+
+async def ide_settings_set(request: web.Request) -> web.Response:
+    """Set a single setting value."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    mgr = _get_settings_manager(working_dir)
+    data = await request.json()
+    key = data.get("key", "")
+    value = data.get("value")
+    mgr.set(key, value)
+    return web.json_response({"success": True, "key": key, "value": mgr.get(key)})
+
+
+async def ide_settings_reset(request: web.Request) -> web.Response:
+    """Reset a setting to its default value."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    mgr = _get_settings_manager(working_dir)
+    data = await request.json()
+    key = data.get("key", "")
+    mgr.reset(key)
+    return web.json_response({"success": True, "key": key, "value": mgr.get(key)})
+
+
+async def ide_settings_reset_all(request: web.Request) -> web.Response:
+    """Reset all settings to defaults."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    mgr = _get_settings_manager(working_dir)
+    mgr.reset_all()
+    return web.json_response({"success": True, "settings": mgr.get_all()})
+
+
+async def ide_keybindings_get(request: web.Request) -> web.Response:
+    """Get all keybindings with conflict info."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    mgr = _get_settings_manager(working_dir)
+    return web.json_response({
+        "keybindings": mgr.get_keybindings(),
+        "conflicts": mgr.check_conflicts(),
+    })
+
+
+async def ide_keybindings_set(request: web.Request) -> web.Response:
+    """Update a keybinding."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    mgr = _get_settings_manager(working_dir)
+    data = await request.json()
+    binding_id = data.get("id", "")
+    keys = data.get("keys", [])
+    mgr.set_keybinding(binding_id, keys)
+    return web.json_response({
+        "success": True,
+        "conflicts": mgr.check_conflicts(),
+    })
+
+
+async def ide_keybindings_reset(request: web.Request) -> web.Response:
+    """Reset all keybindings to defaults."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    mgr = _get_settings_manager(working_dir)
+    mgr.reset_keybindings()
+    return web.json_response({
+        "keybindings": mgr.get_keybindings(),
+        "conflicts": mgr.check_conflicts(),
+    })
+
+
+# ── Extensions API handlers ──────────────────────────────────────
+
+async def ide_extensions_list(request: web.Request) -> web.Response:
+    """List installed extensions from .likecodex/extensions/ directory."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    extensions_dir = Path(working_dir) / ".likecodex" / "extensions"
+    extensions = []
+    if extensions_dir.exists():
+        for child in sorted(extensions_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            manifest_file = child / "manifest.json"
+            if not manifest_file.exists():
+                continue
+            try:
+                import json as _json
+                manifest = _json.loads(manifest_file.read_text(encoding="utf-8"))
+                extensions.append({
+                    "id": manifest.get("id", child.name),
+                    "name": manifest.get("name", child.name),
+                    "version": manifest.get("version", "0.0.0"),
+                    "description": manifest.get("description", ""),
+                    "author": manifest.get("author", ""),
+                    "enabled": manifest.get("enabled", True),
+                    "main": manifest.get("main", ""),
+                    "contributes": manifest.get("contributes", {}),
+                })
+            except Exception:
+                continue
+    return web.json_response(extensions)
+
+
+async def ide_extensions_toggle(request: web.Request) -> web.Response:
+    """Enable or disable an extension."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    data = await request.json()
+    ext_id = data.get("id", "")
+    enabled = data.get("enabled", True)
+    ext_dir = Path(working_dir) / ".likecodex" / "extensions" / ext_id
+    manifest_file = ext_dir / "manifest.json"
+    if not manifest_file.exists():
+        return web.json_response({"error": "Extension not found"}, status=404)
+    try:
+        import json as _json
+        manifest = _json.loads(manifest_file.read_text(encoding="utf-8"))
+        manifest["enabled"] = enabled
+        manifest_file.write_text(_json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+        return web.json_response({"success": True, "id": ext_id, "enabled": enabled})
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=500)
+
+
 async def warmup_deepseek_cache() -> None:
     """Background warmup: prime DeepSeek prefix cache on startup."""
     from likecodex_engine.llm.deepseek import DeepSeekProvider
@@ -1292,6 +2017,63 @@ def create_app(config: dict | None = None) -> web.Application:
 
     # ── Inline Edit API ──────────────────────────────────────
     app.router.add_post("/inline-edit", inline_edit)
+
+    # ── IDE Completion API ───────────────────────────────────
+    app.router.add_post("/api/ide/completion/inline", ide_inline_completion)
+    app.router.add_post("/api/ide/completion/accepted", ide_completion_accepted)
+
+    # ── IDE Context Search API (@ mentions) ──────────────────
+    app.router.add_get("/api/ide/context/search", ide_context_search)
+
+    # ── IDE LSP API ──────────────────────────────────────────
+    app.router.add_post("/api/ide/lsp/definition", ide_lsp_definition)
+    app.router.add_post("/api/ide/lsp/references", ide_lsp_references)
+    app.router.add_post("/api/ide/lsp/hover", ide_lsp_hover)
+    app.router.add_get("/api/ide/lsp/diagnostics", ide_lsp_diagnostics)
+
+    # ── IDE Composer API (multi-file AI editing) ─────────────
+    app.router.add_post("/api/ide/composer/chat", ide_composer_chat)
+
+    # ── IDE Git API (version control) ────────────────────────
+    app.router.add_get("/api/ide/git/status", ide_git_status)
+    app.router.add_post("/api/ide/git/diff", ide_git_diff)
+    app.router.add_post("/api/ide/git/stage", ide_git_stage)
+    app.router.add_post("/api/ide/git/unstage", ide_git_unstage)
+    app.router.add_post("/api/ide/git/stage-all", ide_git_stage_all)
+    app.router.add_post("/api/ide/git/commit", ide_git_commit)
+    app.router.add_get("/api/ide/git/log", ide_git_log)
+    app.router.add_get("/api/ide/git/branches", ide_git_branches)
+    app.router.add_post("/api/ide/git/checkout", ide_git_checkout)
+    app.router.add_post("/api/ide/git/create-branch", ide_git_create_branch)
+    app.router.add_post("/api/ide/git/discard", ide_git_discard)
+    app.router.add_get("/api/ide/git/search", ide_git_search)
+
+    # ── IDE Terminal API (AI-powered terminal) ────────────────
+    app.router.add_post("/api/ide/terminal/create", ide_terminal_create)
+    app.router.add_post("/api/ide/terminal/execute", ide_terminal_execute)
+    app.router.add_post("/api/ide/terminal/stream", ide_terminal_stream)
+    app.router.add_post("/api/ide/terminal/suggest", ide_terminal_suggest)
+    app.router.add_post("/api/ide/terminal/diagnose", ide_terminal_diagnose)
+    app.router.add_post("/api/ide/terminal/close", ide_terminal_close)
+
+    # ── IDE Debug / Test API ───────────────────────────────────
+    app.router.add_get("/api/ide/tests/discover", ide_tests_discover)
+    app.router.add_post("/api/ide/tests/run", ide_tests_run)
+    app.router.add_post("/api/ide/debug/analyze", ide_debug_analyze)
+
+    # ── IDE Settings API ───────────────────────────────────
+    app.router.add_get("/api/ide/settings", ide_settings_get_all)
+    app.router.add_get("/api/ide/settings/categories", ide_settings_categories)
+    app.router.add_post("/api/ide/settings", ide_settings_set)
+    app.router.add_post("/api/ide/settings/reset", ide_settings_reset)
+    app.router.add_post("/api/ide/settings/reset-all", ide_settings_reset_all)
+    app.router.add_get("/api/ide/settings/keybindings", ide_keybindings_get)
+    app.router.add_post("/api/ide/settings/keybindings", ide_keybindings_set)
+    app.router.add_post("/api/ide/settings/keybindings/reset", ide_keybindings_reset)
+
+    # ── IDE Extensions API ─────────────────────────────────
+    app.router.add_get("/api/ide/extensions/list", ide_extensions_list)
+    app.router.add_post("/api/ide/extensions/toggle", ide_extensions_toggle)
 
     # ── DeepSeek-specific API endpoints ──────────────────────
     app.router.add_get("/api/deepseek/cache-stats", deepseek_cache_stats)
