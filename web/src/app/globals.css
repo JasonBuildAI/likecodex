@@ -88,3 +88,19 @@ code {
 .sidebar-transition {
   transition: width 0.2s ease, transform 0.2s ease;
 }
+
+/* Ghost text (AI inline completion) */
+.ghost-text {
+  color: var(--muted);
+  opacity: 0.5;
+  font-style: italic;
+  pointer-events: none;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--muted);
+  text-underline-offset: 2px;
+}
+
+[data-theme="light"] .ghost-text {
+  color: var(--muted);
+  opacity: 0.6;
+}
