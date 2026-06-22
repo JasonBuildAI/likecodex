@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from likecodex_engine.tools.cache import tool_cache
 from likecodex_engine.tools.registry import ToolRegistry
 
 READ_ONLY_TOOLS = frozenset(
@@ -31,6 +32,10 @@ READ_ONLY_TOOLS = frozenset(
         "lsp_diagnostics",
         "history",
         "web_fetch",
+        # DeepSeek read-only tools
+        "deepseek_cache_analyze",
+        "deepseek_reasoning",
+        "deepseek_cost_estimate",
     }
 )
 
@@ -46,8 +51,25 @@ async def execute_tool_calls_parallel(
     """Execute read-only tools in parallel; others sequentially in order."""
 
     async def run_one(tc: Any) -> tuple[Any, str]:
+        # Check cache first for read-only tools
+        if is_read_only_tool(tc.name):
+            cached = tool_cache.get(tc.name, tc.arguments)
+            if cached is not None:
+                return tc, cached
+
         result = await registry.execute(tc.name, tc.arguments)
+
+        # Cache read-only tool results
+        if is_read_only_tool(tc.name):
+            tool_cache.set(tc.name, tc.arguments, result)
+
         return tc, result
+
+    # Invalidate cache when write tools are present
+    for tc in tool_calls:
+        if not is_read_only_tool(tc.name):
+            tool_cache.invalidate()
+            break
 
     if len(tool_calls) <= 1:
         results = []

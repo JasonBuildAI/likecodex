@@ -189,17 +189,15 @@ class ToolRegistry:
     def _is_economy_optional(self, name: str) -> bool:
         if name == "connect_tool_source":
             return False
-        if name.startswith("mcp__") or name.startswith("lsp_"):
+        if name.startswith("mcp__") or name.startswith("lsp_") or name.startswith("deepseek_"):
             return True
-        if name in {
+        return name in {
             "web_fetch",
             "web_search",
             "run_skill",
             "task",
             "parallel_tasks",
-        }:
-            return True
-        return False
+        }
 
     def _apply_economy_hiding(self) -> None:
         for name in list(self._tools.keys()):
@@ -273,6 +271,11 @@ class ToolRegistry:
                 self._hidden.discard(tool_name)
                 if tool_name in self._tools:
                     enabled.append(tool_name)
+        elif source == "deepseek":
+            for tool_name in list(self._tools.keys()):
+                if tool_name.startswith("deepseek_"):
+                    self._hidden.discard(tool_name)
+                    enabled.append(tool_name)
         else:
             return json.dumps({"error": f"Unknown source '{source}'"})
 
@@ -322,6 +325,7 @@ class ToolRegistry:
         self.register("run_skill", skills.run_skill_schema(), skills.run_skill)
 
         for alias in ("explore", "review", "research", "security_review"):
+
             async def _skill_alias(task: str = "", _name: str = alias, **_: Any) -> str:
                 return await skills.run_skill(_name, task)
 
@@ -367,8 +371,7 @@ class ToolRegistry:
         if name in self._hidden:
             return json.dumps(
                 {
-                    "error": f"Tool '{name}' is hidden in token economy mode. "
-                    "Call connect_tool_source first.",
+                    "error": f"Tool '{name}' is hidden in token economy mode. Call connect_tool_source first.",
                 }
             )
         handler = self._handlers.get(name)
