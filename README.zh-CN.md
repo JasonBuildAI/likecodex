@@ -493,6 +493,58 @@ LikeCodex 通过 `likecodex-acp` 在 stdin/stdout 上暴露 **[Agent Client Prot
 
 ---
 
+## Web UI — 对标 Cursor 的 Agent 体验
+
+Next.js 15 Web UI 已全面升级，对标 Cursor 的 Agent 模式交互体验。开箱即用，现代、流畅、无障碍。
+
+### 三态 Agent 模式
+
+| 模式 | 颜色 | 行为 |
+|------|------|------|
+| **问答 (Ask)** | 🟢 翠绿 | 只读问答 — AI 回答但不修改文件 |
+| **代理 (Agent)** | 🔵 蓝色 | 自动执行 — AI 自主读、写、运行命令 |
+| **手动 (Manual)** | 🟠 琥珀 | 逐步确认 — 每次写入/执行需你审批 |
+
+通过胶囊选择器切换，或按 `Tab` 快速循环。
+
+### UI 亮点
+
+- **56px 输入框** — 自动伸缩 textarea，悬停渐变光效，模式感知配色
+- **增强消息气泡** — 渐变头像、时间戳、可折叠推理块、语法高亮代码块 + 复制按钮
+- **流式动画** — 打字机效果、三点跳动思考指示器、闪烁光标、实时进度跟踪
+- **Agent 活动面板** — 实时进度条、百分比显示、工具专属图标、执行耗时
+- **@提及系统** — 毛玻璃下拉菜单、文件类型图标、键盘导航（↑↓/Enter/Esc）、分类结果（文件/文件夹/符号/Git/操作）
+- **快捷键系统** — 30+ 快捷键分 5 类，按 `?` 打开帮助面板
+- **新用户引导** — 首次访问 5 步交互教程，localStorage 记忆，随时跳过
+- **性能优化** — 虚拟滚动、懒加载组件、防抖节流、骨架屏加载
+- **无障碍** — 跳转导航链接、模态框焦点捕获、`prefers-reduced-motion` 支持、高对比度、字体调节
+- **国际化** — 完整的中/英/日三语翻译系统，运行时切换
+
+### 前端技术栈
+
+| 技术 | 角色 |
+|------|------|
+| Next.js 15 + React 19 | SSR 框架 |
+| TypeScript | 类型安全 |
+| Tailwind CSS 3.4 | 原子化样式 + 自定义 Design Tokens |
+| Zustand 5 | 轻量状态管理 |
+| Framer Motion | 动画库（打字机、交错、布局动画） |
+| @tanstack/react-virtual | 虚拟滚动处理大量消息 |
+
+### 常用快捷键速查
+
+| 快捷键 | 操作 |
+|--------|------|
+| `Ctrl+K` | 打开命令面板 |
+| `Ctrl+B` | 切换侧边栏 |
+| `Ctrl+Enter` | 发送消息 |
+| `Ctrl+J` | 打开 Agent 面板 |
+| `?` | 显示全部快捷键 |
+| `Tab` | 切换 Agent 模式 |
+| `Esc` | 停止生成 / 关闭面板 |
+
+---
+
 ## 快速开始
 
 ### 环境要求
@@ -620,7 +672,20 @@ likecodex/
 │       ├── hooks/               # 钩子系统
 │       ├── lsp/                 # LSP 语言服务客户端
 │       └── static/              # 静态文件（Web UI lite 版）
-├── web/                         # Next.js 15 三栏 UI
+├── web/                         # Next.js 15 Web UI（对标 Cursor 的 Agent 体验）
+│   └── src/
+│       ├── components/
+│       │   ├── ui/              # Button, Input, Card, Badge, MotionDiv, MotionButton
+│       │   ├── InputArea/       # 56px 输入框、ModeCapsule、ModelSelector
+│       │   ├── MessageElements/ # 消息气泡、代码块、打字指示器
+│       │   ├── Streaming/       # 流式响应、Agent活动面板、进度指示器
+│       │   ├── Mention/         # 增强 @提及选择器
+│       │   ├── Shortcuts/       # 快捷键帮助面板
+│       │   ├── Onboarding/      # 欢迎引导 + 交互教程
+│       │   ├── Performance/     # VirtualList、LazyComponent、骨架屏
+│       │   └── Accessibility/   # SkipLinks、无障碍设置、AriaLiveRegion
+│       ├── hooks/               # useGlobalShortcuts, useI18n, useAccessibility
+│       └── lib/                 # animations, breakpoints, i18n, utils
 ├── docs/                        # 英文文档（架构、API、事件、规范）
 ├── doc/                         # 中文设计文档（6 篇）
 ├── docker/                      # Docker 镜像构建文件（sandbox + server）

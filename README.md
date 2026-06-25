@@ -493,6 +493,58 @@ LikeCodex exposes an **[Agent Client Protocol (ACP) v1](docs/ACP.md)** endpoint 
 
 ---
 
+## Web UI — Cursor-Inspired Agent Experience
+
+The Next.js 15 Web UI has been comprehensively upgraded to match Cursor's Agent-mode interaction patterns. It ships a modern, animated, and accessible experience out of the box.
+
+### Three Agent Modes
+
+| Mode | Color | Behavior |
+|------|-------|----------|
+| **Ask** | 🟢 Emerald | Read-only Q&A — AI answers without modifying files |
+| **Agent** | 🔵 Blue | Auto-execute — AI reads, writes, and runs commands autonomously |
+| **Manual** | 🟠 Amber | Step-by-step — every write/execute requires your confirmation |
+
+Switch modes via the capsule selector or press `Tab` to cycle.
+
+### UI Highlights
+
+- **56px input area** with auto-resize textarea, gradient glow on hover, and mode-aware color theming
+- **Enhanced message bubbles** with gradient avatars, timestamps, collapsible reasoning blocks, and syntax-highlighted code blocks with copy buttons
+- **Streaming animations** — typewriter effect, three-dot thinking indicator, blinking cursor, and real-time progress tracking
+- **Agent Activity panel** — live progress bar, percentage display, tool-specific icons, and execution timing
+- **@Mention system** — glass-morphism dropdown with file type icons, keyboard navigation (↑↓/Enter/Esc), and categorized results (Files/Folders/Symbols/Git/Actions)
+- **Keyboard shortcuts** — 30+ shortcuts cataloged across 5 categories; press `?` to open the help panel
+- **New user onboarding** — 5-step interactive tour on first visit, localStorage persistence, skip anytime
+- **Performance** — virtual scrolling for chat messages, lazy component loading, debounce/throttle hooks, skeleton loading states
+- **Accessibility** — skip navigation links, focus trap in modals, `prefers-reduced-motion` support, high-contrast mode, adjustable font size
+- **i18n** — full English/Chinese/Japanese translation system with runtime language switching
+
+### Frontend Tech Stack
+
+| Technology | Role |
+|------------|------|
+| Next.js 15 + React 19 | SSR framework |
+| TypeScript | Type safety |
+| Tailwind CSS 3.4 | Utility-first styling with custom design tokens |
+| Zustand 5 | Lightweight state management |
+| Framer Motion | Animation library (typewriter, stagger, layout) |
+| @tanstack/react-virtual | Virtual scrolling for large message lists |
+
+### Quick Keyboard Reference
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+K` | Open command palette |
+| `Ctrl+B` | Toggle sidebar |
+| `Ctrl+Enter` | Send message |
+| `Ctrl+J` | Open Agent panel |
+| `?` | Show all shortcuts |
+| `Tab` | Cycle agent mode |
+| `Esc` | Stop generation / close panel |
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -620,7 +672,20 @@ likecodex/
 │       ├── hooks/               # Hook system
 │       ├── lsp/                 # LSP language server client
 │       └── static/              # Static files (lite Web UI)
-├── web/                         # Next.js 15 three-column UI
+├── web/                         # Next.js 15 Web UI (Cursor-inspired Agent experience)
+│   └── src/
+│       ├── components/
+│       │   ├── ui/              # Button, Input, Card, Badge, MotionDiv, MotionButton
+│       │   ├── InputArea/       # 56px input, ModeCapsule, ModelSelector
+│       │   ├── MessageElements/ # MessageBubble, CodeBlock, TypingIndicator
+│       │   ├── Streaming/       # StreamingResponse, AgentActivity, ProgressIndicator
+│       │   ├── Mention/         # Enhanced @mention picker
+│       │   ├── Shortcuts/       # Keyboard shortcut help panel
+│       │   ├── Onboarding/      # WelcomeModal + interactive tour
+│       │   ├── Performance/     # VirtualList, LazyComponent, Skeleton
+│       │   └── Accessibility/   # SkipLinks, A11ySettings, AriaLiveRegion
+│       ├── hooks/               # useGlobalShortcuts, useI18n, useAccessibility
+│       └── lib/                 # animations, breakpoints, i18n, utils
 ├── docs/                        # English documentation (architecture, API, events)
 ├── doc/                         # Chinese design documents (6 articles)
 ├── docker/                      # Docker image build files (sandbox + server)
