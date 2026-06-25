@@ -10,7 +10,7 @@ const nextConfig = {
       },
       {
         source: '/api/:path*',
-        destination: 'http://127.0.0.1:8080/:path*',
+        destination: 'http://127.0.0.1:9090/:path*',
       },
       // Workspace API goes directly to Python engine
       {
