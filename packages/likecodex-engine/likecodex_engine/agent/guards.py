@@ -53,25 +53,24 @@ class LoopGuard:
         )
 
     def is_error_result(self, result: str) -> bool:
-        try:
-            data = json.loads(result)
-        except json.JSONDecodeError:
-            return "error" in result.lower()
-        if isinstance(data, dict):
-            if data.get("error"):
-                return True
-            if data.get("exit_code") not in (None, 0) and "stdout" in data:
-                return False
-        return False
+        return self.error_from_result(result) is not None
 
     def extract_error(self, result: str) -> str:
+        err = self.error_from_result(result)
+        return err if err is not None else result[:500]
+
+    def error_from_result(self, result: str) -> str | None:
+        """Parse result once and return error message or None."""
         try:
             data = json.loads(result)
-            if isinstance(data, dict) and data.get("error"):
-                return str(data["error"])
         except json.JSONDecodeError:
-            pass
-        return result[:500]
+            return "error" if "error" in result.lower() else None
+        if isinstance(data, dict):
+            if data.get("error"):
+                return str(data["error"])
+            if data.get("exit_code") not in (None, 0) and "stdout" in data:
+                return None
+        return None
 
 
 @dataclass
@@ -163,18 +162,12 @@ def classify_turn_outcome(
             error_msg=err,
             blocked=True,
         )
-    if guard.is_error_result(result):
-        return ToolTurnOutcome(
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            output=result,
-            error_msg=guard.extract_error(result),
-        )
+    error_msg = guard.error_from_result(result) or ""
     return ToolTurnOutcome(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
         output=result,
-        error_msg="",
+        error_msg=error_msg,
     )
 
 
