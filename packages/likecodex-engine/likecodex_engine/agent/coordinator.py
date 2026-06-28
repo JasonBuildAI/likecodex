@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from likecodex_engine.agent.subagent_registry import subagent_tool_registry
 from likecodex_engine.context.manager import ContextManager
 from likecodex_engine.llm.base import LLMProvider, LLMResponse
+from likecodex_engine.tools.cache import READ_TOOLS
 from likecodex_engine.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
@@ -45,28 +46,13 @@ def should_plan(prompt: str, auto_plan: bool = True) -> bool:
     return not (text.endswith("?") and len(text) < 80 and "file" not in text.lower() and "code" not in text.lower())
 
 
+# Extra read-only tools the planner needs beyond cache.READ_TOOLS.
+_PLANNER_EXTRA_TOOLS = frozenset({"code_index", "history", "todo_write", "complete_step"})
+
+
 def build_planner_readonly_tool_names(all_tools: list[str]) -> list[str]:
     """Tools available to the planner for read-only research."""
-    readonly = {
-        "read_file",
-        "list_dir",
-        "ls",
-        "glob",
-        "grep_files",
-        "find_symbol",
-        "index_search",
-        "codegraph_search",
-        "codegraph_symbols",
-        "code_index",
-        "lsp_definition",
-        "lsp_references",
-        "lsp_hover",
-        "lsp_diagnostics",
-        "web_fetch",
-        "history",
-        "todo_write",
-        "complete_step",
-    }
+    readonly = READ_TOOLS | _PLANNER_EXTRA_TOOLS
     return sorted(
         n
         for n in all_tools
