@@ -1503,18 +1503,16 @@ def _get_git_service(working_dir: str):
 
 async def ide_git_status(request: web.Request) -> web.Response:
     """Get git status for the workspace."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
+    _, wd = _cfg_wd(request)
+    service = _get_git_service(wd)
     result = await service.get_status()
     return web.json_response(result)
 
 
 async def ide_git_diff(request: web.Request) -> web.Response:
     """Get diff for a specific file."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
+    _, wd = _cfg_wd(request)
+    service = _get_git_service(wd)
     data = await request.json()
     result = await service.get_diff(
         path=data.get("path", ""),
@@ -1525,40 +1523,32 @@ async def ide_git_diff(request: web.Request) -> web.Response:
 
 async def ide_git_stage(request: web.Request) -> web.Response:
     """Stage a file."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
+    _, wd = _cfg_wd(request)
     data = await request.json()
-    result = await service.stage_file(data.get("path", ""))
+    result = await _get_git_service(wd).stage_file(data.get("path", ""))
     return web.json_response(result)
 
 
 async def ide_git_unstage(request: web.Request) -> web.Response:
     """Unstage a file."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
+    _, wd = _cfg_wd(request)
     data = await request.json()
-    result = await service.unstage_file(data.get("path", ""))
+    result = await _get_git_service(wd).unstage_file(data.get("path", ""))
     return web.json_response(result)
 
 
 async def ide_git_stage_all(request: web.Request) -> web.Response:
     """Stage all changes."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
-    result = await service.stage_all()
+    _, wd = _cfg_wd(request)
+    result = await _get_git_service(wd).stage_all()
     return web.json_response(result)
 
 
 async def ide_git_commit(request: web.Request) -> web.Response:
     """Commit staged changes."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
+    _, wd = _cfg_wd(request)
     data = await request.json()
-    result = await service.commit(
+    result = await _get_git_service(wd).commit(
         message=data.get("message", ""),
         author=data.get("author", ""),
         email=data.get("email", ""),
@@ -1568,61 +1558,49 @@ async def ide_git_commit(request: web.Request) -> web.Response:
 
 async def ide_git_log(request: web.Request) -> web.Response:
     """Get commit log."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
+    _, wd = _cfg_wd(request)
     count = int(request.query.get("count", "50"))
-    result = await service.get_log(count=count)
+    result = await _get_git_service(wd).get_log(count=count)
     return web.json_response(result)
 
 
 async def ide_git_branches(request: web.Request) -> web.Response:
     """Get all branches."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
-    result = await service.get_branches()
+    _, wd = _cfg_wd(request)
+    result = await _get_git_service(wd).get_branches()
     return web.json_response(result)
 
 
 async def ide_git_checkout(request: web.Request) -> web.Response:
     """Checkout a branch."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
+    _, wd = _cfg_wd(request)
     data = await request.json()
-    result = await service.checkout_branch(data.get("name", ""))
+    result = await _get_git_service(wd).checkout_branch(data.get("name", ""))
     return web.json_response(result)
 
 
 async def ide_git_create_branch(request: web.Request) -> web.Response:
     """Create a new branch."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
+    _, wd = _cfg_wd(request)
     data = await request.json()
-    result = await service.create_branch(data.get("name", ""))
+    result = await _get_git_service(wd).create_branch(data.get("name", ""))
     return web.json_response(result)
 
 
 async def ide_git_discard(request: web.Request) -> web.Response:
     """Discard changes to a file."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
+    _, wd = _cfg_wd(request)
     data = await request.json()
-    result = await service.discard_changes(data.get("path", ""))
+    result = await _get_git_service(wd).discard_changes(data.get("path", ""))
     return web.json_response(result)
 
 
 async def ide_git_search(request: web.Request) -> web.Response:
     """Search file contents."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    service = _get_git_service(working_dir)
+    _, wd = _cfg_wd(request)
     query = request.query.get("q", "")
     file_pattern = request.query.get("pattern", "")
-    result = await service.search_files(query=query, file_pattern=file_pattern)
+    result = await _get_git_service(wd).search_files(query=query, file_pattern=file_pattern)
     return web.json_response(result)
 
 
