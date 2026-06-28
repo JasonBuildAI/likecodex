@@ -347,41 +347,25 @@ class AgentLoop:
                 prompt_tokens = getattr(self.context, "last_prompt_tokens", 0)
                 compactor = self.context.compactor
 
-                # Tier 3: Force compact (highest priority)
+                async def _emit_compaction(trigger: str, force: bool = False) -> None:
+                    yield self._emit(LLMResponse(
+                        content=json.dumps({"trigger": trigger, "prompt_tokens": prompt_tokens}),
+                        model="system",
+                        event_type="compaction_started",
+                    ))
+                    info = await self.context.compact_async(force=force)
+                    yield self._emit(LLMResponse(
+                        content=json.dumps(info),
+                        model="system",
+                        event_type="compaction_done",
+                    ))
+
                 if hasattr(self.context, "compact_async") and compactor.should_force_compact(prompt_tokens):
-                    yield self._emit(
-                        LLMResponse(
-                            content=json.dumps({"trigger": "force", "prompt_tokens": prompt_tokens}),
-                            model="system",
-                            event_type="compaction_started",
-                        )
-                    )
-                    info = await self.context.compact_async(force=True)
-                    yield self._emit(
-                        LLMResponse(
-                            content=json.dumps(info),
-                            model="system",
-                            event_type="compaction_done",
-                        )
-                    )
-                # Tier 2: Normal compact
+                    async for evt in _emit_compaction("force", force=True):
+                        yield evt
                 elif hasattr(self.context, "compact_async") and compactor.should_compact(prompt_tokens):
-                    yield self._emit(
-                        LLMResponse(
-                            content=json.dumps({"trigger": "auto", "prompt_tokens": prompt_tokens}),
-                            model="system",
-                            event_type="compaction_started",
-                        )
-                    )
-                    info = await self.context.compact_async()
-                    yield self._emit(
-                        LLMResponse(
-                            content=json.dumps(info),
-                            model="system",
-                            event_type="compaction_done",
-                        )
-                    )
-                # Tier 1: Soft compact notice (one-time)
+                    async for evt in _emit_compaction("auto"):
+                        yield evt
                 elif hasattr(self.context, "_soft_notice_emitted") and compactor.should_soft_compact(prompt_tokens):
                     if not self.context._soft_notice_emitted:
                         self.context._soft_notice_emitted = True
@@ -389,13 +373,7 @@ class AgentLoop:
                             f"[soft-compact] Context usage at {prompt_tokens:,} tokens. "
                             f"Consider wrapping up or the system will auto-compact soon."
                         )
-                        yield self._emit(
-                            LLMResponse(
-                                content=notice,
-                                model="system",
-                                event_type="notice",
-                            )
-                        )
+                        yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
 
             raw_tool_calls: str | None = None
             tool_call_payload: list[dict[str, Any]] | None = None
