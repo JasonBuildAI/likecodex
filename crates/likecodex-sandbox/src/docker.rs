@@ -170,7 +170,7 @@ impl DockerExecutor {
             Ok(Ok(status)) => (status.code(), false),
             Ok(Err(e)) => return Err(anyhow::anyhow!("docker run failed: {e}")),
             Err(_) => {
-                let _ = child.start_kill();
+                let _ = child.kill().await;
                 (None, true)
             }
         };
