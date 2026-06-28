@@ -171,6 +171,16 @@ impl Conn {
                 }
             }
         }
+
+        // Clean up pending requests on disconnect
+        {
+            let mut pending = Self::lock_mutex(&self.pending);
+            let count = pending.len();
+            pending.clear();
+            if count > 0 {
+                debug!("ACP discarded {count} pending request(s) on disconnect");
+            }
+        }
     }
 
     /// Dispatch a single JSON-RPC message.
