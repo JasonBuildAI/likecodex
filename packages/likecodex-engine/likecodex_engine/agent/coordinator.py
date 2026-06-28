@@ -164,9 +164,9 @@ class Coordinator:
             return lambda prompt: False
         elif self.auto_plan == "on":
             return lambda prompt: should_plan(prompt, auto_plan=True)
-        elif self.auto_plan == \"classifier\" and self.auto_plan_classifier:
+        elif self.auto_plan == "classifier" and self.auto_plan_classifier:
             # FIXME: should_plan is sync but LLM classifier requires async.
-            # For now fall back to heuristic classifier.
+            # For now fall back to heuristic classifier instead of always True.
             return lambda prompt: should_plan(prompt, auto_plan=True)
         else:
             return lambda prompt: should_plan(prompt, auto_plan=True)
