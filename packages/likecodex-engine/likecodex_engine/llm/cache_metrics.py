@@ -23,11 +23,15 @@ class CacheMetrics:
         self.cache_reset_count = 0
         self.recent_hit_rates.clear()
 
+    @staticmethod
+    def _usage_int(usage: dict[str, int], key: str) -> int:
+        return int(usage.get(key, 0))
+
     def record(self, usage: dict[str, int] | None) -> None:
         if not usage:
             return
-        hit = int(usage.get("prompt_cache_hit_tokens", 0))
-        miss = int(usage.get("prompt_cache_miss_tokens", 0))
+        hit = self._usage_int(usage, "prompt_cache_hit_tokens")
+        miss = self._usage_int(usage, "prompt_cache_miss_tokens")
         self.total_hit_tokens += hit
         self.total_miss_tokens += miss
         self.request_count += 1
