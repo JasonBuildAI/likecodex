@@ -46,6 +46,31 @@ class GoalState:
             f"{strategy_note}"
         )
 
+    def _handle_complete(self) -> str | None:
+        self.clear()
+        return None
+
+    def _handle_blocked(self) -> str | None:
+        self.blocked_count += 1
+        if self.blocked_count >= 3:
+            self.clear()
+            return None
+        return f"[goal:continue] Previous step blocked ({self.blocked_count}/3). Try another approach."
+
+    def _handle_continue(self) -> str | None:
+        self.blocked_count = 0
+        self.continuation_count += 1
+        if self.continuation_count >= self.max_continuations:
+            self.clear()
+            return None
+        return f"[goal:continue] Continue working toward: {self.objective}"
+
+    _ACTION_HANDLERS = {
+        "complete": _handle_complete,
+        "blocked": _handle_blocked,
+        "continue": _handle_continue,
+    }
+
     def parse_response(self, text: str) -> str | None:
         """Return follow-up user message if host should continue."""
         if not self.active:
@@ -53,21 +78,5 @@ class GoalState:
         m = GOAL_MARKER.search(text)
         if not m:
             return None
-        action = m.group(1).lower()
-        if action == "complete":
-            self.clear()
-            return None
-        if action == "blocked":
-            self.blocked_count += 1
-            if self.blocked_count >= 3:
-                self.clear()
-                return None
-            return f"[goal:continue] Previous step blocked ({self.blocked_count}/3). Try another approach."
-        if action == "continue":
-            self.blocked_count = 0
-            self.continuation_count += 1
-            if self.continuation_count >= self.max_continuations:
-                self.clear()
-                return None
-            return f"[goal:continue] Continue working toward: {self.objective}"
-        return None
+        handler = self._ACTION_HANDLERS.get(m.group(1).lower())
+        return handler(self) if handler else None
