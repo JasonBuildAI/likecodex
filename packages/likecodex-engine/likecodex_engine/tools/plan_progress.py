@@ -65,12 +65,10 @@ class PlanProgressTools:
 
     def _verify_command(self, command: str) -> bool:
         cmd = command.strip()
-        for ran in self._commands_in_session():
-            if ran == cmd:
-                return True
-            if ran.startswith(cmd) or cmd.startswith(ran):
-                return True
-        return False
+        return any(
+            ran == cmd or ran.startswith(cmd) or cmd.startswith(ran)
+            for ran in self._commands_in_session()
+        )
 
     async def complete_step(
         self,
