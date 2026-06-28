@@ -75,16 +75,10 @@ class OpenAIProvider(LLMProvider):
 
         resp = await complete_with_reconnect(lambda: self.client.chat.completions.create(**params))
         choice = resp.choices[0]
-        tool_calls = []
-        if choice.message.tool_calls:
-            for tc in choice.message.tool_calls:
-                tool_calls.append(
-                    ToolCall(
-                        id=tc.id,
-                        name=tc.function.name,
-                        arguments=json.loads(tc.function.arguments),
-                    )
-                )
+        tool_calls = [
+            ToolCall(id=tc.id, name=tc.function.name, arguments=json.loads(tc.function.arguments))
+            for tc in (choice.message.tool_calls or [])
+        ]
         usage = self._parse_usage(resp.usage)
         if choice.finish_reason:
             usage = {**usage, "finish_reason": choice.finish_reason}
