@@ -77,9 +77,9 @@ class AgentMemoryTools:
 
     async def memory_search(self, query: str, limit: int = 10) -> str:
         q = query.lower()
-        hits = []
-        for path in sorted(self.memory_dir.glob("*.md")):
-            text = path.read_text(encoding="utf-8", errors="replace")
-            if q in text.lower() or q in path.stem.lower():
-                hits.append({"key": path.stem, "content": text[:500]})
+        hits = [
+            {"key": p.stem, "content": text[:500]}
+            for p in sorted(self.memory_dir.glob("*.md"))
+            if q in (text := p.read_text(encoding="utf-8", errors="replace")).lower() or q in p.stem.lower()
+        ]
         return json.dumps({"hits": hits[:limit]})
