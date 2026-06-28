@@ -131,6 +131,35 @@ async def stream_openai_chat(
         )
 
 
+async def _with_reconnect(
+    create_fn: Callable[[], Awaitable[T]],
+    *,
+    max_attempts: int = MAX_STREAM_RECONNECTS,
+) -> T:
+    """Generic reconnect wrapper: retry on connection resets."""
+    last_error: Exception | None = None
+    for attempt in range(max_attempts + 1):
+        try:
+            return await create_fn()
+        except StreamInterruptedError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            if attempt >= max_attempts or not is_conn_reset(exc):
+                raise
+            notify_provider_retry(
+                RetryInfo(
+                    attempt=attempt + 1,
+                    max_attempts=max_attempts,
+                    error=str(exc),
+                    reason="provider",
+                )
+            )
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("_with_reconnect exhausted without result")
+
+
 async def stream_openai_chat_with_reconnect(
     create_stream: Callable[[], Awaitable[Any]],
     *,
@@ -138,6 +167,7 @@ async def stream_openai_chat_with_reconnect(
     parse_usage: Callable[[Any], dict[str, int]] | None = None,
 ) -> AsyncIterator[LLMResponse]:
     """Replay the stream request when the connection drops before any output."""
+    # Note: streaming requires an inline reconnect loop (yield not allowed in _with_reconnect)
     last_error: Exception | None = None
     for attempt in range(MAX_STREAM_RECONNECTS + 1):
         try:
@@ -173,24 +203,4 @@ async def complete_with_reconnect(
     max_attempts: int = MAX_STREAM_RECONNECTS,
 ) -> T:
     """Replay a non-stream request when the connection drops before a response."""
-    last_error: Exception | None = None
-    for attempt in range(max_attempts + 1):
-        try:
-            return await create_completion()
-        except StreamInterruptedError:
-            raise
-        except Exception as exc:
-            last_error = exc
-            if attempt >= max_attempts or not is_conn_reset(exc):
-                raise
-            notify_provider_retry(
-                RetryInfo(
-                    attempt=attempt + 1,
-                    max_attempts=max_attempts,
-                    error=str(exc),
-                    reason="provider",
-                )
-            )
-    if last_error is not None:
-        raise last_error
-    raise RuntimeError("complete_with_reconnect exhausted without result")
+    return await _with_reconnect(create_completion, max_attempts=max_attempts)
