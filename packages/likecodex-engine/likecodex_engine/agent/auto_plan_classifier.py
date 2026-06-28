@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from likecodex_engine.llm.base import LLMProvider
 
+from likecodex_engine.llm.base import Message, Role
+
 CLASSIFIER_PROMPT = """You classify whether a coding-agent user request should first enter read-only planning mode.
 Return ONLY JSON: {"needs_plan":true|false,"reason":"short reason"}.
 Use true for multi-step implementation, refactors, migrations, unclear cross-file work, PRD/spec/issue work, or tasks needing investigation before edits.
@@ -31,8 +33,6 @@ class AutoPlanClassifier:
         Returns:
             Tuple of (needs_plan: bool, reason: str)
         """
-        from likecodex_engine.llm.base import Message, Role
-
         messages = [
             Message(role=Role.SYSTEM, content=CLASSIFIER_PROMPT),
             Message(
