@@ -45,8 +45,15 @@ async def run_hook(hook: HookDef, env: dict[str, str] | None = None) -> str:
         stderr=asyncio.subprocess.STDOUT,
         env={**os.environ, **(env or {})},
     )
-    stdout, _ = await proc.communicate()
-    return stdout.decode("utf-8", errors="replace").strip()
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        return stdout.decode("utf-8", errors="replace").strip()
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return f"[hook timeout] {hook.command}"
 
 
 async def fire_hooks(event: str, working_dir: str, payload: dict[str, str] | None = None) -> str:
