@@ -65,6 +65,10 @@ impl Conn {
         }
     }
 
+    fn lock_mutex<T>(lock: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+        lock.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Register a request handler for a method.
     pub fn handle(&self, method: impl Into<String>, handler: RequestHandler) {
         let mut handlers = self.request_handlers.lock().unwrap();
@@ -103,7 +107,7 @@ impl Conn {
 
         let (tx, rx) = oneshot::channel();
         {
-            let mut pending = self.pending.lock().unwrap();
+            let mut pending = Self::lock_mutex(&self.pending);
             pending.insert(id, tx);
         }
 
@@ -120,8 +124,11 @@ impl Conn {
 
     /// Write a JSON value to the output stream.
     fn write(&self, value: &serde_json::Value) {
-        let mut writer = self.writer.lock().unwrap();
-        let line = serde_json::to_string(value).unwrap_or_default();
+        let mut writer = Self::lock_mutex(&self.writer);
+        let line = serde_json::to_string(value).unwrap_or_else(|e| {
+            error!("JSON serialization error: {e}");
+            "{}".to_string()
+        });
         let _ = writeln!(writer, "{line}");
         let _ = writer.flush();
     }
@@ -184,7 +191,7 @@ impl Conn {
             // Request
             (Some(id), Some(method)) => {
                 let params = msg.get("params").cloned().unwrap_or(serde_json::Value::Null);
-                let handlers = self.request_handlers.lock().unwrap();
+                let handlers = Self::lock_mutex(&self.request_handlers);
                 if let Some(handler) = handlers.get(&method) {
                     match handler(params) {
                         Ok(result) => {
@@ -214,7 +221,7 @@ impl Conn {
             // Notification
             (None, Some(method)) => {
                 let params = msg.get("params").cloned().unwrap_or(serde_json::Value::Null);
-                let handlers = self.notification_handlers.lock().unwrap();
+                let handlers = Self::lock_mutex(&self.notification_handlers);
                 if let Some(handler) = handlers.get(&method) {
                     handler(params);
                 }
@@ -222,7 +229,7 @@ impl Conn {
             // Response
             (Some(id), None) => {
                 if let Some(id_num) = id.as_u64() {
-                    let mut pending = self.pending.lock().unwrap();
+                    let mut pending = Self::lock_mutex(&self.pending);
                     if let Some(tx) = pending.remove(&id_num) {
                         if let Some(error) = msg.get("error") {
                             let _ = tx.send(serde_json::json!({ "error": error }));
