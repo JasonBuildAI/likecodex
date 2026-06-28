@@ -46,6 +46,10 @@ class DeepSeekUsage:
     model: str = "deepseek-v4-flash"
 
     @property
+    def _is_pro(self) -> bool:
+        return "pro" in self.model.lower()
+
+    @property
     def cache_hit_rate(self) -> float:
         if self.prompt_tokens == 0:
             return 0.0
@@ -55,8 +59,7 @@ class DeepSeekUsage:
     @property
     def input_cost(self) -> float:
         """Calculate input cost accounting for cache hit discount."""
-        is_pro = "pro" in self.model.lower()
-        full_price = DS_PRO_INPUT if is_pro else DS_FLASH_INPUT
+        full_price = DS_PRO_INPUT if self._is_pro else DS_FLASH_INPUT
         # Cache-miss tokens pay full price
         miss_cost = self.cache_miss_tokens * full_price
         # Cache-hit tokens get ~90% discount
@@ -65,8 +68,7 @@ class DeepSeekUsage:
 
     @property
     def output_cost(self) -> float:
-        is_pro = "pro" in self.model.lower()
-        return self.completion_tokens * (DS_PRO_OUTPUT if is_pro else DS_FLASH_OUTPUT)
+        return self.completion_tokens * (DS_PRO_OUTPUT if self._is_pro else DS_FLASH_OUTPUT)
 
     @property
     def total_cost(self) -> float:
@@ -176,7 +178,6 @@ class DeepSeekProvider(LLMProvider):
             item: dict[str, Any] = {"role": m.role.value, "content": m.content}
             if m.tool_calls:
                 item["tool_calls"] = m.tool_calls
-                # Reasonix rule: round-trip reasoning_content only on tool-call turns
                 if m.reasoning_content:
                     item["reasoning_content"] = m.reasoning_content
             if m.tool_call_id:
