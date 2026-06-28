@@ -41,10 +41,7 @@ async def execute_tool_calls_parallel(
             break
 
     if len(tool_calls) <= 1:
-        results = []
-        for tc in tool_calls:
-            results.append(await run_one(tc))
-        return results
+        return [await run_one(tc) for tc in tool_calls]
 
     if all(is_read_only_tool(tc.name) for tc in tool_calls):
         return list(await asyncio.gather(*(run_one(tc) for tc in tool_calls)))
