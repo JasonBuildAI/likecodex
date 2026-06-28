@@ -1372,12 +1372,11 @@ async def ide_completion_accepted(request: web.Request) -> web.Response:
 async def ide_context_search(request: web.Request) -> web.Response:
     """Search for @ mention targets (files, symbols, special context)."""
     query = request.query.get("q", "")
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = Path(cfg.get("working_dir", "."))
+    _, wd = _cfg_wd(request)
 
     from likecodex_engine.context.mention_search import MentionSearchService
 
-    service = MentionSearchService(working_dir)
+    service = MentionSearchService(Path(wd))
     results = await service.search(query, limit=20)
 
     return web.json_response({"results": results})
@@ -1397,55 +1396,33 @@ def _get_lsp_manager(working_dir: str):
     return _lsp_manager
 
 
-async def ide_lsp_definition(request: web.Request) -> web.Response:
-    """Get definition location for a symbol."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
+async def _lsp_handler(request: web.Request, method: str) -> web.Response:
+    """Generic LSP handler for definition/references/hover."""
+    _, wd = _cfg_wd(request)
     data = await request.json()
     file_path = data.get("file_path", "")
-    line = data.get("line", 1)
     symbol = data.get("symbol", "")
-
     if not file_path or not symbol:
         return web.json_response({"error": "file_path and symbol are required"}, status=400)
-
-    manager = _get_lsp_manager(working_dir)
-    result = await manager.definition(file_path, line, symbol)
+    manager = _get_lsp_manager(wd)
+    func = getattr(manager, method)
+    result = await func(file_path, data.get("line", 1), symbol)
     return web.json_response(json.loads(result) if isinstance(result, str) else {"result": result})
+
+
+async def ide_lsp_definition(request: web.Request) -> web.Response:
+    """Get definition location for a symbol."""
+    return await _lsp_handler(request, "definition")
 
 
 async def ide_lsp_references(request: web.Request) -> web.Response:
     """Get references for a symbol."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    data = await request.json()
-    file_path = data.get("file_path", "")
-    line = data.get("line", 1)
-    symbol = data.get("symbol", "")
-
-    if not file_path or not symbol:
-        return web.json_response({"error": "file_path and symbol are required"}, status=400)
-
-    manager = _get_lsp_manager(working_dir)
-    result = await manager.references(file_path, line, symbol)
-    return web.json_response(json.loads(result) if isinstance(result, str) else {"result": result})
+    return await _lsp_handler(request, "references")
 
 
 async def ide_lsp_hover(request: web.Request) -> web.Response:
     """Get hover info for a symbol."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    data = await request.json()
-    file_path = data.get("file_path", "")
-    line = data.get("line", 1)
-    symbol = data.get("symbol", "")
-
-    if not file_path or not symbol:
-        return web.json_response({"error": "file_path and symbol are required"}, status=400)
-
-    manager = _get_lsp_manager(working_dir)
-    result = await manager.hover(file_path, line, symbol)
-    return web.json_response(json.loads(result) if isinstance(result, str) else {"result": result})
+    return await _lsp_handler(request, "hover")
 
 
 async def ide_lsp_diagnostics(request: web.Request) -> web.Response:
