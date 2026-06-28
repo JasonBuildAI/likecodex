@@ -276,14 +276,9 @@ class TestRunnerService:
 
         yield {"type": "done", "passed": passed, "failed": failed, "total": len(all_tests)}
 
-    async def _run_python_test(self, file_path: str, test_name: str) -> dict[str, Any]:
-        """Run a single Python test."""
+    async def _run_subprocess_test(self, cmd: list[str]) -> dict[str, Any]:
+        """Run a test command via subprocess and return the result."""
         try:
-            cmd = [
-                sys.executable, "-m", "pytest",
-                f"{file_path}::{test_name}",
-                "-v", "--no-header", "--tb=short", "-q",
-            ]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=self.working_dir,
@@ -291,75 +286,37 @@ class TestRunnerService:
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
-
             output = stdout.decode("utf-8", errors="replace")
             error = stderr.decode("utf-8", errors="replace")
 
             if proc.returncode == 0:
                 return {"status": "passed", "duration": 0, "output": output}
-            else:
-                return {
-                    "status": "failed",
-                    "duration": 0,
-                    "error": error or output,
-                    "stack": error,
-                }
+            return {
+                "status": "failed",
+                "duration": 0,
+                "error": error or output,
+                "stack": error,
+            }
         except Exception as exc:
             return {"status": "failed", "duration": 0, "error": str(exc)}
+
+    async def _run_python_test(self, file_path: str, test_name: str) -> dict[str, Any]:
+        """Run a single Python test."""
+        return await self._run_subprocess_test([
+            sys.executable, "-m", "pytest",
+            f"{file_path}::{test_name}",
+            "-v", "--no-header", "--tb=short", "-q",
+        ])
 
     async def _run_js_test(self, file_path: str, test_name: str) -> dict[str, Any]:
         """Run a single JS/TS test."""
-        try:
-            # Try vitest first, then jest
-            npx = "npx.cmd" if sys.platform == "win32" else "npx"
-
-            cmd = [npx, "vitest", "run", file_path, "-t", test_name, "--reporter=verbose"]
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=self.working_dir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-
-            output = stdout.decode("utf-8", errors="replace")
-            error = stderr.decode("utf-8", errors="replace")
-
-            if proc.returncode == 0:
-                return {"status": "passed", "duration": 0, "output": output}
-            else:
-                return {
-                    "status": "failed",
-                    "duration": 0,
-                    "error": error or output,
-                    "stack": error,
-                }
-        except Exception as exc:
-            return {"status": "failed", "duration": 0, "error": str(exc)}
+        npx = "npx.cmd" if sys.platform == "win32" else "npx"
+        return await self._run_subprocess_test([
+            npx, "vitest", "run", file_path, "-t", test_name, "--reporter=verbose",
+        ])
 
     async def _run_rust_test(self, file_path: str, test_name: str) -> dict[str, Any]:
         """Run a single Rust test."""
-        try:
-            cmd = ["cargo", "test", test_name, "--", "--exact", "--nocapture"]
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=self.working_dir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-
-            output = stdout.decode("utf-8", errors="replace")
-            error = stderr.decode("utf-8", errors="replace")
-
-            if proc.returncode == 0:
-                return {"status": "passed", "duration": 0, "output": output}
-            else:
-                return {
-                    "status": "failed",
-                    "duration": 0,
-                    "error": error or output,
-                    "stack": error,
-                }
-        except Exception as exc:
-            return {"status": "failed", "duration": 0, "error": str(exc)}
+        return await self._run_subprocess_test([
+            "cargo", "test", test_name, "--", "--exact", "--nocapture",
+        ])
