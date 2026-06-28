@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -34,6 +35,8 @@ from likecodex_engine.persistence.session import SessionEvent, SessionStore
 from likecodex_engine.server_turn import prepare_turn, run_manual_compact_responses
 from likecodex_engine.skills.loader import discover_skills, skills_prefix_block
 from likecodex_engine.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 # Web UI static files directory
 STATIC_DIR = Path(__file__).parent / "static"
