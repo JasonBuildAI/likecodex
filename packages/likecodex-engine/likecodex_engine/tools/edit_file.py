@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from difflib import unified_diff
 from pathlib import Path
 from typing import Any
@@ -203,8 +204,6 @@ class EditFileTools:
             return json.dumps({"error": str(exc)})
         if not target.exists():
             return json.dumps({"error": f"File not found: {path}"})
-
-        import re
 
         decoded = read_text_detect(target)
         before = decoded.text
