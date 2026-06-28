@@ -91,10 +91,10 @@ class EvidenceLedger:
 
     def has_successful_command_after(self, command: str, after_index: int) -> bool:
         command = command.strip()
-        for r in self._receipts[after_index + 1 :]:
-            if r.success and r.tool_name == "run_command" and command_matches(command, r.command):
-                return True
-        return False
+        return any(
+            r.success and r.tool_name == "run_command" and command_matches(command, r.command)
+            for r in self._receipts[after_index + 1 :]
+        )
 
     def latest_successful_writer_index(self) -> tuple[int, bool]:
         for idx in range(len(self._receipts) - 1, -1, -1):
@@ -107,12 +107,10 @@ class EvidenceLedger:
         step = step.strip().lower()
         if not step:
             return False
-        for r in self._receipts:
-            if not r.success or r.tool_name != "complete_step":
-                continue
-            if step in r.step.lower() or r.step.lower() in step:
-                return True
-        return False
+        return any(
+            r.success and r.tool_name == "complete_step" and (step in r.step.lower() or r.step.lower() in step)
+            for r in self._receipts
+        )
 
     def incomplete_todos(self) -> list[dict[str, Any]]:
         todos = self.latest_todos()
