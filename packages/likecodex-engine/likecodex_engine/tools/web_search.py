@@ -45,10 +45,11 @@ class WebSearchTools:
         data, err = await self._fetch_json(url, query=query)
         if err:
             return err
-        results = []
-        for item in (data.get("RelatedTopics") or [])[:max_results]:
-            if isinstance(item, dict) and "Text" in item:
-                results.append({"text": item["Text"], "url": item.get("FirstURL", "")})
+        results = [
+            {"text": item["Text"], "url": item.get("FirstURL", "")}
+            for item in (data.get("RelatedTopics") or [])[:max_results]
+            if isinstance(item, dict) and "Text" in item
+        ]
         return json.dumps({"engine": "duckduckgo", "query": query, "results": results})
 
     async def _tavily_search(self, query: str, max_results: int) -> str:
