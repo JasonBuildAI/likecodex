@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from likecodex_engine.tools.agent_memory import AgentMemoryTools
+from likecodex_engine.tools.ask import ask_tool_schema
 from likecodex_engine.tools.code_index import CodeIndexTools
 from likecodex_engine.tools.code_review import CodeReviewTools
 from likecodex_engine.tools.code_search import CodeSearchTools
@@ -168,8 +169,6 @@ class ToolRegistry:
             memory_op,
             read_only=True,
         )
-
-        from likecodex_engine.tools.ask import ask_tool_schema
 
         async def ask_stub(**kwargs: Any) -> str:
             return json.dumps({"error": "ask is handled by AgentLoop"})
