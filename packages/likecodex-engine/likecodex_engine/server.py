@@ -790,9 +790,14 @@ async def compact_context(request: web.Request) -> web.Response:
     if loop is None:
         return web.json_response({"error": "Session not found"}, status=404)
     # Trigger compaction via the agent's context manager
-    if hasattr(loop, "context") and hasattr(loop.context, "compact"):
-        loop.context.compact(trigger="manual", focus=focus)
-        return web.json_response({"ok": True, "session_id": session_id})
+    if hasattr(loop, "context") and hasattr(loop.context, "compact_async"):
+        result = await loop.context.compact_async(instructions=focus or "", force=True)
+        return web.json_response({
+            "ok": result.get("compacted", True),
+            "session_id": session_id,
+            "reason": result.get("reason"),
+            "message": result.get("message"),
+        })
     return web.json_response({"error": "Compaction not supported"}, status=400)
 
 
