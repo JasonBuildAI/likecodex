@@ -168,12 +168,15 @@ class GitService:
             pass
 
         # Get original content (from HEAD)
-        _, orig_content, _ = await self._run_git("show", f"HEAD:{path}") if not staged else (0, modified_content, "")
+        if not staged:
+            _, orig_content, _ = await self._run_git("show", f"HEAD:{path}")
+        else:
+            orig_content = ""
 
         return {
             "path": path,
             "diff": out,
-            "originalContent": orig_content if not staged else "",
+            "originalContent": orig_content,
             "modifiedContent": modified_content,
         }
 
