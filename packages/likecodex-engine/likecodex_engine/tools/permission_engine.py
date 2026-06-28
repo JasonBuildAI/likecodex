@@ -291,8 +291,9 @@ class PermissionEngine:
             self._session_grants[key].add("*")
 
         # Also propagate to the underlying evaluator's policy
-        self._evaluator.grant_session(tool_name, {extract_subject(tool_name, {}) or ""}, scope=scope)
-        logger.debug("Granted %s for %s (subject=%s)", scope, tool_name, subject)
+        grant_subject = subject or extract_subject(tool_name, arguments={}) or None
+        self._evaluator.grant_session(tool_name, grant_subject, scope=scope)
+        logger.debug("Granted %s for %s (subject=%s)", scope, tool_name, grant_subject)
 
     def revoke(self, tool_name: str, subject: str | None = None) -> None:
         """Revoke a previously granted session permission."""
