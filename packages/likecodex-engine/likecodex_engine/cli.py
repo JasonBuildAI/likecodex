@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import time
 import uuid
@@ -223,8 +224,6 @@ def _run_web(port: int) -> None:
 
 def _start_engine_in_background(port: int) -> None:
     """Start the Python engine as a subprocess."""
-    import subprocess
-
     engine_root = _find_engine_root()
     env = os.environ.copy()
     env.setdefault("LIKECODEX_ENGINE_PORT", str(port))
