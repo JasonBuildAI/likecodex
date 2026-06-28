@@ -162,14 +162,10 @@ class Coordinator:
         """Create should_plan function based on auto_plan config."""
         if self.auto_plan == "off":
             return lambda prompt: False
-        elif self.auto_plan == "on":
-            return lambda prompt: should_plan(prompt, auto_plan=True)
-        elif self.auto_plan == "classifier" and self.auto_plan_classifier:
-            # FIXME: should_plan is sync but LLM classifier requires async.
-            # For now fall back to heuristic classifier instead of always True.
-            return lambda prompt: should_plan(prompt, auto_plan=True)
-        else:
-            return lambda prompt: should_plan(prompt, auto_plan=True)
+        # "on", "classifier", or any other value: use heuristic planner
+        # FIXME: classifier mode should ideally call LLM async classifier,
+        # but should_plan is sync; fall back to heuristic for now.
+        return lambda prompt: should_plan(prompt, auto_plan=True)
 
     async def run(self, prompt: str) -> AsyncIterator[LLMResponse]:
         if not self.should_plan(prompt):
