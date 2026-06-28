@@ -69,6 +69,16 @@ def _make_sse_response() -> web.StreamResponse:
     )
 
 
+async def _sse_write(response: web.StreamResponse, data: str) -> None:
+    """Write a single SSE data event to the response."""
+    await response.write(f"data: {data}\n\n".encode())
+
+
+async def _sse_done(response: web.StreamResponse) -> None:
+    """Write the SSE [DONE] sentinel."""
+    await response.write(b"data: [DONE]\n\n")
+
+
 class _SSEKeepalive:
     """Context manager for SSE keepalive heartbeat."""
 
@@ -451,25 +461,25 @@ async def chat(request: web.Request) -> web.StreamResponse:
             if prepared.expanded.compact_trigger:
                 async for resp in _run_manual_compact(context, loop.llm, prepared.expanded.compact_focus):
                     payload = json.dumps(_serialize_response(resp))
-                    await response.write(f"data: {payload}\n\n".encode())
-                await response.write(b"data: [DONE]\n\n")
+                    await _sse_write(response, payload)
+                await _sse_done(response)
                 return response
 
             for resp in prepared.early_responses:
                 payload = json.dumps(_serialize_response(resp))
-                await response.write(f"data: {payload}\n\n".encode())
+                await _sse_write(response, payload)
 
             if prepared.expanded.direct_reply is not None:
-                await response.write(b"data: [DONE]\n\n")
+                await _sse_done(response)
                 return response
 
             async for resp in runner.run(prepared.prompt):
                 payload = json.dumps(_serialize_response(resp))
-                await response.write(f"data: {payload}\n\n".encode())
+                await _sse_write(response, payload)
             cache_stats = global_cache_metrics().to_dict()
             cache_event = json.dumps({"type": "cache_stats", "content": "", "cache": cache_stats})
-            await response.write(f"data: {cache_event}\n\n".encode())
-            await response.write(b"data: [DONE]\n\n")
+            await _sse_write(response, cache_event)
+            await _sse_done(response)
         except Exception:
             logger.warning("chat SSE stream failed", exc_info=True)
 
@@ -1450,12 +1460,12 @@ async def ide_composer_chat(request: web.Request) -> web.StreamResponse:
                 session_id=session_id,
             ):
                 payload = json.dumps(event)
-                await response.write(f"data: {payload}\n\n".encode())
+                await _sse_write(response, payload)
         except Exception as exc:
             error_event = json.dumps({"type": "error", "content": str(exc)})
-            await response.write(f"data: {error_event}\n\n".encode())
+            await _sse_write(response, error_event)
 
-    await response.write(b"data: [DONE]\n\n")
+    await _sse_done(response)
     return response
 
 
@@ -1624,12 +1634,12 @@ async def ide_terminal_stream(request: web.Request) -> web.StreamResponse:
     try:
         async for event in manager.execute_command_stream(session_id, command):
             payload = json.dumps(event)
-            await response.write(f"data: {payload}\n\n".encode())
+            await _sse_write(response, payload)
     except Exception as exc:
         error_event = json.dumps({"type": "error", "content": str(exc)})
-        await response.write(f"data: {error_event}\n\n".encode())
+        await _sse_write(response, error_event)
 
-    await response.write(b"data: [DONE]\n\n")
+    await _sse_done(response)
     return response
 
 
@@ -1702,12 +1712,12 @@ async def ide_tests_run(request: web.Request) -> web.StreamResponse:
     try:
         async for event in _get_test_runner(wd).run_tests(test_filter=test_filter):
             payload = json.dumps(event)
-            await response.write(f"data: {payload}\n\n".encode())
+            await _sse_write(response, payload)
     except Exception as exc:
         error_event = json.dumps({"type": "error", "content": str(exc)})
-        await response.write(f"data: {error_event}\n\n".encode())
+        await _sse_write(response, error_event)
 
-    await response.write(b"data: [DONE]\n\n")
+    await _sse_done(response)
     return response
 
 
