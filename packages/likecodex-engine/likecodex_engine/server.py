@@ -1953,8 +1953,7 @@ async def ide_extensions_list(request: web.Request) -> web.Response:
             if not manifest_file.exists():
                 continue
             try:
-                import json as _json
-                manifest = _json.loads(manifest_file.read_text(encoding="utf-8"))
+                manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
                 extensions.append({
                     "id": manifest.get("id", child.name),
                     "name": manifest.get("name", child.name),
@@ -1982,10 +1981,9 @@ async def ide_extensions_toggle(request: web.Request) -> web.Response:
     if not manifest_file.exists():
         return web.json_response({"error": "Extension not found"}, status=404)
     try:
-        import json as _json
-        manifest = _json.loads(manifest_file.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
         manifest["enabled"] = enabled
-        manifest_file.write_text(_json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+        manifest_file.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
         return web.json_response({"success": True, "id": ext_id, "enabled": enabled})
     except Exception as exc:
         return web.json_response({"error": str(exc)}, status=500)
