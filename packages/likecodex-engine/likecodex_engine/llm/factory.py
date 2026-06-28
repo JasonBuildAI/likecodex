@@ -32,3 +32,20 @@ def create_provider(
     if provider_norm == "mock":
         return MockProvider.for_hello_world()
     raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+def provider_from_config(
+    cfg: dict,
+    *,
+    model_key: str = "model",
+    thinking: bool | None = None,
+) -> LLMProvider:
+    """Create an LLM provider directly from a config dict."""
+    return create_provider(
+        cfg.get("provider", "deepseek"),
+        cfg.get(model_key, "deepseek-v4-flash"),
+        cfg.get("api_key"),
+        cfg.get("base_url"),
+        thinking=bool(cfg.get("thinking", False)) if thinking is None else thinking,
+        reasoning_effort=str(cfg.get("reasoning_effort", "")),
+    )
