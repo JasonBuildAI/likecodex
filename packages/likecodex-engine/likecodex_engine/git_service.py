@@ -159,9 +159,6 @@ class GitService:
 
         code, out, _ = await self._run_git(*args)
 
-        # Also get original and modified content for Monaco diff
-        orig_code, orig_out, _ = await self._run_git("show", f"HEAD:{path}") if staged else await self._run_git("diff", "--no-color", "--", path)
-
         # Read current file content
         full_path = Path(self.working_dir) / path
         modified_content = ""
