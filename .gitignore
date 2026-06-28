@@ -1,5 +1,6 @@
 # Rust
 target/
+target_check/
 Cargo.lock
 **/*.rs.bk
 
@@ -47,6 +48,18 @@ Thumbs.db
 .sessions/
 .plans/
 engine.err
+engine.log
 .trae/
 *.egg-info/
 /test_server.py
+
+# User data files
+*.xlsx
+*.csv
+*.pdf
+*.m
+/gen_excel.py
+/generate_excel.py
+/parse_liaoning_2025_final.py
+/hello.c
+/drawCircle.m
