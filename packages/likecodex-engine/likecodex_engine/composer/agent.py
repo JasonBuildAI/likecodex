@@ -202,15 +202,8 @@ Important: Make all file changes using write_file or edit_file tools. Do not use
         except (FileNotFoundError, OSError):
             original = ""
 
-        # For edit_file/multi_edit, the content is the result after editing
-        # For write_file, new_content is the full content
-        if tool_name == "write_file":
-            modified = new_content
-        elif tool_name == "edit_file":
-            # edit_file returns the patched content
-            modified = new_content if new_content else original
-        else:
-            modified = new_content
+        # For all tool types, new_content is the final content
+        modified = new_content
 
         if original == modified and original:
             return None
