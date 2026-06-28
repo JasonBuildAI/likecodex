@@ -23,11 +23,11 @@ class AskToolHandler:
         entry = self.pending.pop(request_id, None)
         if entry is None:
             return None
-        lines = []
-        for ans in answers:
-            idx = ans.get("questionIndex", ans.get("question_index", 0))
-            selected = ans.get("selected", ans.get("choices", []))
-            lines.append(f"Q{idx + 1}: {', '.join(selected)}")
+        lines = [
+            f"Q{ans.get('questionIndex', ans.get('question_index', 0)) + 1}: "
+            f"{', '.join(ans.get('selected', ans.get('choices', [])))}"
+            for ans in answers
+        ]
         return json.dumps(
             {
                 "answers": answers,
@@ -38,11 +38,11 @@ class AskToolHandler:
 
     def headless_fallback(self, questions: list[dict[str, Any]]) -> str:
         """When no interactive asker is available."""
-        assumed = []
-        for i, q in enumerate(questions):
-            opts = q.get("options") or []
-            label = opts[0].get("label", "default") if opts else "default"
-            assumed.append(f"Q{i + 1} ({q.get('header', 'choice')}): assumed {label!r} (no user present)")
+        assumed = [
+            f"Q{i + 1} ({q.get('header', 'choice')}): assumed "
+            f"{(q.get('options') or [{}])[0].get('label', 'default')!r} (no user present)"
+            for i, q in enumerate(questions)
+        ]
         return json.dumps(
             {
                 "answers": [],
