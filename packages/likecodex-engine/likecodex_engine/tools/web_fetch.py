@@ -93,13 +93,6 @@ class WebFetchTools:
                 ip = ipaddress.ip_address(ip_str)
             except ValueError:
                 continue
-            if (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_reserved
-                or ip.is_multicast
-                or ip.is_unspecified
-            ):
+            if not ip.is_global:
                 return f"blocked non-public address: {ip_str}"
         return None
