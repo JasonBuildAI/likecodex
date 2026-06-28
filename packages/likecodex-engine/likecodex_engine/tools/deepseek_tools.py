@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 from likecodex_engine.llm.cache_metrics import global_cache_metrics
+from likecodex_engine.llm.factory import create_provider
 
 # Tool registry for conditional registration
 TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {}
@@ -128,8 +129,6 @@ async def deepseek_reasoning(
     detail_level: str = "high",
 ) -> str:
     """Invoke DeepSeek V4 Pro with thinking mode for complex reasoning."""
-    from likecodex_engine.llm.factory import create_provider
-
     pro_llm = create_provider(
         provider="deepseek",
         model="deepseek-v4-pro",
@@ -204,8 +203,6 @@ async def deepseek_switch_model(
     # Attempt to find and update the current session's LLM provider
     session = _get_current_session()
     if session and hasattr(session, "llm"):
-        from likecodex_engine.llm.factory import create_provider
-
         old_model = getattr(session.llm, "model", "unknown")
         session.llm = create_provider(
             provider="deepseek",
@@ -347,8 +344,6 @@ async def deepseek_tune_prompt(
     pain_points: str,
 ) -> str:
     """Use Flash to analyze and suggest improvements for DeepSeek V4 prompts."""
-    from likecodex_engine.llm.factory import create_provider
-
     flash_llm = create_provider(
         provider="deepseek",
         model="deepseek-v4-flash",
