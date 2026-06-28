@@ -19,7 +19,7 @@ READONLY_COMMANDS: set[str] = {
     "echo", "printf",
     "date", "time", "uptime", "hostname", "uname", "whoami", "id",
     "env", "printenv", "pwd", "basename", "dirname", "realpath", "readlink",
-    "wc", "sort", "uniq", "cut", "tr", "awk", "sed -n", "head", "tail",
+    "wc", "sort", "uniq", "cut", "tr", "awk", "sed -n",
     "git log", "git status", "git diff", "git show", "git branch", "git tag",
     "git blame", "git stash list", "git remote", "git config",
     "docker ps", "docker images", "docker logs", "docker inspect",
