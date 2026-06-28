@@ -126,6 +126,13 @@ class ShellTools:
             },
         }
 
+    def _get_job_or_error(self, job_id: str | None) -> BackgroundJob | str:
+        """Look up a job by id; return the job or an error JSON string."""
+        job = self._jobs.get(job_id or "")
+        if not job:
+            return json.dumps({"error": f"job not found: {job_id}"})
+        return job
+
     async def bgjobs(
         self,
         action: str,
@@ -139,17 +146,17 @@ class ShellTools:
         if action == "list":
             return json.dumps({"jobs": [job.status() for job in self._jobs.values()]})
         if action in ("status", "output"):
-            job = self._jobs.get(job_id or "")
-            if not job:
-                return json.dumps({"error": f"job not found: {job_id}"})
-            return json.dumps(job.status())
+            result = self._get_job_or_error(job_id)
+            if isinstance(result, str):
+                return result
+            return json.dumps(result.status())
         if action == "kill":
-            job = self._jobs.get(job_id or "")
-            if not job:
-                return json.dumps({"error": f"job not found: {job_id}"})
-            if job.proc and not job.done:
-                job.proc.kill()
-            return json.dumps({"job_id": job.job_id, "killed": True})
+            result = self._get_job_or_error(job_id)
+            if isinstance(result, str):
+                return result
+            if result.proc and not result.done:
+                result.proc.kill()
+            return json.dumps({"job_id": result.job_id, "killed": True})
         return json.dumps({"error": f"unknown action: {action}"})
 
     async def _start_job(self, command: str) -> str:
@@ -192,10 +199,10 @@ class ShellTools:
         }
 
     async def bash_output(self, job_id: str) -> str:
-        job = self._jobs.get(job_id)
-        if not job:
-            return json.dumps({"error": f"job not found: {job_id}"})
-        return json.dumps(job.status())
+        result = self._get_job_or_error(job_id)
+        if isinstance(result, str):
+            return result
+        return json.dumps(result.status())
 
     def kill_shell_schema(self) -> dict[str, Any]:
         return {
@@ -224,9 +231,10 @@ class ShellTools:
         }
 
     async def wait_job(self, job_id: str, timeout: int = 120) -> str:
-        job = self._jobs.get(job_id)
-        if not job:
-            return json.dumps({"error": f"job not found: {job_id}"})
+        result = self._get_job_or_error(job_id)
+        if isinstance(result, str):
+            return result
+        job = result
         if job.done:
             return json.dumps(job.status())
         deadline = asyncio.get_running_loop().time() + float(timeout)
