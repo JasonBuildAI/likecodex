@@ -171,7 +171,12 @@ fn resolve_working_dir(requested: Option<String>) -> Result<PathBuf, (StatusCode
             "invalid working directory".to_string(),
         )
     })?;
-    let cwd_canonical = cwd.canonicalize().unwrap_or(cwd);
+    let cwd_canonical = cwd.canonicalize().map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to resolve server working directory".to_string(),
+        )
+    })?;
     if !canonical.starts_with(&cwd_canonical) {
         return Err((
             StatusCode::FORBIDDEN,

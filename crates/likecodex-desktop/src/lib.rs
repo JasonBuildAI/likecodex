@@ -6,7 +6,7 @@ use std::sync::Mutex;
 static SUPERVISOR: Mutex<Option<Child>> = Mutex::new(None);
 
 fn spawn_likecodex_stack() {
-    let mut guard = SUPERVISOR.lock().expect("supervisor lock");
+    let mut guard = SUPERVISOR.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_some() {
         return;
     }
@@ -48,5 +48,13 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("error while running LikeCodex desktop");
+        .unwrap_or_else(|e| {
+            // Cleanup child process before exiting
+            if let Ok(mut guard) = SUPERVISOR.lock() {
+                if let Some(mut child) = guard.take() {
+                    let _ = child.kill();
+                }
+            }
+            eprintln!("LikeCodex desktop error: {e}");
+        });
 }
