@@ -13,5 +13,5 @@ def stable_json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def stable_tool_calls_json(calls: list[dict[str, Any]]) -> str:
-    return stable_json_dumps(calls)
+# Semantic alias for call-site clarity.
+stable_tool_calls_json = stable_json_dumps
