@@ -128,6 +128,12 @@ def _resolve_config(app_config: dict) -> dict:
     }
 
 
+def _cfg_wd(request: web.Request) -> tuple[dict, str]:
+    """Return (resolved_config, working_dir) from a web request."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    return cfg, cfg.get("working_dir", ".")
+
+
 def _merge_request_config(cfg: dict, data: dict) -> dict:
     """Override config with api_key and model from request body (if present)."""
     merged = dict(cfg)
