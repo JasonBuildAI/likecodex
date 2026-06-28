@@ -230,6 +230,27 @@ class CacheFirstContext:
             # Sync compact triggered; async LLM compact done via compact_async
             self._compact_sync()
 
+    def _compact_core(
+        self,
+        foldable: list[Message],
+        pinned: list[Message],
+        summary: str,
+    ) -> dict[str, Any]:
+        """Shared post-summarize logic for compact_async and _compact_sync."""
+        new_log = [*pinned, Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
+        old_size = sum(len(m.content) for m in self._log)
+        new_size = sum(len(m.content) for m in new_log)
+
+        if new_size >= old_size * 0.95:
+            self.compactor._consecutive_noop_compacts += 1
+        else:
+            self.compactor._consecutive_noop_compacts = 0
+
+        self._log = new_log
+        self.cache_reset_count += 1
+        self.rewrite_version += 1
+        return {"old_size": old_size, "new_size": new_size}
+
     async def compact_async(
         self,
         *,
@@ -283,28 +304,11 @@ class CacheFirstContext:
                     instructions=instructions,
                 )
             except Exception:
-                # LLM summary failed, fall back to mechanical summary (Reasonix behavior)
                 summary = self.compactor.summarize_log(foldable)
         else:
             summary = self.compactor.summarize_log(foldable)
 
-        # Rebuild log with pinned + summary
-        new_log = [*pinned, Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
-
-        # Check if compaction actually reduced size
-        old_size = sum(len(m.content) for m in self._log)
-        new_size = sum(len(m.content) for m in new_log)
-
-        if new_size >= old_size * 0.95:
-            # Compaction produced minimal reduction (<5% savings)
-            self.compactor._consecutive_noop_compacts += 1
-        else:
-            # Successful compaction, reset counter
-            self.compactor._consecutive_noop_compacts = 0
-
-        self._log = new_log
-        self.cache_reset_count += 1
-        self.rewrite_version += 1
+        result = self._compact_core(foldable, pinned, summary)
         self._log_version += 1
 
         return {
@@ -318,7 +322,6 @@ class CacheFirstContext:
 
     def _compact_sync(self) -> None:
         """Synchronous compaction triggered by should_compact threshold."""
-        # Check if compactor is stuck
         if self.compactor.compact_stuck():
             return
 
@@ -327,33 +330,15 @@ class CacheFirstContext:
         if not foldable:
             return
 
-        # Apply fold economics for sync compaction
         if not self.compactor.fold_economics(foldable):
             return
 
-        # Track log size
         total_foldable_chars = sum(len(m.content) for m in foldable)
         self.compactor._last_log_size = total_foldable_chars
 
-        # Archive and summarize
         self.compactor.archive_messages(foldable)
         summary = self.compactor.summarize_log(foldable)
-
-        # Rebuild log
-        new_log = [*pinned, Message(role=Role.USER, content=f"{CONTEXT_PREFIX}{summary}")]
-
-        # Check reduction
-        old_size = sum(len(m.content) for m in self._log)
-        new_size = sum(len(m.content) for m in new_log)
-
-        if new_size >= old_size * 0.95:
-            self.compactor._consecutive_noop_compacts += 1
-        else:
-            self.compactor._consecutive_noop_compacts = 0
-
-        self._log = new_log
-        self.cache_reset_count += 1
-        self.rewrite_version += 1
+        self._compact_core(foldable, pinned, summary)
 
     def build_for_llm(self) -> list[Message]:
         """Cached build: reuses previous result when nothing changed."""
