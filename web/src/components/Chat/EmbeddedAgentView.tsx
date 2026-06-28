@@ -67,7 +67,8 @@ export const EmbeddedAgentView = memo(function EmbeddedAgentView() {
         controller.signal,
         agentMode,
       );
-    } catch {
+    } catch (err) {
+      console.warn('[EmbeddedAgentView] streamChat failed:', err);
       setIsStreaming(false);
     }
   }, [input, isStreaming, currentSessionId, agentMode, addMessage, appendToLastMessage, upsertToolDispatch, setIsStreaming]);

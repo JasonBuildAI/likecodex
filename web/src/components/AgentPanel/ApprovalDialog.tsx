@@ -138,8 +138,9 @@ export const ApprovalDialog = memo(function ApprovalDialog({
       try {
         await respondPermission(requestId, approved, 'once');
         onResponded(requestId, approved);
-      } catch {
-        // Silently ignore; the item is still marked in UI
+      } catch (err) {
+        console.warn('[ApprovalDialog] respondPermission failed:', err);
+        // Item is already marked in UI, so user can retry
       }
     },
     [onResponded]
