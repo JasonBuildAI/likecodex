@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import uuid
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -65,8 +66,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _check_engine_running(port: int) -> bool:
     """Quick check if the engine is already running."""
-    import urllib.request
-
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1):
             return True
