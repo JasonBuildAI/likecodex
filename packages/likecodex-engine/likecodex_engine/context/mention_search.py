@@ -7,6 +7,63 @@ from pathlib import Path
 from typing import Any
 
 
+# Static mention items reused across searches.
+_STATIC_MENTIONS: list[dict[str, Any]] = [
+    {
+        "keywords": ["git", "diff", "change"],
+        "item": {
+            "id": "context:git-diff",
+            "type": "git-diff",
+            "label": "Git Changes",
+            "description": "Unstaged and uncommitted changes",
+            "icon": "git",
+            "content": "[git diff]",
+            "token_estimate": 2000,
+            "relevance_score": 0.9,
+        },
+    },
+    {
+        "keywords": ["problem", "error", "diagnostic"],
+        "item": {
+            "id": "context:problems",
+            "type": "problems",
+            "label": "Problems",
+            "description": "All errors and warnings in the project",
+            "icon": "warning",
+            "content": "[problems]",
+            "token_estimate": 1500,
+            "relevance_score": 0.7,
+        },
+    },
+    {
+        "keywords": ["tab", "open", "editor"],
+        "item": {
+            "id": "context:open-tabs",
+            "type": "editor-tabs",
+            "label": "Open Tabs",
+            "description": "All files currently open in the editor",
+            "icon": "tabs",
+            "content": "[open tabs]",
+            "token_estimate": 3000,
+            "relevance_score": 0.8,
+        },
+    },
+    {
+        "keywords": ["web", "net", "search"],
+        "item": {
+            "id": "context:web",
+            "type": "web",
+            "label": "Web Search",
+            "description": "Search the internet for latest information",
+            "icon": "web",
+            "content": "[web search]",
+            "token_estimate": 100,
+            "relevance_score": 0.5,
+        },
+    },
+]
+
+
 class MentionSearchService:
     """Search for files, symbols, and special context items for @ mentions."""
 
@@ -25,14 +82,9 @@ class MentionSearchService:
             results.extend(file_results)
 
         # 2. Special keywords (always show when no query or matching keywords)
-        if not query_lower or self._matches(query_lower, ["git", "diff", "change"]):
-            results.append(self._git_diff_mention())
-        if not query_lower or self._matches(query_lower, ["problem", "error", "diagnostic"]):
-            results.append(self._problems_mention())
-        if not query_lower or self._matches(query_lower, ["tab", "open", "editor"]):
-            results.append(self._open_tabs_mention())
-        if not query_lower or self._matches(query_lower, ["web", "net", "search"]):
-            results.append(self._web_search_mention())
+        for entry in _STATIC_MENTIONS:
+            if not query_lower or self._matches(query_lower, entry["keywords"]):
+                results.append(entry["item"])
 
         # 3. Sort by relevance
         results.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
@@ -84,54 +136,6 @@ class MentionSearchService:
                         continue
 
         return results
-
-    def _git_diff_mention(self) -> dict[str, Any]:
-        return {
-            "id": "context:git-diff",
-            "type": "git-diff",
-            "label": "Git Changes",
-            "description": "Unstaged and uncommitted changes",
-            "icon": "git",
-            "content": "[git diff]",
-            "token_estimate": 2000,
-            "relevance_score": 0.9,
-        }
-
-    def _problems_mention(self) -> dict[str, Any]:
-        return {
-            "id": "context:problems",
-            "type": "problems",
-            "label": "Problems",
-            "description": "All errors and warnings in the project",
-            "icon": "warning",
-            "content": "[problems]",
-            "token_estimate": 1500,
-            "relevance_score": 0.7,
-        }
-
-    def _open_tabs_mention(self) -> dict[str, Any]:
-        return {
-            "id": "context:open-tabs",
-            "type": "editor-tabs",
-            "label": "Open Tabs",
-            "description": "All files currently open in the editor",
-            "icon": "tabs",
-            "content": "[open tabs]",
-            "token_estimate": 3000,
-            "relevance_score": 0.8,
-        }
-
-    def _web_search_mention(self) -> dict[str, Any]:
-        return {
-            "id": "context:web",
-            "type": "web",
-            "label": "Web Search",
-            "description": "Search the internet for latest information",
-            "icon": "web",
-            "content": "[web search]",
-            "token_estimate": 100,
-            "relevance_score": 0.5,
-        }
 
     def _matches(self, query_lower: str, keywords: list[str]) -> bool:
         return any(kw in query_lower or query_lower in kw for kw in keywords)
