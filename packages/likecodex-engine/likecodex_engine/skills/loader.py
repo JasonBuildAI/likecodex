@@ -84,10 +84,7 @@ def discover_skills(
                     skills[skill.name] = skill
             continue
         for path in sorted(root.rglob("*.md")):
-            if path.name.upper() == "SKILL.MD" or path.parent.name != "skills":
-                skill = _load_skill_file(path)
-            else:
-                skill = _load_skill_file(path)
+            skill = _load_skill_file(path)
             if skill and skill.name.lower() not in disabled_set:
                 skills[skill.name] = skill
         for path in sorted(root.glob("*.md")):
