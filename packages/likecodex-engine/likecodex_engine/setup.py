@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import platform
 import sys
 from pathlib import Path
 
@@ -225,12 +227,8 @@ async def run_doctor() -> None:
         console.print(f"[yellow]⚠ Engine not running on port {port}[/yellow]")
 
     # 5. System info
-    import platform
     console.print(f"\n[bold]System:[/bold] {platform.system()} {platform.release()}")
     console.print(f"[bold]CWD:[/bold] {Path.cwd()}")
-
-
-import json  # noqa: E402 (needed by run_doctor)
 
 
 if __name__ == "__main__":
