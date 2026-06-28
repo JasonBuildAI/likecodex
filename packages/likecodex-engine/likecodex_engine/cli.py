@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import uuid
+import webbrowser
 from pathlib import Path
 
 
@@ -198,8 +199,6 @@ def _run_chat(port: int) -> None:
 
 def _run_web(port: int) -> None:
     """Start engine and open Web UI."""
-    import webbrowser
-
     from rich.console import Console
 
     console = Console()
