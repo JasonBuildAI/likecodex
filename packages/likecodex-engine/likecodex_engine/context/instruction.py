@@ -58,22 +58,14 @@ def extract_host_checks(docs: Iterable[tuple[str, str]]) -> list[VerifyCheck]:
 
 def _markdown_heading(line: str) -> str | None:
     """Parse a markdown heading and return the text, or None if not a heading."""
-    line = line.strip()
-    if not line.startswith("#"):
+    stripped = line.strip()
+    if not stripped.startswith("#"):
         return None
-
-    # Count leading #
-    i = 0
-    while i < len(line) and line[i] == "#":
-        i += 1
-
+    hashes = len(stripped) - len(stripped.lstrip("#"))
     # Must have space after # and non-empty content
-    if i == 0 or i >= len(line) or line[i] != " ":
+    if hashes >= len(stripped) or stripped[hashes] != " ":
         return None
-
-    heading = line[i + 1 :].strip()
-    # Remove trailing #
-    heading = heading.rstrip("#").strip()
+    heading = stripped[hashes + 1:].rstrip("#").strip()
     return heading if heading else None
 
 
