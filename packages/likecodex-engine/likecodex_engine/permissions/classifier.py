@@ -61,16 +61,8 @@ class RiskClassifier:
     def classify_tool_call(cls, name: str, arguments: dict[str, Any]) -> RiskLevel:
         if name in cls.READ_ONLY_TOOLS:
             return RiskLevel.LOW
-
-        if name in {"write_file"}:
-            return RiskLevel.MEDIUM
-
         if name == "run_command":
             return cls.classify_command(arguments.get("command", ""))
-
-        if name == "git_commit":
-            return RiskLevel.MEDIUM
-
         return RiskLevel.MEDIUM
 
     @classmethod
