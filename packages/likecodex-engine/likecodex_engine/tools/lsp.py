@@ -105,7 +105,8 @@ class LspTools:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120.0)
             code = proc.returncode
         except TimeoutError:
-            proc.kill()
+            if proc is not None:
+                proc.kill()
             return json.dumps(
                 {"path": path, "language": lang, "checked": False, "reason": "checker timed out", "diagnostics": []}
             )

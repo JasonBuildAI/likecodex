@@ -216,8 +216,8 @@ async def run_doctor() -> None:
     import urllib.request
 
     try:
-        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
-        data = json.loads(resp.read().decode())
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as resp:
+            data = json.loads(resp.read().decode())
         console.print(f"[green]✓ Engine running on port {port}[/green]")
         if data.get("model"):
             console.print(f"   Model: {data['model']}")

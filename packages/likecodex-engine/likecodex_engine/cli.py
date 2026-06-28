@@ -64,8 +64,8 @@ def _check_engine_running(port: int) -> bool:
     import urllib.request
 
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1)
-        return True
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1):
+            return True
     except Exception:
         return False
 
