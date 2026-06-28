@@ -55,6 +55,50 @@ _CONTEXT_CACHE = SessionContextCache()
 _DEEPSEEK_TOOLS_REGISTERED: bool = False
 
 
+def _make_sse_response() -> web.StreamResponse:
+    """Create a standard SSE StreamResponse."""
+    return web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+class _SSEKeepalive:
+    """Context manager for SSE keepalive heartbeat."""
+
+    def __init__(self, response: web.StreamResponse, interval: float = 15.0):
+        self._response = response
+        self._interval = interval
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task | None = None
+
+    async def __aenter__(self) -> _SSEKeepalive:
+        async def _run() -> None:
+            try:
+                while not self._stop.is_set():
+                    await asyncio.wait_for(self._stop.wait(), timeout=self._interval)
+                    if self._stop.is_set():
+                        break
+                    await self._response.write(b": keepalive\n\n")
+            except TimeoutError:
+                if not self._stop.is_set():
+                    await self._response.write(b": keepalive\n\n")
+            except Exception:
+                logger.warning("SSE keepalive failed", exc_info=True)
+
+        self._task = asyncio.create_task(_run())
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        self._stop.set()
+        if self._task and not self._task.done():
+            self._task.cancel()
+
+
 def _set_current_deepseek_session(loop: Any, ctx: Any, session_id: str) -> None:
     """Set the current session context for DeepSeek tools."""
     from likecodex_engine.tools.deepseek_tools import set_current_session
@@ -390,62 +434,36 @@ async def chat(request: web.Request) -> web.StreamResponse:
         loop=loop,
     )
 
-    response = web.StreamResponse(
-        status=200,
-        reason="OK",
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Session-Id": sid,
-        },
-    )
+    response = _make_sse_response()
+    response.headers["X-Session-Id"] = sid
     await response.prepare(request)
 
-    # Keep-alive heartbeat to prevent proxy timeouts
-    keepalive_stop = asyncio.Event()
-
-    async def _keepalive() -> None:
+    async with _SSEKeepalive(response):
         try:
-            while not keepalive_stop.is_set():
-                await asyncio.wait_for(keepalive_stop.wait(), timeout=15)
-                if keepalive_stop.is_set():
-                    break
-                await response.write(b": keepalive\n\n")
-        except TimeoutError:
-            if not keepalive_stop.is_set():
-                await response.write(b": keepalive\n\n")
-        except Exception:
-            logger.warning("chat SSE keepalive failed", exc_info=True)
+            if prepared.expanded.compact_trigger:
+                async for resp in _run_manual_compact(context, loop.llm, prepared.expanded.compact_focus):
+                    payload = json.dumps(_serialize_response(resp))
+                    await response.write(f"data: {payload}\n\n".encode())
+                await response.write(b"data: [DONE]\n\n")
+                return response
 
-    keepalive_handle = asyncio.create_task(_keepalive())
-
-    try:
-        if prepared.expanded.compact_trigger:
-            async for resp in _run_manual_compact(context, loop.llm, prepared.expanded.compact_focus):
+            for resp in prepared.early_responses:
                 payload = json.dumps(_serialize_response(resp))
                 await response.write(f"data: {payload}\n\n".encode())
+
+            if prepared.expanded.direct_reply is not None:
+                await response.write(b"data: [DONE]\n\n")
+                return response
+
+            async for resp in runner.run(prepared.prompt):
+                payload = json.dumps(_serialize_response(resp))
+                await response.write(f"data: {payload}\n\n".encode())
+            cache_stats = global_cache_metrics().to_dict()
+            cache_event = json.dumps({"type": "cache_stats", "content": "", "cache": cache_stats})
+            await response.write(f"data: {cache_event}\n\n".encode())
             await response.write(b"data: [DONE]\n\n")
-            return response
-
-        for resp in prepared.early_responses:
-            payload = json.dumps(_serialize_response(resp))
-            await response.write(f"data: {payload}\n\n".encode())
-
-        if prepared.expanded.direct_reply is not None:
-            await response.write(b"data: [DONE]\n\n")
-            return response
-
-        async for resp in runner.run(prepared.prompt):
-            payload = json.dumps(_serialize_response(resp))
-            await response.write(f"data: {payload}\n\n".encode())
-        cache_stats = global_cache_metrics().to_dict()
-        cache_event = json.dumps({"type": "cache_stats", "content": "", "cache": cache_stats})
-        await response.write(f"data: {cache_event}\n\n".encode())
-        await response.write(b"data: [DONE]\n\n")
-    finally:
-        keepalive_stop.set()
-        keepalive_handle.done() or keepalive_handle.cancel()
+        except Exception:
+            logger.warning("chat SSE stream failed", exc_info=True)
 
     return response
 
@@ -1443,48 +1461,21 @@ async def ide_composer_chat(request: web.Request) -> web.StreamResponse:
 
     agent = ComposerAgent(config=cfg, working_dir=working_dir)
 
-    response = web.StreamResponse(
-        status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
-    )
+    response = _make_sse_response()
     await response.prepare(request)
 
-    # Keepalive heartbeat
-    keepalive_stop = asyncio.Event()
-
-    async def _keepalive() -> None:
+    async with _SSEKeepalive(response):
         try:
-            while not keepalive_stop.is_set():
-                await asyncio.wait_for(keepalive_stop.wait(), timeout=15)
-                if keepalive_stop.is_set():
-                    break
-                await response.write(b": keepalive\n\n")
-        except TimeoutError:
-            if not keepalive_stop.is_set():
-                await response.write(b": keepalive\n\n")
-        except Exception:
-            logger.warning("composer SSE keepalive failed", exc_info=True)
-
-    keepalive_handle = asyncio.create_task(_keepalive())
-
-    try:
-        async for event in agent.execute(
-            message=message,
-            mentions=mentions,
-            session_id=session_id,
-        ):
-            payload = json.dumps(event)
-            await response.write(f"data: {payload}\n\n".encode())
-    except Exception as exc:
-        error_event = json.dumps({"type": "error", "content": str(exc)})
-        await response.write(f"data: {error_event}\n\n".encode())
-    finally:
-        keepalive_stop.set()
-        keepalive_handle.done() or keepalive_handle.cancel()
+            async for event in agent.execute(
+                message=message,
+                mentions=mentions,
+                session_id=session_id,
+            ):
+                payload = json.dumps(event)
+                await response.write(f"data: {payload}\n\n".encode())
+        except Exception as exc:
+            error_event = json.dumps({"type": "error", "content": str(exc)})
+            await response.write(f"data: {error_event}\n\n".encode())
 
     await response.write(b"data: [DONE]\n\n")
     return response
@@ -1676,14 +1667,7 @@ async def ide_terminal_stream(request: web.Request) -> web.StreamResponse:
     session_id = data.get("sessionId", "term-default")
     command = data.get("command", "")
 
-    response = web.StreamResponse(
-        status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
-    )
+    response = _make_sse_response()
     await response.prepare(request)
 
     try:
@@ -1786,14 +1770,7 @@ async def ide_tests_run(request: web.Request) -> web.StreamResponse:
     data = await request.json()
     test_filter = data.get("filter", "")
 
-    response = web.StreamResponse(
-        status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
-    )
+    response = _make_sse_response()
     await response.prepare(request)
 
     try:
