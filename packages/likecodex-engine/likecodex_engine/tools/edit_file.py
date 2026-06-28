@@ -16,6 +16,13 @@ class EditFileTools:
     def __init__(self, working_dir: str) -> None:
         self.working_dir = working_dir
 
+    def _resolve_file(self, path: str) -> tuple[Path | None, str | None]:
+        """Resolve a file path, returning (path, None) on success or (None, error_json) on failure."""
+        try:
+            return resolve_in_working_dir(Path(self.working_dir), path), None
+        except PermissionError as exc:
+            return None, json.dumps({"error": str(exc)})
+
     def edit_file_schema(self) -> dict:
         return {
             "description": "Replace old_string with new_string in a file. Prefer over write_file for edits.",
@@ -42,10 +49,9 @@ class EditFileTools:
         new_string: str,
         replace_all: bool = False,
     ) -> str:
-        try:
-            target = resolve_in_working_dir(Path(self.working_dir), path)
-        except PermissionError as exc:
-            return json.dumps({"error": str(exc)})
+        target, err = self._resolve_file(path)
+        if err:
+            return err
 
         if not target.exists():
             return json.dumps({"error": f"File not found: {path}"})
@@ -101,10 +107,9 @@ class EditFileTools:
         }
 
     async def multi_edit(self, path: str, edits: list[dict[str, Any]]) -> str:
-        try:
-            target = resolve_in_working_dir(Path(self.working_dir), path)
-        except PermissionError as exc:
-            return json.dumps({"error": str(exc)})
+        target, err = self._resolve_file(path)
+        if err:
+            return err
         if not target.exists():
             return json.dumps({"error": f"File not found: {path}"})
         if not edits:
@@ -158,10 +163,9 @@ class EditFileTools:
         }
 
     async def delete_range(self, path: str, start_line: int, end_line: int) -> str:
-        try:
-            target = resolve_in_working_dir(Path(self.working_dir), path)
-        except PermissionError as exc:
-            return json.dumps({"error": str(exc)})
+        target, err = self._resolve_file(path)
+        if err:
+            return err
         if not target.exists():
             return json.dumps({"error": f"File not found: {path}"})
         if start_line < 1 or end_line < start_line:
@@ -198,10 +202,9 @@ class EditFileTools:
         }
 
     async def delete_symbol(self, path: str, name: str) -> str:
-        try:
-            target = resolve_in_working_dir(Path(self.working_dir), path)
-        except PermissionError as exc:
-            return json.dumps({"error": str(exc)})
+        target, err = self._resolve_file(path)
+        if err:
+            return err
         if not target.exists():
             return json.dumps({"error": f"File not found: {path}"})
 
