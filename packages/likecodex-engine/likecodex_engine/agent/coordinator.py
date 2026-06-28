@@ -164,23 +164,10 @@ class Coordinator:
             return lambda prompt: False
         elif self.auto_plan == "on":
             return lambda prompt: should_plan(prompt, auto_plan=True)
-        elif self.auto_plan == "classifier" and self.auto_plan_classifier:
-            # Use classifier for borderline cases
-            async def classifier_should_plan(prompt: str) -> bool:
-                # First check heuristic
-                if not should_plan(prompt, auto_plan=True):
-                    return False
-                # If borderline, use classifier
-                from likecodex_engine.agent.auto_plan_classifier import AutoPlanClassifier, is_borderline_task
-
-                if is_borderline_task(prompt):
-                    classifier = AutoPlanClassifier(self.auto_plan_classifier)
-                    needs_plan, _ = await classifier.needs_plan(prompt)
-                    return needs_plan
-                return True
-
-            # Return sync wrapper for compatibility
-            return lambda prompt: True  # Simplified for now
+        elif self.auto_plan == \"classifier\" and self.auto_plan_classifier:
+            # FIXME: should_plan is sync but LLM classifier requires async.
+            # For now fall back to heuristic classifier.
+            return lambda prompt: should_plan(prompt, auto_plan=True)
         else:
             return lambda prompt: should_plan(prompt, auto_plan=True)
 
