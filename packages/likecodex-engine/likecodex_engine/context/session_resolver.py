@@ -7,11 +7,7 @@ from pathlib import Path
 
 
 def canonical_working_dir(path: str | Path) -> Path:
-    target = Path(path).resolve()
-    try:
-        return target
-    except OSError:
-        return target
+    return Path(path).resolve()
 
 
 def session_id_for_dir(working_dir: str | Path) -> str:
