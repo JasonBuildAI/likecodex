@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -55,8 +56,6 @@ Keep steps small, actionable, and limited to at most 10."""
             Message(role=Role.USER, content=f"Task: {prompt}"),
         ]
         response = await self.llm.complete(messages, temperature=0.0, max_tokens=2048)
-        import json
-
         try:
             data: dict[str, Any] = json.loads(self._extract_json(response.content))
         except json.JSONDecodeError:
