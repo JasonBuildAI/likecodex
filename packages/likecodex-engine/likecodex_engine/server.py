@@ -411,9 +411,9 @@ async def chat(request: web.Request) -> web.StreamResponse:
             if not keepalive_stop.is_set():
                 await response.write(b": keepalive\n\n")
         except Exception:
-            pass
+            logger.warning("chat SSE keepalive failed", exc_info=True)
 
-    keepalive_handle = asyncio.ensure_future(_keepalive())
+    keepalive_handle = asyncio.create_task(_keepalive())
 
     try:
         if prepared.expanded.compact_trigger:
@@ -1455,9 +1455,9 @@ async def ide_composer_chat(request: web.Request) -> web.StreamResponse:
             if not keepalive_stop.is_set():
                 await response.write(b": keepalive\n\n")
         except Exception:
-            pass
+            logger.warning("composer SSE keepalive failed", exc_info=True)
 
-    keepalive_handle = asyncio.ensure_future(_keepalive())
+    keepalive_handle = asyncio.create_task(_keepalive())
 
     try:
         async for event in agent.execute(
