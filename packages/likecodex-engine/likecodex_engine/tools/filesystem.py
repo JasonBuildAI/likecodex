@@ -25,6 +25,13 @@ class FileSystemTools:
     def _resolve(self, path: str) -> Path:
         return resolve_in_working_dir(self.working_dir, path)
 
+    def _safe_resolve(self, path: str) -> tuple[Path | None, str | None]:
+        """Resolve a path, returning (path, None) on success or (None, error_json) on failure."""
+        try:
+            return self._resolve(path), None
+        except PermissionError as exc:
+            return None, json.dumps({"error": str(exc)})
+
     def read_file_schema(self) -> dict[str, Any]:
         return {
             "description": (
@@ -43,10 +50,9 @@ class FileSystemTools:
         }
 
     async def read_file(self, path: str, offset: int = 1, limit: int | None = None) -> str:
-        try:
-            target = self._resolve(path)
-        except PermissionError as e:
-            return json.dumps({"error": str(e)})
+        target, err = self._safe_resolve(path)
+        if err:
+            return err
         if not target.exists():
             return json.dumps({"error": f"File not found: {path}"})
         if not target.is_file():
@@ -87,10 +93,9 @@ class FileSystemTools:
         }
 
     async def write_file(self, path: str, content: str) -> str:
-        try:
-            target = self._resolve(path)
-        except PermissionError as e:
-            return json.dumps({"error": str(e)})
+        target, err = self._safe_resolve(path)
+        if err:
+            return err
         target.parent.mkdir(parents=True, exist_ok=True)
         # Preserve the existing file's encoding so we don't silently convert
         # GBK/UTF-16 files to UTF-8 on overwrite.
@@ -129,11 +134,12 @@ class FileSystemTools:
         }
 
     async def move_file(self, source: str, destination: str, overwrite: bool = False) -> str:
-        try:
-            src = self._resolve(source)
-            dst = self._resolve(destination)
-        except PermissionError as e:
-            return json.dumps({"error": str(e)})
+        src, err = self._safe_resolve(source)
+        if err:
+            return err
+        dst, err = self._safe_resolve(destination)
+        if err:
+            return err
         if not src.exists():
             return json.dumps({"error": f"Source not found: {source}"})
         if dst.exists() and not overwrite:
@@ -205,10 +211,9 @@ class FileSystemTools:
         }
 
     async def ls(self, path: str = ".", recursive: bool = False, max_entries: int = 200) -> str:
-        try:
-            target = self._resolve(path)
-        except PermissionError as e:
-            return json.dumps({"error": str(e)})
+        target, err = self._safe_resolve(path)
+        if err:
+            return err
         if not target.exists():
             return json.dumps({"error": f"Path not found: {path}"})
         if not target.is_dir():
@@ -263,24 +268,8 @@ class FileSystemTools:
         }
 
     async def list_dir(self, path: str = ".") -> str:
-        try:
-            target = self._resolve(path)
-        except PermissionError as e:
-            return json.dumps({"error": str(e)})
-        if not target.exists():
-            return json.dumps({"error": f"Path not found: {path}"})
-        if not target.is_dir():
-            return json.dumps({"error": f"Not a directory: {path}"})
-        entries = []
-        for entry in target.iterdir():
-            entries.append(
-                {
-                    "name": entry.name,
-                    "type": "directory" if entry.is_dir() else "file",
-                    "size": entry.stat().st_size if entry.is_file() else None,
-                }
-            )
-        return json.dumps({"path": str(target.relative_to(self.working_dir)), "entries": entries})
+        """Simple directory listing — delegates to ls with sane defaults."""
+        return await self.ls(path, recursive=False, max_entries=1000)
 
     def search_files_schema(self) -> dict[str, Any]:
         return {
@@ -296,10 +285,9 @@ class FileSystemTools:
         }
 
     async def search_files(self, pattern: str, path: str = ".") -> str:
-        try:
-            target = self._resolve(path)
-        except PermissionError as e:
-            return json.dumps({"error": str(e)})
+        target, err = self._safe_resolve(path)
+        if err:
+            return err
         results = []
         regex = re.compile(pattern)
         for root, dirs, files in os.walk(target):
