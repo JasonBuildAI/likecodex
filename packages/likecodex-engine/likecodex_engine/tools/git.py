@@ -90,8 +90,8 @@ class GitTools:
             },
         }
 
-    async def git_commit(self, message: str, all: bool = False) -> str:
-        if all:
+    async def git_commit(self, message: str, add_all: bool = False) -> str:
+        if add_all:
             await self._run("add -A")
         escaped_message = message.replace('"', '\\"')
         result = await self._run(f'commit -m "{escaped_message}"')
