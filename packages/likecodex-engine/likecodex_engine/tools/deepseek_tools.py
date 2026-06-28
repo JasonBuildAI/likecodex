@@ -274,10 +274,7 @@ async def deepseek_cost_estimate(
 
     # Rough estimation
     system_prompt_tokens = 2000
-    file_tokens = 0
-    if files_to_read:
-        for _ in files_to_read:
-            file_tokens += 500  # estimate 500 tokens per file
+    file_tokens = len(files_to_read or []) * 500  # ~500 tokens per file
 
     step_input = system_prompt_tokens + file_tokens + 500
     step_output = 1000
