@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -139,8 +141,6 @@ class FileSystemTools:
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists() and overwrite:
             if dst.is_dir():
-                import shutil
-
                 shutil.rmtree(dst)
             else:
                 dst.unlink()
@@ -296,8 +296,6 @@ class FileSystemTools:
         }
 
     async def search_files(self, pattern: str, path: str = ".") -> str:
-        import re
-
         try:
             target = self._resolve(path)
         except PermissionError as e:
