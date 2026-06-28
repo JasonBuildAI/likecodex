@@ -9,7 +9,7 @@ from typing import Any
 
 from likecodex_engine.permissions.bash_readonly import classify_bash
 from likecodex_engine.permissions.classifier import RiskClassifier, RiskLevel
-from likecodex_engine.permissions.policy import Decision, Policy
+from likecodex_engine.permissions.policy import Decision, Policy, extract_subject
 
 
 class ApprovalMode(StrEnum):
@@ -138,7 +138,5 @@ class PermissionEvaluator:
         return PermissionDecision(True, ExecutionMode.PROMPT, "policy requires approval")
 
     def grant_session(self, tool_name: str, arguments: dict[str, Any], scope: str = "once") -> None:
-        from likecodex_engine.permissions.policy import extract_subject
-
         self.policy.grant_session(tool_name, extract_subject(tool_name, arguments), scope=scope)
         self.policy.save_grants(self.grants_path)
