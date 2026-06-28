@@ -31,17 +31,16 @@ def _bm25_score(query_tokens: list[str], doc_tokens: list[str], avg_dl: float, d
 
 
 def _read_jsonl_messages(path: Path) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = []
     if not path.exists():
-        return messages
+        return []
+    messages: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            messages.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
+        stripped = line.strip()
+        if stripped:
+            try:
+                messages.append(json.loads(stripped))
+            except json.JSONDecodeError:
+                pass
     return messages
 
 
@@ -63,17 +62,17 @@ class HistoryTools:
         ]
 
     def _collect_docs(self, scope: str) -> list[tuple[str, str, str]]:
-        docs: list[tuple[str, str, str]] = []
-        archive_dir = self.working_dir / ".likecodex" / "archive"
-        for path, text in self._glob_jsonl_texts(archive_dir):
-            docs.append((path, "archive", text))
-        sessions_dir = self.working_dir / ".likecodex" / "sessions"
-        for path, text in self._glob_jsonl_texts(sessions_dir):
-            docs.append((path, "session", text))
+        sources = [
+            (self.working_dir / ".likecodex" / "archive", "archive", False),
+            (self.working_dir / ".likecodex" / "sessions", "session", False),
+        ]
         if scope == "global":
-            for path, text in self._glob_jsonl_texts(self.global_dir, recursive=True):
-                docs.append((path, "global", text))
-        return docs
+            sources.append((self.global_dir, "global", True))
+        return [
+            (path, kind, text)
+            for directory, kind, recursive in sources
+            for path, text in self._glob_jsonl_texts(directory, recursive=recursive)
+        ]
 
     def _around_slice(
         self,
