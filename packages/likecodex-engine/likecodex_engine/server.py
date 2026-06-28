@@ -28,7 +28,7 @@ from likecodex_engine.context.session_cache import SessionContextCache
 from likecodex_engine.context.session_resolver import session_id_for_dir
 from likecodex_engine.llm.base import LLMResponse
 from likecodex_engine.llm.cache_metrics import global_cache_metrics
-from likecodex_engine.llm.factory import create_provider
+from likecodex_engine.llm.factory import create_provider, provider_from_config
 from likecodex_engine.mcp.loader import register_mcp_tools
 from likecodex_engine.memory.vector import VectorMemory
 from likecodex_engine.permissions.evaluator import ApprovalMode, PermissionEvaluator
@@ -1639,14 +1639,7 @@ def _create_terminal_llm(cfg: dict):
     """Create an LLM provider for terminal AI assistant."""
     from likecodex_engine.terminal.ai_assistant import TerminalAIAssistant
 
-    llm = create_provider(
-        cfg.get("provider", "deepseek"),
-        cfg.get("model", "deepseek-v4-flash"),
-        cfg.get("api_key"),
-        cfg.get("base_url"),
-        thinking=False,
-    )
-    return TerminalAIAssistant(llm)
+    return TerminalAIAssistant(provider_from_config(cfg, thinking=False))
 
 
 async def ide_terminal_suggest(request: web.Request) -> web.Response:
@@ -1727,14 +1720,7 @@ async def ide_debug_analyze(request: web.Request) -> web.Response:
 
     from likecodex_engine.debug.ai_debug import AIDebugAssistant
 
-    llm = create_provider(
-        cfg.get("provider", "deepseek"),
-        cfg.get("model", "deepseek-v4-flash"),
-        cfg.get("api_key"),
-        cfg.get("base_url"),
-        thinking=False,
-    )
-    assistant = AIDebugAssistant(llm)
+    assistant = AIDebugAssistant(provider_from_config(cfg, thinking=False))
     result = await assistant.analyze_error(
         error_message=data.get("errorMessage", ""),
         stack_trace=data.get("stackTrace", ""),
