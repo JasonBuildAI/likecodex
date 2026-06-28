@@ -1183,10 +1183,20 @@ async def inline_edit(request: web.Request) -> web.Response:
 # ── Workspace API (for IDE file tree & editor) ────────────────────
 
 
+def _workspace_path(request: web.Request, rel_path: str) -> tuple[Path, Path] | web.Response:
+    """Resolve and validate a workspace-relative path. Returns (working_dir, target) or error response."""
+    _, wd = _cfg_wd(request)
+    working_dir = Path(wd)
+    target = (working_dir / rel_path).resolve()
+    if not str(target).startswith(str(working_dir.resolve())):
+        return web.json_response({"error": "Path outside workspace"}, status=403)
+    return working_dir, target
+
+
 async def workspace_list(request: web.Request) -> web.Response:
     """List files and directories in the workspace."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = Path(cfg.get("working_dir", "."))
+    _, wd = _cfg_wd(request)
+    working_dir = Path(wd)
     rel_path = request.query.get("path", ".")
     depth_str = request.query.get("depth", "1")
 
@@ -1196,7 +1206,6 @@ async def workspace_list(request: web.Request) -> web.Response:
         depth = 1
 
     target = (working_dir / rel_path).resolve()
-    # Security: ensure target is within working_dir
     if not str(target).startswith(str(working_dir.resolve())):
         return web.json_response({"error": "Path outside workspace"}, status=403)
     if not target.exists():
@@ -1208,10 +1217,8 @@ async def workspace_list(request: web.Request) -> web.Response:
         children = []
         try:
             for entry in sorted(target.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
-                # Skip hidden files/dirs (starting with .)
                 if entry.name.startswith(".") and entry.name not in (".gitignore", ".env.example", ".editorconfig"):
                     continue
-                # Skip node_modules, target, __pycache__
                 if entry.name in ("node_modules", "target", "__pycache__", ".git", ".next", "out"):
                     continue
                 child = {
@@ -1221,8 +1228,7 @@ async def workspace_list(request: web.Request) -> web.Response:
                 }
                 if entry.is_file():
                     try:
-                        stat = entry.stat()
-                        child["size"] = stat.st_size
+                        child["size"] = entry.stat().st_size
                     except OSError:
                         child["size"] = 0
                 children.append(child)
@@ -1237,22 +1243,19 @@ async def workspace_list(request: web.Request) -> web.Response:
 
 async def workspace_read(request: web.Request) -> web.Response:
     """Read a file from the workspace."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = Path(cfg.get("working_dir", "."))
     rel_path = request.query.get("path", "")
-
     if not rel_path:
         return web.json_response({"error": "path is required"}, status=400)
 
-    target = (working_dir / rel_path).resolve()
-    if not str(target).startswith(str(working_dir.resolve())):
-        return web.json_response({"error": "Path outside workspace"}, status=403)
+    resolved = _workspace_path(request, rel_path)
+    if isinstance(resolved, web.Response):
+        return resolved
+    working_dir, target = resolved
     if not target.exists() or not target.is_file():
         return web.json_response({"error": "File not found"}, status=404)
 
     try:
-        size_limit = 1024 * 1024  # 1MB
-        if target.stat().st_size > size_limit:
+        if target.stat().st_size > 1024 * 1024:
             return web.json_response({"error": "File too large"}, status=413)
         content = target.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
@@ -1271,16 +1274,13 @@ async def workspace_write(request: web.Request) -> web.Response:
     data = await request.json()
     rel_path = data.get("path", "")
     content = data.get("content", "")
-
     if not rel_path:
         return web.json_response({"error": "path is required"}, status=400)
 
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = Path(cfg.get("working_dir", "."))
-    target = (working_dir / rel_path).resolve()
-
-    if not str(target).startswith(str(working_dir.resolve())):
-        return web.json_response({"error": "Path outside workspace"}, status=403)
+    resolved = _workspace_path(request, rel_path)
+    if isinstance(resolved, web.Response):
+        return resolved
+    _, target = resolved
 
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
