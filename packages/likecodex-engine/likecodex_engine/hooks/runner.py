@@ -23,6 +23,14 @@ def _hooks_paths(working_dir: str | Path) -> list[Path]:
     return [p for p in paths if p.exists()]
 
 
+def _parse_hook_cfg(event: str, cfg: object) -> HookDef | None:
+    if isinstance(cfg, dict) and "command" in cfg:
+        return HookDef(event=event, command=str(cfg["command"]))
+    if isinstance(cfg, str):
+        return HookDef(event=event, command=cfg)
+    return None
+
+
 def load_hooks(working_dir: str | Path) -> list[HookDef]:
     hooks: list[HookDef] = []
     for path in _hooks_paths(working_dir):
@@ -30,11 +38,10 @@ def load_hooks(working_dir: str | Path) -> list[HookDef]:
             data = tomllib.loads(path.read_text(encoding="utf-8"))
         except (OSError, tomllib.TOMLDecodeError):
             continue
-        for event, cfg in data.get("hooks", {}).items():
-            if isinstance(cfg, dict) and "command" in cfg:
-                hooks.append(HookDef(event=event, command=str(cfg["command"])))
-            elif isinstance(cfg, str):
-                hooks.append(HookDef(event=event, command=cfg))
+        hooks.extend(
+            h for event, cfg in data.get("hooks", {}).items()
+            if (h := _parse_hook_cfg(event, cfg)) is not None
+        )
     return hooks
 
 
@@ -60,10 +67,10 @@ async def fire_hooks(event: str, working_dir: str, payload: dict[str, str] | Non
     env = {"LIKECODEX_HOOK_EVENT": event, "LIKECODEX_WORKING_DIR": str(working_dir)}
     if payload:
         env.update({f"LIKECODEX_{k.upper()}": v for k, v in payload.items()})
-    outputs: list[str] = []
-    for hook in load_hooks(working_dir):
-        if hook.event == event:
-            result = await run_hook(hook, env)
-            if result:
-                outputs.append(result)
+    outputs = [
+        result
+        for hook in load_hooks(working_dir)
+        if hook.event == event
+        if (result := await run_hook(hook, env))
+    ]
     return "\n".join(outputs)
