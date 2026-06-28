@@ -43,6 +43,8 @@ APP_CONFIG = web.AppKey("config", dict)
 
 _ACTIVE_LOOPS: dict[str, AgentLoop] = {}
 _ACTIVE_COORDINATORS: dict[str, Coordinator] = {}
+# Track background tasks to prevent premature GC (Python < 3.11)
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 _SESSION_STORE: SessionStore | None = None
 _CONTEXT_CACHE = SessionContextCache()
 
@@ -596,7 +598,9 @@ async def create_task(request: web.Request) -> web.Response:
             _ACTIVE_LOOPS.pop(task_id, None)
             _ACTIVE_COORDINATORS.pop(task_id, None)
 
-    asyncio.create_task(run_in_background())
+    task = asyncio.create_task(run_in_background())
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
     return web.json_response({"task_id": task_id, "status": "running", "session_id": task_id})
 
