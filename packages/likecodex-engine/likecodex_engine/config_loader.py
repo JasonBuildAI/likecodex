@@ -26,6 +26,11 @@ def _parse_toml(path: Path) -> dict[str, Any]:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
+def _env_or(section: dict[str, Any], key: str, env_key: str, default: Any = "") -> Any:
+    """Return env var if set, else config section value, else default."""
+    return os.environ.get(env_key) or section.get(key, default)
+
+
 def project_config_paths(cwd: Path) -> list[Path]:
     stack: list[Path] = []
     current = cwd.resolve()
@@ -91,39 +96,28 @@ def engine_config_from_env(cwd: Path | None = None) -> dict[str, Any]:
     working_dir = os.environ.get("LIKECODEX_WORKING_DIR", str(cwd or Path.cwd()))
 
     return {
-        "provider": os.environ.get("LIKECODEX_LLM_PROVIDER") or llm.get("provider", "deepseek"),
-        "model": os.environ.get("LIKECODEX_LLM_MODEL") or llm.get("model", "deepseek-v4-flash"),
+        "provider": _env_or(llm, "provider", "LIKECODEX_LLM_PROVIDER", "deepseek"),
+        "model": _env_or(llm, "model", "LIKECODEX_LLM_MODEL", "deepseek-v4-flash"),
         "api_key": api_key,
-        "base_url": os.environ.get("LIKECODEX_LLM_BASE_URL")
-        or llm.get("base_url", "https://api.deepseek.com"),
-        "deepseek_thinking": os.environ.get("LIKECODEX_DEEPSEEK_THINKING")
-        or str(deepseek.get("thinking", False)).lower(),
-        "reasoning_effort": os.environ.get("LIKECODEX_REASONING_EFFORT")
-        or deepseek.get("reasoning_effort", ""),
-        "reasoning_language": os.environ.get("LIKECODEX_REASONING_LANGUAGE")
-        or deepseek.get("reasoning_language", ""),
+        "base_url": _env_or(llm, "base_url", "LIKECODEX_LLM_BASE_URL", "https://api.deepseek.com"),
+        "deepseek_thinking": str(_env_or(deepseek, "thinking", "LIKECODEX_DEEPSEEK_THINKING", False)).lower(),
+        "reasoning_effort": _env_or(deepseek, "reasoning_effort", "LIKECODEX_REASONING_EFFORT"),
+        "reasoning_language": _env_or(deepseek, "reasoning_language", "LIKECODEX_REASONING_LANGUAGE"),
         "working_dir": working_dir,
-        "approval_mode": os.environ.get("LIKECODEX_APPROVAL_MODE") or approval.get("mode", "auto"),
-        "enable_planner": os.environ.get("LIKECODEX_ENABLE_PLANNER")
-        or str(agent.get("enable_planner", False)).lower(),
-        "auto_plan": os.environ.get("LIKECODEX_AUTO_PLAN")
-        or str(agent.get("auto_plan", "off")).lower(),
-        "auto_plan_classifier": os.environ.get("LIKECODEX_AUTO_PLAN_CLASSIFIER")
-        or agent.get("auto_plan_classifier", ""),
+        "approval_mode": _env_or(approval, "mode", "LIKECODEX_APPROVAL_MODE", "auto"),
+        "enable_planner": str(_env_or(agent, "enable_planner", "LIKECODEX_ENABLE_PLANNER", False)).lower(),
+        "auto_plan": str(_env_or(agent, "auto_plan", "LIKECODEX_AUTO_PLAN", "off")).lower(),
+        "auto_plan_classifier": _env_or(agent, "auto_plan_classifier", "LIKECODEX_AUTO_PLAN_CLASSIFIER"),
         "enable_mcp": enable_mcp,
         "mcp_startup": mcp.get("startup", "lazy"),
         "mcp_servers": mcp_servers,
         "token_mode": token_mode,
         "sandbox_executor_url": os.environ.get("LIKECODEX_SANDBOX_URL"),
         "memory_path": os.environ.get("LIKECODEX_MEMORY_PATH", ".likecodex/memory.jsonl"),
-        "planner_model": os.environ.get("LIKECODEX_PLANNER_MODEL")
-        or agent.get("planner_model", "deepseek-v4-pro"),
-        "compact_ratio": os.environ.get("LIKECODEX_COMPACT_RATIO")
-        or str(agent.get("compact_ratio", 0.8)),
-        "soft_compact_ratio": os.environ.get("LIKECODEX_SOFT_COMPACT_RATIO")
-        or str(agent.get("soft_compact_ratio", 0.5)),
-        "compact_force_ratio": os.environ.get("LIKECODEX_COMPACT_FORCE_RATIO")
-        or str(agent.get("compact_force_ratio", 0.9)),
+        "planner_model": _env_or(agent, "planner_model", "LIKECODEX_PLANNER_MODEL", "deepseek-v4-pro"),
+        "compact_ratio": str(_env_or(agent, "compact_ratio", "LIKECODEX_COMPACT_RATIO", 0.8)),
+        "soft_compact_ratio": str(_env_or(agent, "soft_compact_ratio", "LIKECODEX_SOFT_COMPACT_RATIO", 0.5)),
+        "compact_force_ratio": str(_env_or(agent, "compact_force_ratio", "LIKECODEX_COMPACT_FORCE_RATIO", 0.9)),
         "max_steps": int(agent.get("max_steps", 0)),
         "goal_max_continuations": int(
             os.environ.get("LIKECODEX_GOAL_MAX_CONTINUATIONS")
