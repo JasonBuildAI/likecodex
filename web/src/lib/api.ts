@@ -548,8 +548,8 @@ async function readSSEStream(
           try {
             const event = JSON.parse(data) as RustEvent;
             applyParsedEvent(parseRustEvent(event), handlers);
-          } catch (e) {
-            console.warn('[SSE] Malformed event chunk:', data, e);
+          } catch {
+            // ignore malformed chunks
           }
         }
       }
@@ -609,7 +609,7 @@ export function subscribeEvents(handlers: EventHandler): () => void {
     const MAX_RETRIES = 10;
     while (!aborted && retryCount < MAX_RETRIES) {
       try {
-        retryCount = 0; // reset on successful connection
+        retryCount = 0;
         const resp = await fetch(`${API_BASE}/events`, {
           headers: buildHeaders(),
           signal: abortController.signal,

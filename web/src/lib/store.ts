@@ -256,12 +256,12 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({ reasoningContent: state.reasoningContent + content })),
   flushReasoningToLastMessage: () =>
     set((state) => {
-      if (!state.reasoningContent) return state;
-      const messages = [...state.messages];
-      const last = messages[messages.length - 1];
-      if (last && last.role === 'assistant') {
-        last.reasoningContent = (last.reasoningContent || '') + state.reasoningContent;
-      }
+      if (!state.reasoningContent) return {};
+      const messages = state.messages.map((msg, idx) =>
+        idx === state.messages.length - 1 && msg.role === 'assistant'
+          ? { ...msg, reasoningContent: (msg.reasoningContent || '') + state.reasoningContent }
+          : msg
+      );
       return { messages, reasoningContent: '' };
     }),
   upsertToolDispatch: (call, partial) =>
