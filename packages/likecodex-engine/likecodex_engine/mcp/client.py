@@ -30,6 +30,10 @@ class McpClient:
         self._request_id = 0
         self._initialized = False
 
+    @staticmethod
+    def _json_line(payload: dict) -> bytes:
+        return (json.dumps(payload) + "\n").encode()
+
     async def start(self) -> None:
         if self._proc and self._proc.returncode is None:
             return
@@ -89,7 +93,7 @@ class McpClient:
         if not self._proc or not self._proc.stdin:
             return
         payload = {"jsonrpc": "2.0", "method": method, "params": params}
-        line = (json.dumps(payload) + "\n").encode()
+        line = self._json_line(payload)
         self._proc.stdin.write(line)
         await self._proc.stdin.drain()
 
@@ -132,7 +136,7 @@ class McpClient:
             if params is not None:
                 payload["params"] = params
 
-            line = (json.dumps(payload) + "\n").encode()
+            line = self._json_line(payload)
             self._proc.stdin.write(line)
             await self._proc.stdin.drain()
 
