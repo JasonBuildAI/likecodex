@@ -6,6 +6,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+import textwrap
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -1138,7 +1140,6 @@ async def inline_edit(request: web.Request) -> web.Response:
 
     context_section = ""
     if full_content:
-        import textwrap
         snippet = textwrap.dedent(full_content)
         context_section = f"## Full file context ({language}):\n```{language}\n{snippet}\n```\n\n"
 
@@ -1164,12 +1165,8 @@ async def inline_edit(request: web.Request) -> web.Response:
 
     raw = response.content.strip()
 
-    # Extract code from markdown code block
-    import re
-    modified = raw
     code_block_match = re.search(r"```(?:\w+)?\n(.*?)\n```", raw, re.DOTALL)
-    if code_block_match:
-        modified = code_block_match.group(1).strip()
+    modified = code_block_match.group(1).strip() if code_block_match else raw
 
     return web.json_response({
         "original": code,
