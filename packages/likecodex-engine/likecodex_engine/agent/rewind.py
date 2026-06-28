@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from likecodex_engine.agent.checkpoints import CheckpointManager
-from likecodex_engine.context.cache_first import CacheFirstContext
 from likecodex_engine.context.manager import ContextManager
 from likecodex_engine.persistence.session import SessionStore
 
@@ -90,10 +88,6 @@ class RewindController:
             return RewindResult(False, "conversation", "Checkpoint not found", {})
         if hasattr(self.context, "_log"):
             self.context._log = self.context.messages[:target_count]  # noqa: SLF001
-        elif hasattr(self.context, "messages"):
-            msgs = self.context.messages
-            if isinstance(self.context, CacheFirstContext):
-                self.context._log = msgs[:target_count]  # noqa: SLF001
         return RewindResult(
             True,
             "conversation",
