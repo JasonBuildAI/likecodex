@@ -10,15 +10,14 @@ import {
   type SearchResult,
   type FileNode,
 } from './store';
+import { useAppStore } from './store';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 
 // ── Helper: build headers ──────────────────────────────────────────────
 function getStoreApiKey(): string {
   if (typeof window === 'undefined') return '';
-  // try zustand store first, fallback to localStorage
   try {
-    const { useAppStore } = require('./store');
     return useAppStore.getState().apiKey || localStorage.getItem('likecodex_api_key') || '';
   } catch {
     return localStorage.getItem('likecodex_api_key') || '';
@@ -28,7 +27,6 @@ function getStoreApiKey(): string {
 function getStoreModel(): string {
   if (typeof window === 'undefined') return '';
   try {
-    const { useAppStore } = require('./store');
     return useAppStore.getState().selectedModel || localStorage.getItem('likecodex_model') || '';
   } catch {
     return localStorage.getItem('likecodex_model') || '';
@@ -51,17 +49,11 @@ async function fetchWithRetry(
   retries = 2,
   timeoutMs = 10000
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  const fetchOptions: RequestInit = {
-    ...options,
-    signal: controller.signal,
-  };
-
   for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const resp = await fetch(url, fetchOptions);
+      const resp = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(timeout);
       return resp;
     } catch (err) {
@@ -556,8 +548,8 @@ async function readSSEStream(
           try {
             const event = JSON.parse(data) as RustEvent;
             applyParsedEvent(parseRustEvent(event), handlers);
-          } catch {
-            // ignore malformed chunks
+          } catch (e) {
+            console.warn('[SSE] Malformed event chunk:', data, e);
           }
         }
       }
@@ -613,22 +605,29 @@ export function subscribeEvents(handlers: EventHandler): () => void {
   const abortController = new AbortController();
 
   async function connect() {
-    while (!aborted) {
+    let retryCount = 0;
+    const MAX_RETRIES = 10;
+    while (!aborted && retryCount < MAX_RETRIES) {
       try {
+        retryCount = 0; // reset on successful connection
         const resp = await fetch(`${API_BASE}/events`, {
           headers: buildHeaders(),
           signal: abortController.signal,
         });
         if (!resp.ok || !resp.body) {
           if (!aborted) handlers.onError?.(new Error(`Events stream failed: ${resp.statusText}`));
-          await new Promise((r) => setTimeout(r, 3000));
+          retryCount++;
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
+          await new Promise((r) => setTimeout(r, delay));
           continue;
         }
         await readSSEStream(resp.body.getReader(), handlers);
       } catch (err) {
         if (aborted) break;
+        retryCount++;
         handlers.onError?.(err instanceof Error ? err : new Error(String(err)));
-        await new Promise((r) => setTimeout(r, 3000));
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
   }
