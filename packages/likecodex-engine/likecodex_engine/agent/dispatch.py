@@ -5,43 +5,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from likecodex_engine.tools.cache import tool_cache
+from likecodex_engine.tools.cache import READ_TOOLS, tool_cache
 from likecodex_engine.tools.registry import ToolRegistry
-
-READ_ONLY_TOOLS = frozenset(
-    {
-        "read_file",
-        "list_dir",
-        "ls",
-        "glob",
-        "search_files",
-        "grep_files",
-        "find_symbol",
-        "index_search",
-        "codegraph_search",
-        "codegraph_symbols",
-        "codegraph_callers",
-        "code_index",
-        "git_status",
-        "git_diff",
-        "git_log",
-        "git_branch",
-        "lsp_definition",
-        "lsp_references",
-        "lsp_hover",
-        "lsp_diagnostics",
-        "history",
-        "web_fetch",
-        # DeepSeek read-only tools
-        "deepseek_cache_analyze",
-        "deepseek_reasoning",
-        "deepseek_cost_estimate",
-    }
-)
 
 
 def is_read_only_tool(name: str) -> bool:
-    return name in READ_ONLY_TOOLS or name.startswith("mcp__") or name.startswith("mcp_")
+    return name in READ_TOOLS or name.startswith("mcp__") or name.startswith("mcp_")
 
 
 async def execute_tool_calls_parallel(
