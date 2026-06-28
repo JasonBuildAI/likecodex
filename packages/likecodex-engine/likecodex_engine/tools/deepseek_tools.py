@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from likecodex_engine.llm.base import Message, Role
 from likecodex_engine.llm.cache_metrics import global_cache_metrics
 from likecodex_engine.llm.factory import create_provider
 
@@ -405,8 +406,6 @@ def set_current_session(session: Any, ctx: Any, session_id: str = "") -> None:
 
 def _to_message(d: dict[str, Any]) -> Any:
     """Convert a dict to an LLM Message object."""
-    from likecodex_engine.llm.base import Message, Role
-
     return Message(
         role=Role(d.get("role", "user")),
         content=d.get("content", ""),
