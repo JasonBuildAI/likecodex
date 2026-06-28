@@ -1649,8 +1649,7 @@ async def ide_terminal_create(request: web.Request) -> web.Response:
     working_dir = cfg.get("working_dir", ".")
     manager = _get_terminal_manager(working_dir)
     data = await request.json()
-    import uuid as _uuid
-    session_id = data.get("id") or f"term-{_uuid.uuid4()}"
+    session_id = data.get("id") or f"term-{uuid.uuid4()}"
     cwd = data.get("cwd", working_dir)
     session = manager.create_session(session_id, cwd=cwd)
     return web.json_response({"id": session.id, "cwd": session.cwd, "shell": session.shell})
