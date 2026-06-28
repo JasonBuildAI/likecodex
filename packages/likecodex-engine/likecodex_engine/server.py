@@ -1620,33 +1620,28 @@ def _get_terminal_manager(working_dir: str):
 
 async def ide_terminal_create(request: web.Request) -> web.Response:
     """Create a new terminal session."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    manager = _get_terminal_manager(working_dir)
+    _, wd = _cfg_wd(request)
+    manager = _get_terminal_manager(wd)
     data = await request.json()
     session_id = data.get("id") or f"term-{uuid.uuid4()}"
-    cwd = data.get("cwd", working_dir)
+    cwd = data.get("cwd", wd)
     session = manager.create_session(session_id, cwd=cwd)
     return web.json_response({"id": session.id, "cwd": session.cwd, "shell": session.shell})
 
 
 async def ide_terminal_execute(request: web.Request) -> web.Response:
     """Execute a command and return output (non-streaming)."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    manager = _get_terminal_manager(working_dir)
+    _, wd = _cfg_wd(request)
+    manager = _get_terminal_manager(wd)
     data = await request.json()
-    session_id = data.get("sessionId", "term-default")
-    command = data.get("command", "")
-    result = await manager.execute_command(session_id, command)
+    result = await manager.execute_command(data.get("sessionId", "term-default"), data.get("command", ""))
     return web.json_response(result)
 
 
 async def ide_terminal_stream(request: web.Request) -> web.StreamResponse:
     """Execute a command with streaming output via SSE."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    manager = _get_terminal_manager(working_dir)
+    _, wd = _cfg_wd(request)
+    manager = _get_terminal_manager(wd)
     data = await request.json()
     session_id = data.get("sessionId", "term-default")
     command = data.get("command", "")
@@ -1666,16 +1661,8 @@ async def ide_terminal_stream(request: web.Request) -> web.StreamResponse:
     return response
 
 
-async def ide_terminal_suggest(request: web.Request) -> web.Response:
-    """AI command suggestion — natural language to shell command."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    data = await request.json()
-    description = data.get("description", "")
-
-    if not description:
-        return web.json_response({"command": "", "error": "Description required"}, status=400)
-
-    from likecodex_engine.llm.factory import create_provider
+def _create_terminal_llm(cfg: dict):
+    """Create an LLM provider for terminal AI assistant."""
     from likecodex_engine.terminal.ai_assistant import TerminalAIAssistant
 
     llm = create_provider(
@@ -1685,41 +1672,35 @@ async def ide_terminal_suggest(request: web.Request) -> web.Response:
         cfg.get("base_url"),
         thinking=False,
     )
-    assistant = TerminalAIAssistant(llm)
+    return TerminalAIAssistant(llm)
+
+
+async def ide_terminal_suggest(request: web.Request) -> web.Response:
+    """AI command suggestion — natural language to shell command."""
+    cfg, _ = _cfg_wd(request)
+    data = await request.json()
+    description = data.get("description", "")
+    if not description:
+        return web.json_response({"command": "", "error": "Description required"}, status=400)
+    assistant = _create_terminal_llm(cfg)
     command = await assistant.suggest_command(description)
     return web.json_response({"command": command})
 
 
 async def ide_terminal_diagnose(request: web.Request) -> web.Response:
     """AI error diagnosis for terminal commands."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
+    cfg, _ = _cfg_wd(request)
     data = await request.json()
-    command = data.get("command", "")
-    error_output = data.get("error", "")
-
-    from likecodex_engine.llm.factory import create_provider
-    from likecodex_engine.terminal.ai_assistant import TerminalAIAssistant
-
-    llm = create_provider(
-        cfg.get("provider", "deepseek"),
-        cfg.get("model", "deepseek-v4-flash"),
-        cfg.get("api_key"),
-        cfg.get("base_url"),
-        thinking=False,
-    )
-    assistant = TerminalAIAssistant(llm)
-    diagnosis = await assistant.diagnose_error(command, error_output)
+    assistant = _create_terminal_llm(cfg)
+    diagnosis = await assistant.diagnose_error(data.get("command", ""), data.get("error", ""))
     return web.json_response({"diagnosis": diagnosis})
 
 
 async def ide_terminal_close(request: web.Request) -> web.Response:
     """Close a terminal session."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    manager = _get_terminal_manager(working_dir)
+    _, wd = _cfg_wd(request)
     data = await request.json()
-    session_id = data.get("sessionId", "")
-    success = manager.close_session(session_id)
+    success = _get_terminal_manager(wd).close_session(data.get("sessionId", ""))
     return web.json_response({"success": success})
 
 
