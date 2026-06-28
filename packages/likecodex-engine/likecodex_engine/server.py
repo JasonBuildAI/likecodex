@@ -22,12 +22,13 @@ from likecodex_engine.agent.plan_state import PlanState
 from likecodex_engine.agent.planner import Planner
 from likecodex_engine.config_loader import engine_config_from_env
 from likecodex_engine.context.instruction import load_host_checks_from_dir
-from likecodex_engine.context.manager import ContextManager
+from likecodex_engine.context.manager import ContextManager, stable_json_dumps, stable_tool_calls_json
 from likecodex_engine.context.project_memory import load_project_memory
 from likecodex_engine.context.session_cache import SessionContextCache
 from likecodex_engine.context.session_resolver import session_id_for_dir
-from likecodex_engine.llm.base import LLMResponse
+from likecodex_engine.llm.base import LLMResponse, Message, Role
 from likecodex_engine.llm.cache_metrics import global_cache_metrics
+from likecodex_engine.llm.deepseek import DeepSeekProvider, DeepSeekUsage
 from likecodex_engine.llm.factory import create_provider, provider_from_config
 from likecodex_engine.mcp.loader import register_mcp_tools
 from likecodex_engine.memory.vector import VectorMemory
@@ -288,7 +289,6 @@ def _make_agent(
     def on_event(resp) -> None:
         metadata: dict = {"model": resp.model, **(resp.metadata or {})}
         if resp.event_type == "assistant" and resp.tool_calls:
-            from likecodex_engine.context.manager import stable_json_dumps, stable_tool_calls_json
 
             tool_payload = [
                 {
@@ -1021,10 +1021,7 @@ async def deepseek_session_cost(request: web.Request) -> web.Response:
         working_dir = cfg.get("working_dir", ".")
         session_id = session_id_for_dir(working_dir)
 
-    from likecodex_engine.llm.cache_metrics import global_cache_metrics
-
     metrics = global_cache_metrics()
-    from likecodex_engine.llm.deepseek import DeepSeekUsage
 
     usage = DeepSeekUsage(
         prompt_tokens=metrics.total_hit_tokens + metrics.total_miss_tokens,
@@ -1067,7 +1064,6 @@ async def deepseek_diagnostics(request: web.Request) -> web.Response:
     context = _get_or_create_context(sid, store)
 
     from likecodex_engine.context.cache_shape import capture_prefix_shape
-    from likecodex_engine.llm.deepseek import DeepSeekProvider
 
     system_prompt = DeepSeekProvider.load_system_prompt()
     has_custom_prompt = bool(system_prompt)
@@ -1150,8 +1146,6 @@ async def inline_edit(request: web.Request) -> web.Response:
     if full_content:
         snippet = textwrap.dedent(full_content)
         context_section = f"## Full file context ({language}):\n```{language}\n{snippet}\n```\n\n"
-
-    from likecodex_engine.llm.base import Message, Role
 
     messages = [
         Message(role=Role.SYSTEM, content=INLINE_EDIT_SYSTEM),
@@ -1878,8 +1872,6 @@ async def ide_extensions_toggle(request: web.Request) -> web.Response:
 
 async def warmup_deepseek_cache() -> None:
     """Background warmup: prime DeepSeek prefix cache on startup."""
-    from likecodex_engine.llm.deepseek import DeepSeekProvider
-
     try:
         system_prompt = DeepSeekProvider.load_system_prompt()
         if not system_prompt:
@@ -1888,8 +1880,6 @@ async def warmup_deepseek_cache() -> None:
             model="deepseek-v4-flash",
             api_key=os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("LIKECODEX_LLM_API_KEY"),
         )
-        from likecodex_engine.llm.base import Message, Role
-
         warmup_msgs = [
             Message(role=Role.SYSTEM, content=system_prompt),
             Message(role=Role.USER, content="."),
