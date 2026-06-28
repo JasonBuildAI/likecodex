@@ -559,8 +559,11 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Serve) => {
             let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
-            let status = Command::new("cargo")
-                .args(["run", "-p", "likecodex-server"])
+            // Use pre-compiled binary instead of cargo run for production
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let server_bin = supervisor::resolve_server_binary(&cwd)
+                .context("likecodex-server binary not found. Build with: cargo build -p likecodex-server")?;
+            let status = Command::new(&server_bin)
                 .status()
                 .context("failed to spawn likecodex-server")?;
             if !status.success() {

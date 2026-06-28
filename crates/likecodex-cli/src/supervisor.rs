@@ -127,7 +127,7 @@ fn spawn_server(
         .with_context(|| format!("failed to spawn server binary at {}", binary.display()))
 }
 
-fn resolve_server_binary(project_root: &Path) -> Result<PathBuf> {
+pub fn resolve_server_binary(project_root: &Path) -> Result<PathBuf> {
     if let Ok(path) = std::env::var("LIKECODEX_SERVER_BIN") {
         let p = PathBuf::from(path);
         if p.exists() {
