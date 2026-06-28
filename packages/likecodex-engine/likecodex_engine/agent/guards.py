@@ -155,19 +155,14 @@ def classify_turn_outcome(
     guard = loop_guard or LoopGuard()
     if blocked:
         err = guard.extract_error(result) or "blocked"
-        return ToolTurnOutcome(
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            output=result,
-            error_msg=err,
-            blocked=True,
-        )
-    error_msg = guard.error_from_result(result) or ""
+    else:
+        err = guard.error_from_result(result) or ""
     return ToolTurnOutcome(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
         output=result,
-        error_msg=error_msg,
+        error_msg=err,
+        blocked=blocked,
     )
 
 
