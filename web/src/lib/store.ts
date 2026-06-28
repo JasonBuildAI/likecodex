@@ -241,7 +241,7 @@ export const useAppStore = create<AppState>((set) => ({
       const messages = [...state.messages];
       const last = messages[messages.length - 1];
       if (last && last.role === 'assistant') {
-        last.content += content;
+        messages[messages.length - 1] = { ...last, content: last.content + content };
       } else {
         messages.push({
           id: `assistant-${Date.now()}`,
