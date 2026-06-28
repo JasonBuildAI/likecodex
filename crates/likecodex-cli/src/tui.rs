@@ -28,6 +28,20 @@ fn format_retry_message(reason: &str, attempt: i32, max: i32) -> String {
     format!("{label} — retrying ({attempt}/{max})")
 }
 
+/// RAII guard that re-enables raw mode on drop.
+struct RawModeGuard;
+impl RawModeGuard {
+    fn disable() -> Result<Self> {
+        crossterm::terminal::disable_raw_mode()?;
+        Ok(Self)
+    }
+}
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::enable_raw_mode();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DisplayMessage {
     pub role: String,
@@ -436,12 +450,12 @@ async fn run_tui_loop<B: Backend>(
                         let request_id = parsed["request_id"].as_str().unwrap_or("");
                         let tool = parsed["tool"].as_str().unwrap_or("tool");
                         if !request_id.is_empty() {
-                            crossterm::terminal::disable_raw_mode()?;
+                            let _guard = RawModeGuard::disable()?;
                             let decision = interaction::request_permission_with_scope(
                                 &format!("Allow {tool}?"),
                                 None,
                             )?;
-                            crossterm::terminal::enable_raw_mode()?;
+                            drop(_guard);
                             let resp = client
                                 .post(format!("{engine_url}/permissions/{request_id}/respond"))
                                 .json(&serde_json::json!({
@@ -471,10 +485,10 @@ async fn run_tui_loop<B: Backend>(
                             })
                             .unwrap_or_default();
                         if !request_id.is_empty() && !options.is_empty() {
-                            crossterm::terminal::disable_raw_mode()?;
+                            let _guard = RawModeGuard::disable()?;
                             let picks =
                                 interaction::ask_select(question, &options, multi)?;
-                            crossterm::terminal::enable_raw_mode()?;
+                            drop(_guard);
                             let answers: Vec<serde_json::Value> = picks
                                 .into_iter()
                                 .map(|i| {
