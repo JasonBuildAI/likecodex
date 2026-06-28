@@ -251,32 +251,24 @@ class ToolRegistry:
             for tool_name in added:
                 self._hidden.discard(tool_name)
                 enabled.append(tool_name)
-        elif source == "lsp":
-            for tool_name in list(self._tools.keys()):
-                if tool_name.startswith("lsp_"):
-                    self._hidden.discard(tool_name)
-                    enabled.append(tool_name)
-        elif source == "web_fetch":
-            for tool_name in ("web_fetch", "web_search"):
-                self._hidden.discard(tool_name)
-                if tool_name in self._tools:
-                    enabled.append(tool_name)
-        elif source == "skills":
-            self._hidden.discard("run_skill")
-            if "run_skill" in self._tools:
-                enabled.append("run_skill")
-        elif source == "task":
-            for tool_name in ("task", "parallel_tasks"):
-                self._hidden.discard(tool_name)
-                if tool_name in self._tools:
-                    enabled.append(tool_name)
-        elif source == "deepseek":
-            for tool_name in list(self._tools.keys()):
-                if tool_name.startswith("deepseek_"):
-                    self._hidden.discard(tool_name)
-                    enabled.append(tool_name)
         else:
-            return json.dumps({"error": f"Unknown source '{source}'"})
+            # Map source to either a prefix or a fixed set of tool names.
+            _SOURCE_PREFIX = {"lsp": "lsp_", "deepseek": "deepseek_"}
+            _SOURCE_TOOLS = {
+                "web_fetch": ("web_fetch", "web_search"),
+                "skills": ("run_skill",),
+                "task": ("task", "parallel_tasks"),
+            }
+            prefix = _SOURCE_PREFIX.get(source)
+            tool_names = _SOURCE_TOOLS.get(source)
+            if prefix is not None:
+                tool_names = tuple(n for n in self._tools if n.startswith(prefix))
+            if tool_names is None:
+                return json.dumps({"error": f"Unknown source '{source}'"})
+            for tool_name in tool_names:
+                self._hidden.discard(tool_name)
+                if tool_name in self._tools:
+                    enabled.append(tool_name)
 
         return json.dumps({"source": source, "enabled_tools": enabled})
 
