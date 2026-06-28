@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -204,8 +205,6 @@ def _run_web(port: int) -> None:
     if not _check_engine_running(port):
         console.print("[yellow]Starting LikeCodex engine...[/yellow]")
         proc = _start_engine_in_background(port)
-        import time
-
         time.sleep(2)
 
     url = f"http://127.0.0.1:{port}"
@@ -216,8 +215,6 @@ def _run_web(port: int) -> None:
     console.print("Press Ctrl+C to stop.")
     try:
         while True:
-            import time
-
             time.sleep(1)
     except KeyboardInterrupt:
         console.print("\nShutting down...")
@@ -239,8 +236,6 @@ def _start_engine_in_background(port: int) -> None:
         stderr=subprocess.DEVNULL,
     )
     # Wait a bit for startup
-    import time
-
     for _ in range(15):
         if _check_engine_running(port):
             return proc
