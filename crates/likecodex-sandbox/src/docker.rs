@@ -86,7 +86,7 @@ impl DockerExecutor {
         let working_dir = working_dir
             .as_ref()
             .canonicalize()
-            .unwrap_or_else(|_| working_dir.as_ref().to_path_buf());
+            .context("failed to canonicalize working directory for docker mount")?;
         let start = std::time::Instant::now();
 
         let mut docker_args = vec![
@@ -110,7 +110,9 @@ impl DockerExecutor {
         }
 
         // Mount the project directory. By default read-write for the workspace.
-        let mount = format!("{}:/workspace", working_dir.display());
+        let mount_path = working_dir.to_string_lossy();
+        // Quote path to handle spaces/special characters in Docker -v argument
+        let mount = format!("\"{}\":/workspace", mount_path);
         docker_args.push("-v".to_string());
         docker_args.push(mount);
         docker_args.push("-w".to_string());
