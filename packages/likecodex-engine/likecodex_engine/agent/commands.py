@@ -21,6 +21,28 @@ _AT_RE = re.compile(r"(?<!\S)@([\w./\\-]+)")
 _MAX_REF_CHARS = 12_000
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".next", "target", "dist", "build"}
 
+_EXACT_COMMANDS: dict[str, ExpandedPrompt] = {}  # populated lazily in expand_prompt
+
+
+def _build_exact_commands() -> dict[str, ExpandedPrompt]:
+    """Build dispatch table for exact-match slash commands."""
+    return {
+        "/plan": ExpandedPrompt(
+            prompt="Enter plan mode: explore read-only, then produce an execution plan.",
+            plan_mode_enter=True,
+            direct_reply=(
+                "Plan mode enabled. Write tools and risky shell commands are blocked until you exit plan mode."
+            ),
+        ),
+        "/exit_plan approve": ExpandedPrompt(
+            prompt="Approve exiting plan mode.",
+            plan_mode_exit_approve=True,
+            direct_reply="Plan mode disabled. Write tools are available again.",
+        ),
+        "/goal clear": ExpandedPrompt(prompt="/goal clear", goal_clear=True, direct_reply="Active goal cleared."),
+        "/goal --clear": ExpandedPrompt(prompt="/goal --clear", goal_clear=True, direct_reply="Active goal cleared."),
+    }
+
 
 @dataclass
 class ExpandedPrompt:
@@ -114,21 +136,9 @@ def expand_prompt(prompt: str, working_dir: str | Path) -> ExpandedPrompt:
             compact_focus=focus,
         )
 
-    if stripped == "/plan":
-        return ExpandedPrompt(
-            prompt="Enter plan mode: explore read-only, then produce an execution plan.",
-            plan_mode_enter=True,
-            direct_reply=(
-                "Plan mode enabled. Write tools and risky shell commands are blocked until you exit plan mode."
-            ),
-        )
-
-    if stripped == "/exit_plan approve":
-        return ExpandedPrompt(
-            prompt="Approve exiting plan mode.",
-            plan_mode_exit_approve=True,
-            direct_reply="Plan mode disabled. Write tools are available again.",
-        )
+    exact = _build_exact_commands().get(stripped)
+    if exact is not None:
+        return exact
 
     if stripped == "/exit_plan" or stripped.startswith("/exit_plan "):
         plan_text = stripped.replace("/exit_plan", "").strip()
@@ -139,9 +149,6 @@ def expand_prompt(prompt: str, working_dir: str | Path) -> ExpandedPrompt:
                 "Plan exit requested. Review the plan summary, then send `/exit_plan approve` to leave plan mode."
             ),
         )
-
-    if stripped == "/goal clear" or stripped == "/goal --clear":
-        return ExpandedPrompt(prompt=prompt, goal_clear=True, direct_reply="Active goal cleared.")
 
     if stripped.startswith("/goal"):
         rest = stripped.removeprefix("/goal").strip()
