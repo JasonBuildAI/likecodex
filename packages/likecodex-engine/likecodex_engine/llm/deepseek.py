@@ -217,6 +217,28 @@ class DeepSeekProvider(LLMProvider):
             body["reasoning_effort"] = self.reasoning_effort
         return body
 
+    def _build_params(
+        self,
+        messages: list[Message],
+        tools: list[dict[str, Any]] | None,
+        temperature: float,
+        max_tokens: int,
+        *,
+        stream: bool = False,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "model": self.model,
+            "messages": self._to_openai_messages(messages),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            **({"stream": True, "stream_options": {"include_usage": True}} if stream else {}),
+            "extra_body": self._extra_body(),
+        }
+        if tools:
+            params["tools"] = tools
+            params["tool_choice"] = "auto"
+        return params
+
     async def complete(
         self,
         messages: list[Message],
@@ -224,16 +246,7 @@ class DeepSeekProvider(LLMProvider):
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ) -> LLMResponse:
-        params: dict[str, Any] = {
-            "model": self.model,
-            "messages": self._to_openai_messages(messages),
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "extra_body": self._extra_body(),
-        }
-        if tools:
-            params["tools"] = tools
-            params["tool_choice"] = "auto"
+        params = self._build_params(messages, tools, temperature, max_tokens)
 
         resp = await complete_with_reconnect(lambda: self.client.chat.completions.create(**params))
         choice = resp.choices[0]
@@ -266,18 +279,7 @@ class DeepSeekProvider(LLMProvider):
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ) -> AsyncIterator[LLMResponse]:
-        params: dict[str, Any] = {
-            "model": self.model,
-            "messages": self._to_openai_messages(messages),
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-            "extra_body": self._extra_body(),
-        }
-        if tools:
-            params["tools"] = tools
-            params["tool_choice"] = "auto"
+        params = self._build_params(messages, tools, temperature, max_tokens, stream=True)
 
         async def create_stream():
             return await self.client.chat.completions.create(**params)
