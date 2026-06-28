@@ -131,10 +131,10 @@ class BatchRule:
 
     @staticmethod
     def _extract_path(arguments: dict[str, Any]) -> str | None:
-        for key in ("path", "file_path", "source_path", "pattern"):
-            if key in arguments:
-                return str(arguments[key])
-        return None
+        return next(
+            (str(arguments[k]) for k in ("path", "file_path", "source_path", "pattern") if k in arguments),
+            None,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -279,10 +279,7 @@ class AutoApproveRules:
         return False
 
     def get_rule(self, name: str) -> BatchRule | None:
-        for rule in self._rules:
-            if rule.name == name:
-                return rule
-        return None
+        return next((r for r in self._rules if r.name == name), None)
 
     # -- Evaluation ---------------------------------------------------------
 
@@ -390,22 +387,21 @@ class AutoApproveRules:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AutoApproveRules:
         """Reconstruct from a serialised dict."""
-        rules: list[BatchRule] = []
-        for rd in data.get("rules", []):
-            rules.append(
-                BatchRule(
-                    name=rd["name"],
-                    tool_pattern=rd.get("tool_pattern", "*"),
-                    command_pattern=rd.get("command_pattern"),
-                    path_pattern=rd.get("path_pattern"),
-                    action=RuleAction(rd.get("action", "approve")),
-                    scope=RuleScope(rd.get("scope", "global")),
-                    priority=rd.get("priority", 0),
-                    enabled=rd.get("enabled", True),
-                    description=rd.get("description", ""),
-                    hit_count=rd.get("hit_count", 0),
-                )
+        rules = [
+            BatchRule(
+                name=rd["name"],
+                tool_pattern=rd.get("tool_pattern", "*"),
+                command_pattern=rd.get("command_pattern"),
+                path_pattern=rd.get("path_pattern"),
+                action=RuleAction(rd.get("action", "approve")),
+                scope=RuleScope(rd.get("scope", "global")),
+                priority=rd.get("priority", 0),
+                enabled=rd.get("enabled", True),
+                description=rd.get("description", ""),
+                hit_count=rd.get("hit_count", 0),
             )
+            for rd in data.get("rules", [])
+        ]
         return cls(rules=rules)
 
     # -- Internals ----------------------------------------------------------
