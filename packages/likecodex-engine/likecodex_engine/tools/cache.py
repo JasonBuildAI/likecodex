@@ -17,7 +17,7 @@ class ToolResultCache:
     """
 
     def __init__(self, max_size: int = 100, default_ttl: float = 5.0) -> None:
-        self._cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
+        self._cache: OrderedDict[str, tuple[float, str, str]] = OrderedDict()
         self._max_size = max_size
         self._default_ttl = default_ttl
 
@@ -31,7 +31,7 @@ class ToolResultCache:
         if key not in self._cache:
             return None
 
-        expire_at, result = self._cache[key]
+        expire_at, result, _name = self._cache[key]
         if time.time() > expire_at:
             del self._cache[key]
             return None
@@ -51,7 +51,7 @@ class ToolResultCache:
         key = self._make_key(tool_name, args)
         expire_at = time.time() + (ttl or self._default_ttl)
 
-        self._cache[key] = (expire_at, result)
+        self._cache[key] = (expire_at, result, tool_name)
         self._cache.move_to_end(key)
 
         # Evict oldest items if over max size
@@ -71,8 +71,8 @@ class ToolResultCache:
 
         to_delete = [
             k
-            for k in self._cache
-            if json.loads(k).get("name") == tool_name
+            for k, (_expire, _result, name) in self._cache.items()
+            if name == tool_name
         ]
         for k in to_delete:
             del self._cache[k]
