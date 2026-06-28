@@ -14,6 +14,20 @@ from likecodex_engine.llm.tool_repair import merge_tool_calls
 MAX_STREAM_RECOVERIES = 1
 
 
+def _build_response(
+    content: str,
+    tool_calls: list[ToolCall],
+    llm: LLMProvider,
+    usage: dict[str, Any] | None,
+) -> LLMResponse:
+    return LLMResponse(
+        content=content,
+        tool_calls=tool_calls,
+        model=getattr(llm, "model", ""),
+        usage=usage,
+    )
+
+
 def stream_recovery_message(has_partial_text: bool, had_partial_tool: bool) -> str:
     if had_partial_tool:
         return (
@@ -76,12 +90,7 @@ async def stream_model_turn(
                     content_parts.append(chunk.content)
     except StreamInterruptedError:
         partial_text = "".join(content_parts)
-        response = LLMResponse(
-            content=partial_text,
-            tool_calls=tool_calls,
-            model=getattr(llm, "model", ""),
-            usage=usage,
-        )
+        response = _build_response(partial_text, tool_calls, llm, usage)
         yield StreamTurnResult(
             response=merge_tool_calls(response),
             interrupted=True,
@@ -107,12 +116,7 @@ async def stream_model_turn(
         )
         return
 
-    response = LLMResponse(
-        content="".join(content_parts),
-        tool_calls=tool_calls,
-        model=getattr(llm, "model", ""),
-        usage=usage,
-    )
+    response = _build_response("".join(content_parts), tool_calls, llm, usage)
     yield StreamTurnResult(
         response=merge_tool_calls(response),
         partial_tool_started=partial_tool_started,
