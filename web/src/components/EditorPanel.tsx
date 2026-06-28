@@ -139,6 +139,10 @@ export function EditorPanel() {
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
   const ghostTextRef = useRef<GhostTextManager | null>(null);
+  const activeFileRef = useRef(activeFile);
+  activeFileRef.current = activeFile;
+  const inlineEditVisibleRef = useRef(inlineEdit.visible);
+  inlineEditVisibleRef.current = inlineEdit.visible;
 
   // ── Inline edit state ────────────────────────────────────────────────
   const [inlineEdit, setInlineEdit] = useState<InlineEditState>({
@@ -155,27 +159,29 @@ export function EditorPanel() {
   const activeFile = openFiles.find((f) => f.path === activeFilePath) || null;
 
   // Keyboard shortcut: Ctrl+S to save
+  // Stable handler: reads latest values via refs to avoid unbind/rebind cycle
   const handleKeyDown = useCallback(
     async (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
-        if (!activeFile || !activeFile.modified || saving) return;
+        const file = activeFileRef.current;
+        if (!file || !file.modified) return;
         setSaving(true);
-        const ok = await writeWorkspaceFile(activeFile.path, activeFile.content);
+        const ok = await writeWorkspaceFile(/* path */ file.path, /* content */ file.content);
         if (ok) {
-          markFileSaved(activeFile.path);
-          addToast({ type: 'success', message: `Saved ${activeFile.name}` });
+          markFileSaved(file.path);
+          addToast({ type: 'success', message: `Saved ${file.name}` });
         } else {
-          addToast({ type: 'error', message: `Failed to save ${activeFile.name}` });
+          addToast({ type: 'error', message: `Failed to save ${file.name}` });
         }
         setSaving(false);
       }
       // Escape to close inline edit
-      if (e.key === 'Escape' && inlineEdit.visible) {
+      if (e.key === 'Escape' && inlineEditVisibleRef.current) {
         setInlineEdit((prev) => ({ ...prev, visible: false }));
       }
     },
-    [activeFile, saving, markFileSaved, addToast, inlineEdit.visible]
+    [markFileSaved, addToast]
   );
 
   useEffect(() => {
