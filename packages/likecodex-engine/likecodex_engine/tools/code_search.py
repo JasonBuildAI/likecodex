@@ -133,14 +133,14 @@ class CodeSearchTools:
             return json.dumps({"error": str(e)})
 
     def _load_gitignore(self) -> set[str]:
-        patterns: set[str] = set()
         gi = self.working_dir / ".gitignore"
-        if gi.exists():
-            for line in gi.read_text(encoding="utf-8", errors="replace").splitlines():
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    patterns.add(line.rstrip("/"))
-        return patterns
+        if not gi.exists():
+            return set()
+        return {
+            line.strip().rstrip("/")
+            for line in gi.read_text(encoding="utf-8", errors="replace").splitlines()
+            if (line := line.strip()) and not line.startswith("#")
+        }
 
     def _gitignore_skip(self, path: Path) -> bool:
         rel = path.relative_to(self.working_dir)
@@ -232,11 +232,10 @@ class CodeSearchTools:
 
     async def codegraph_callers(self, name: str, max_results: int = 50) -> str:
         graph = load_or_build(self.working_dir)
-        sites = graph.references.get(name, [])[:max_results]
-        callers = []
-        for site in sites:
-            file_part, _, line_part = site.rpartition(":")
-            callers.append({"path": file_part, "line": int(line_part) if line_part.isdigit() else 0})
+        callers = [
+            {"path": site.rpartition(":")[0], "line": int(site.rpartition(":")[2]) if site.rpartition(":")[2].isdigit() else 0}
+            for site in graph.references.get(name, [])[:max_results]
+        ]
         return json.dumps({"symbol": name, "callers": callers, "count": len(callers)})
 
     def codegraph_reindex_schema(self) -> dict[str, Any]:
