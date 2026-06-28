@@ -153,14 +153,16 @@ def _tool_call_id(tc: dict[str, Any]) -> str:
     return str(tc.get("id") or "")
 
 
+def _get_fn(tc: dict[str, Any]) -> dict[str, Any]:
+    return tc.get("function") or {}
+
+
 def _tool_call_name(tc: dict[str, Any]) -> str:
-    fn = tc.get("function") or {}
-    return str(fn.get("name") or "")
+    return str(_get_fn(tc).get("name") or "")
 
 
 def _tool_call_args(tc: dict[str, Any]) -> str:
-    fn = tc.get("function") or {}
-    args = fn.get("arguments", "{}")
+    args = _get_fn(tc).get("arguments", "{}")
     if isinstance(args, dict):
         return stable_json_dumps(args)
     return str(args or "{}")
@@ -249,6 +251,24 @@ def _backfill_tool_call_names(calls: list[dict[str, Any]], results: list[Message
     return out
 
 
+def _interrupted_msg(call_id: str, name: str | None) -> Message:
+    return Message(
+        role=Role.TOOL,
+        content=INTERRUPTED_TOOL_RESULT,
+        tool_call_id=call_id,
+        name=name,
+    )
+
+
+def _interrupted_msg(call_id: str, name: str | None) -> Message:
+    return Message(
+        role=Role.TOOL,
+        content=INTERRUPTED_TOOL_RESULT,
+        tool_call_id=call_id,
+        name=name,
+    )
+
+
 def _pair_tool_results(calls: list[dict[str, Any]], avail: list[Message]) -> list[Message]:
     out: list[Message] = []
     if _id_distinct(calls):
@@ -258,14 +278,7 @@ def _pair_tool_results(calls: list[dict[str, Any]], avail: list[Message]) -> lis
             if call_id in by_id:
                 out.append(by_id[call_id])
             else:
-                out.append(
-                    Message(
-                        role=Role.TOOL,
-                        content=INTERRUPTED_TOOL_RESULT,
-                        tool_call_id=call_id,
-                        name=_tool_call_name(tc) or None,
-                    )
-                )
+                out.append(_interrupted_msg(call_id, _tool_call_name(tc) or None))
         return out
     for idx, tc in enumerate(calls):
         call_id = _tool_call_id(tc)
@@ -273,14 +286,7 @@ def _pair_tool_results(calls: list[dict[str, Any]], avail: list[Message]) -> lis
             result = avail[idx].model_copy(update={"tool_call_id": call_id or avail[idx].tool_call_id})
             out.append(result)
         else:
-            out.append(
-                Message(
-                    role=Role.TOOL,
-                    content=INTERRUPTED_TOOL_RESULT,
-                    tool_call_id=call_id,
-                    name=_tool_call_name(tc) or None,
-                )
-            )
+            out.append(_interrupted_msg(call_id, _tool_call_name(tc) or None))
     return out
 
 
