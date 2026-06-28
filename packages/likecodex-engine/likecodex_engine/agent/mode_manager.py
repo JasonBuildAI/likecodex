@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Callable
 
+from likecodex_engine.tools.cache import READ_TOOLS as _CACHE_READ_TOOLS, WRITE_TOOLS as _CACHE_WRITE_TOOLS
+
 logger = logging.getLogger(__name__)
 
 
@@ -105,17 +107,8 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset({
 })
 
 # Tools that mutate state — require elevated permission.
-WRITE_TOOLS: frozenset[str] = frozenset({
-    "write_file",
-    "edit_file",
-    "multi_edit",
-    "move_file",
-    "delete_range",
-    "delete_symbol",
-    "notebook_edit",
-    "git_commit",
-    "run_command",
-})
+# Reuse the canonical set from cache.py (frozenset for immutability).
+WRITE_TOOLS: frozenset[str] = frozenset(_CACHE_WRITE_TOOLS)
 
 # Especially dangerous operations that force Manual mode.
 DANGEROUS_TOOLS: frozenset[str] = frozenset({
