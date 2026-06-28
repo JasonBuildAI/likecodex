@@ -183,25 +183,26 @@ class CacheFirstCompactor:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return path
 
+    @staticmethod
+    def _is_pinned(m: Message) -> bool:
+        """Check if a user message should be pinned (not folded)."""
+        if SUMMARY_TAG_OPEN in m.content:
+            return True
+        if m.content.startswith(CONTEXT_PREFIX):
+            return True
+        if len(m.content) > MAX_PINNED_USER_CHARS:
+            return False
+        if m.content.startswith("[Plan]\n"):
+            return False
+        return True
+
     def split_compactable(self, log: list[Message]) -> tuple[list[Message], list[Message]]:
         """Split pinned user turns vs foldable assistant/tool work."""
         pinned: list[Message] = []
         foldable: list[Message] = []
         for m in log:
-            if m.role == Role.USER:
-                if (
-                    SUMMARY_TAG_OPEN in m.content
-                    or (
-                        len(m.content) <= MAX_PINNED_USER_CHARS
-                        and not m.content.startswith("[Plan]\n")
-                        and not m.content.startswith(CONTEXT_PREFIX)
-                    )
-                    or m.content.startswith(CONTEXT_PREFIX)
-                    and SUMMARY_TAG_OPEN in m.content
-                ):
-                    pinned.append(m)
-                else:
-                    foldable.append(m)
+            if m.role == Role.USER and self._is_pinned(m):
+                pinned.append(m)
             else:
                 foldable.append(m)
         return pinned, foldable
