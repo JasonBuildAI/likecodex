@@ -80,29 +80,14 @@ _PERMISSION_TO_MODE: dict[PermissionLevel, AgentMode] = {
 # ---------------------------------------------------------------------------
 
 # Tools that never mutate state — always safe in any mode.
-READ_ONLY_TOOLS: frozenset[str] = frozenset({
-    "read_file",
-    "list_dir",
-    "ls",
-    "glob",
-    "search_files",
-    "grep_files",
-    "git_status",
-    "git_diff",
-    "git_log",
-    "git_branch",
-    "web_fetch",
-    "web_search",
+# Extend cache.READ_TOOLS with mode-manager-specific extras.
+READ_ONLY_TOOLS: frozenset[str] = frozenset(_CACHE_READ_TOOLS) | frozenset({
     "history",
     "memory_search",
     "memory",
     "code_index",
     "ask",
-    "lsp_hover",
     "lsp_completion",
-    "lsp_definition",
-    "lsp_references",
-    "lsp_diagnostics",
     "lsp_symbols",
 })
 
