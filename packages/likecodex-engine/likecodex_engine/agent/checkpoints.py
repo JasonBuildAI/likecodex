@@ -67,6 +67,15 @@ class CheckpointManager:
     def _ensure(self) -> None:
         (self.root / "blobs").mkdir(parents=True, exist_ok=True)
 
+    def _resolve_in_workspace(self, rel_path: str) -> Path | None:
+        """Resolve a relative path, returning None if it escapes the workspace."""
+        target = (self.working_dir / rel_path).resolve()
+        try:
+            target.relative_to(self.working_dir)
+            return target
+        except ValueError:
+            return None
+
     def snapshot(self, paths: list[str], label: str = "") -> Checkpoint | None:
         """Snapshot the given paths (relative to working dir). Returns the checkpoint."""
         if not paths:
@@ -74,10 +83,8 @@ class CheckpointManager:
         self._ensure()
         checkpoint = Checkpoint(id=uuid.uuid4().hex[:12], label=label, created_at=time.time())
         for rel in paths:
-            target = (self.working_dir / rel).resolve()
-            try:
-                target.relative_to(self.working_dir)
-            except ValueError:
+            target = self._resolve_in_workspace(rel)
+            if target is None:
                 continue  # never snapshot outside the workspace
             if target.exists() and target.is_file():
                 blob_name = f"{checkpoint.id}_{uuid.uuid4().hex[:8]}.blob"
@@ -118,10 +125,8 @@ class CheckpointManager:
         restored: list[str] = []
         removed: list[str] = []
         for state in checkpoint.files:
-            target = (self.working_dir / state.path).resolve()
-            try:
-                target.relative_to(self.working_dir)
-            except ValueError:
+            target = self._resolve_in_workspace(state.path)
+            if target is None:
                 continue
             if state.existed and state.blob:
                 blob = self.root / "blobs" / state.blob
