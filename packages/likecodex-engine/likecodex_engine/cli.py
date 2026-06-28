@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 
 
@@ -268,8 +269,6 @@ def _find_engine_root() -> str:
 
 
 def _generate_session_id() -> str:
-    import uuid
-
     return uuid.uuid4().hex[:12]
 
 
