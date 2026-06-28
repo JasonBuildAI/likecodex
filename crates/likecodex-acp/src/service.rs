@@ -115,7 +115,9 @@ impl SessionFactory {
                             }
                             if let Ok(output) = serde_json::from_str::<Value>(data) {
                                 let event = map_engine_output_to_event(session_id, &output);
-                                let _ = self.event_bus.emit(event).ok();
+                                if let Err(e) = self.event_bus.emit(event) {
+                                    warn!("event bus emit failed: {e}");
+                                }
                             }
                         }
                     }
