@@ -69,6 +69,10 @@ def capture_prefix_shape(
     )
 
 
+def _usage_int(usage: dict[str, Any] | None, key: str) -> int:
+    return int((usage or {}).get(key, 0))
+
+
 def compare_prefix_shape(
     previous: PrefixShape | None,
     current: PrefixShape,
@@ -83,8 +87,8 @@ def compare_prefix_shape(
     if prev.log_rewrite_version != current.log_rewrite_version:
         reasons.append("log_rewrite")
 
-    hit = int((usage or {}).get("prompt_cache_hit_tokens", 0))
-    miss = int((usage or {}).get("prompt_cache_miss_tokens", 0))
+    hit = _usage_int(usage, "prompt_cache_hit_tokens")
+    miss = _usage_int(usage, "prompt_cache_miss_tokens")
     return CacheDiagnostics(
         prefix_hash=current.prefix_hash,
         prefix_changed=bool(reasons),
@@ -102,14 +106,14 @@ def format_usage_line(usage: dict[str, Any] | None, diagnostics: CacheDiagnostic
     """Render per-turn token/cache summary like Reasonix TextSink."""
     if not usage:
         return ""
-    total = int(usage.get("total_tokens", 0))
+    total = _usage_int(usage, "total_tokens")
     if total <= 0:
         return ""
 
-    prompt = int(usage.get("prompt_tokens", 0))
-    completion = int(usage.get("completion_tokens", 0))
-    hit = int(usage.get("prompt_cache_hit_tokens", 0))
-    miss = int(usage.get("prompt_cache_miss_tokens", 0))
+    prompt = _usage_int(usage, "prompt_tokens")
+    completion = _usage_int(usage, "completion_tokens")
+    hit = _usage_int(usage, "prompt_cache_hit_tokens")
+    miss = _usage_int(usage, "prompt_cache_miss_tokens")
     if miss == 0 and prompt > hit:
         miss = prompt - hit
 
@@ -117,7 +121,7 @@ def format_usage_line(usage: dict[str, Any] | None, diagnostics: CacheDiagnostic
     if prompt > 0:
         cache_col = f" ({hit} cached / {miss} new)"
 
-    reasoning = int(usage.get("reasoning_tokens", 0))
+    reasoning = _usage_int(usage, "reasoning_tokens")
     reasoning_col = f" ({reasoning} reasoning)" if reasoning > 0 else ""
 
     churn = ""
