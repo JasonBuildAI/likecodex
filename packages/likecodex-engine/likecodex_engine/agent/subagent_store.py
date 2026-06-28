@@ -59,6 +59,11 @@ class SubagentRun:
 class SubagentStore:
     """File-backed sub-agent transcript store under `.likecodex/subagents/`."""
 
+    _INTERRUPTED_MSG = (
+        "was interrupted by a previous shutdown or crash and cannot be "
+        "continued or forked; run a fresh subagent instead"
+    )
+
     def __init__(self, workspace_root: str) -> None:
         self.root = Path(workspace_root).resolve()
         self.dir = self.root / ".likecodex" / "subagents"
@@ -79,6 +84,10 @@ class SubagentStore:
     def _unlock(self, ref: str) -> None:
         self._locked.discard(ref)
 
+    def _make_release(self, ref: str) -> Any:
+        """Create a release callback for the given ref."""
+        return lambda: self._unlock(ref)
+
     def prepare_fresh(self, spec: SubagentSpec) -> SubagentRun:
         ref = _new_ref()
         now = _now_iso()
@@ -95,11 +104,7 @@ class SubagentStore:
         )
         self._write_meta(meta)
         self._lock(ref)
-
-        def release() -> None:
-            self._unlock(ref)
-
-        return SubagentRun(ref=ref, meta=meta, _release=release)
+        return SubagentRun(ref=ref, meta=meta, _release=self._make_release(ref))
 
     def prepare_continue(self, ref: str, spec: SubagentSpec) -> SubagentRun:
         meta = self._load_meta(ref)
@@ -107,10 +112,7 @@ class SubagentStore:
         if meta.status == "failed":
             raise ValueError(f"subagent {ref!r} failed and cannot be continued")
         if meta.status == "interrupted":
-            raise ValueError(
-                f"subagent {ref!r} was interrupted by a previous shutdown or crash and cannot be "
-                "continued or forked; run a fresh subagent instead"
-            )
+            raise ValueError(f"subagent {ref!r} {self._INTERRUPTED_MSG}")
         if meta.parent_session and spec.parent_session and meta.parent_session != spec.parent_session:
             raise ValueError(f"subagent {ref!r} belongs to another parent session; use fork_from instead")
         messages = self._load_messages(ref)
@@ -118,21 +120,14 @@ class SubagentStore:
         meta.updated_at = _now_iso()
         self._write_meta(meta)
         self._lock(ref)
-
-        def release() -> None:
-            self._unlock(ref)
-
-        return SubagentRun(ref=ref, meta=meta, messages=messages, _release=release)
+        return SubagentRun(ref=ref, meta=meta, messages=messages, _release=self._make_release(ref))
 
     def prepare_fork(self, ref: str, spec: SubagentSpec) -> SubagentRun:
         source = self._load_meta(ref)
         if source.status == "failed":
             raise ValueError(f"subagent {ref!r} failed and cannot be forked")
         if source.status == "interrupted":
-            raise ValueError(
-                f"subagent {ref!r} was interrupted by a previous shutdown or crash and cannot be "
-                "continued or forked; run a fresh subagent instead"
-            )
+            raise ValueError(f"subagent {ref!r} {self._INTERRUPTED_MSG}")
         messages = self._load_messages(ref)
         fork = self.prepare_fresh(spec)
         fork.messages = list(messages)
