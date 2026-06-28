@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from likecodex_engine.llm.base import Message, Role
+
 
 class AIDebugAssistant:
     """AI assistant for debugging — analyzes errors and suggests fixes."""
@@ -46,8 +48,6 @@ Respond in this format:
 Root Cause: <one sentence>
 Fix: <specific fix description>
 Prevention: <prevention tip>"""
-
-        from likecodex_engine.llm.base import Message, Role
 
         messages = [
             Message(role=Role.SYSTEM, content="You are a debugging expert. Analyze errors and provide clear fixes."),
