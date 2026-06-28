@@ -1720,18 +1720,14 @@ def _get_test_runner(working_dir: str):
 
 async def ide_tests_discover(request: web.Request) -> web.Response:
     """Discover all test files and test cases."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    runner = _get_test_runner(working_dir)
-    result = await runner.discover_tests()
+    _, wd = _cfg_wd(request)
+    result = await _get_test_runner(wd).discover_tests()
     return web.json_response(result)
 
 
 async def ide_tests_run(request: web.Request) -> web.StreamResponse:
     """Run tests with SSE streaming."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    runner = _get_test_runner(working_dir)
+    _, wd = _cfg_wd(request)
     data = await request.json()
     test_filter = data.get("filter", "")
 
@@ -1739,7 +1735,7 @@ async def ide_tests_run(request: web.Request) -> web.StreamResponse:
     await response.prepare(request)
 
     try:
-        async for event in runner.run_tests(test_filter=test_filter):
+        async for event in _get_test_runner(wd).run_tests(test_filter=test_filter):
             payload = json.dumps(event)
             await response.write(f"data: {payload}\n\n".encode())
     except Exception as exc:
@@ -1752,14 +1748,9 @@ async def ide_tests_run(request: web.Request) -> web.StreamResponse:
 
 async def ide_debug_analyze(request: web.Request) -> web.Response:
     """AI error analysis for debugging."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
+    cfg, _ = _cfg_wd(request)
     data = await request.json()
-    error_message = data.get("errorMessage", "")
-    stack_trace = data.get("stackTrace", "")
-    relevant_code = data.get("relevantCode", "")
-    file_path = data.get("filePath", "")
 
-    from likecodex_engine.llm.factory import create_provider
     from likecodex_engine.debug.ai_debug import AIDebugAssistant
 
     llm = create_provider(
@@ -1771,10 +1762,10 @@ async def ide_debug_analyze(request: web.Request) -> web.Response:
     )
     assistant = AIDebugAssistant(llm)
     result = await assistant.analyze_error(
-        error_message=error_message,
-        stack_trace=stack_trace,
-        relevant_code=relevant_code,
-        file_path=file_path,
+        error_message=data.get("errorMessage", ""),
+        stack_trace=data.get("stackTrace", ""),
+        relevant_code=data.get("relevantCode", ""),
+        file_path=data.get("filePath", ""),
     )
     return web.json_response(result)
 
@@ -1795,57 +1786,49 @@ def _get_settings_manager(working_dir: str):
 
 async def ide_settings_get_all(request: web.Request) -> web.Response:
     """Get all IDE settings with defaults applied."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    mgr = _get_settings_manager(working_dir)
-    return web.json_response({"settings": mgr.get_all()})
+    _, wd = _cfg_wd(request)
+    return web.json_response({"settings": _get_settings_manager(wd).get_all()})
 
 
 async def ide_settings_categories(request: web.Request) -> web.Response:
     """Get settings grouped by category."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    mgr = _get_settings_manager(working_dir)
-    return web.json_response({"categories": mgr.get_categories()})
+    _, wd = _cfg_wd(request)
+    return web.json_response({"categories": _get_settings_manager(wd).get_categories()})
 
 
 async def ide_settings_set(request: web.Request) -> web.Response:
     """Set a single setting value."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    mgr = _get_settings_manager(working_dir)
+    _, wd = _cfg_wd(request)
     data = await request.json()
     key = data.get("key", "")
     value = data.get("value")
+    mgr = _get_settings_manager(wd)
     mgr.set(key, value)
     return web.json_response({"success": True, "key": key, "value": mgr.get(key)})
 
 
 async def ide_settings_reset(request: web.Request) -> web.Response:
     """Reset a setting to its default value."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    mgr = _get_settings_manager(working_dir)
+    _, wd = _cfg_wd(request)
     data = await request.json()
     key = data.get("key", "")
+    mgr = _get_settings_manager(wd)
     mgr.reset(key)
     return web.json_response({"success": True, "key": key, "value": mgr.get(key)})
 
 
 async def ide_settings_reset_all(request: web.Request) -> web.Response:
     """Reset all settings to defaults."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    mgr = _get_settings_manager(working_dir)
+    _, wd = _cfg_wd(request)
+    mgr = _get_settings_manager(wd)
     mgr.reset_all()
     return web.json_response({"success": True, "settings": mgr.get_all()})
 
 
 async def ide_keybindings_get(request: web.Request) -> web.Response:
     """Get all keybindings with conflict info."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    mgr = _get_settings_manager(working_dir)
+    _, wd = _cfg_wd(request)
+    mgr = _get_settings_manager(wd)
     return web.json_response({
         "keybindings": mgr.get_keybindings(),
         "conflicts": mgr.check_conflicts(),
@@ -1854,13 +1837,10 @@ async def ide_keybindings_get(request: web.Request) -> web.Response:
 
 async def ide_keybindings_set(request: web.Request) -> web.Response:
     """Update a keybinding."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    mgr = _get_settings_manager(working_dir)
+    _, wd = _cfg_wd(request)
     data = await request.json()
-    binding_id = data.get("id", "")
-    keys = data.get("keys", [])
-    mgr.set_keybinding(binding_id, keys)
+    mgr = _get_settings_manager(wd)
+    mgr.set_keybinding(data.get("id", ""), data.get("keys", []))
     return web.json_response({
         "success": True,
         "conflicts": mgr.check_conflicts(),
@@ -1869,9 +1849,8 @@ async def ide_keybindings_set(request: web.Request) -> web.Response:
 
 async def ide_keybindings_reset(request: web.Request) -> web.Response:
     """Reset all keybindings to defaults."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    mgr = _get_settings_manager(working_dir)
+    _, wd = _cfg_wd(request)
+    mgr = _get_settings_manager(wd)
     mgr.reset_keybindings()
     return web.json_response({
         "keybindings": mgr.get_keybindings(),
@@ -1883,9 +1862,8 @@ async def ide_keybindings_reset(request: web.Request) -> web.Response:
 
 async def ide_extensions_list(request: web.Request) -> web.Response:
     """List installed extensions from .likecodex/extensions/ directory."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
-    extensions_dir = Path(working_dir) / ".likecodex" / "extensions"
+    _, wd = _cfg_wd(request)
+    extensions_dir = Path(wd) / ".likecodex" / "extensions"
     extensions = []
     if extensions_dir.exists():
         for child in sorted(extensions_dir.iterdir()):
@@ -1913,12 +1891,11 @@ async def ide_extensions_list(request: web.Request) -> web.Response:
 
 async def ide_extensions_toggle(request: web.Request) -> web.Response:
     """Enable or disable an extension."""
-    cfg = _resolve_config(request.app[APP_CONFIG])
-    working_dir = cfg.get("working_dir", ".")
+    _, wd = _cfg_wd(request)
     data = await request.json()
     ext_id = data.get("id", "")
     enabled = data.get("enabled", True)
-    ext_dir = Path(working_dir) / ".likecodex" / "extensions" / ext_id
+    ext_dir = Path(wd) / ".likecodex" / "extensions" / ext_id
     manifest_file = ext_dir / "manifest.json"
     if not manifest_file.exists():
         return web.json_response({"error": "Extension not found"}, status=404)
