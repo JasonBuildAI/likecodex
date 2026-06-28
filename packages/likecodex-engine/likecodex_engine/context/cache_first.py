@@ -132,8 +132,6 @@ class CacheFirstContext:
         if not file_paths:
             return
 
-        from pathlib import Path
-
         file_contents = []
         base_dir = Path(working_dir).resolve()
 
