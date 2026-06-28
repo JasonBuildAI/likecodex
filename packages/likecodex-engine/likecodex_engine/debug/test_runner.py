@@ -93,31 +93,39 @@ class TestRunnerService:
         return results
 
     @staticmethod
-    async def _parse_python_test_cases(file_path: str) -> list[dict[str, Any]]:
-        """Parse test function names from a Python test file."""
+    async def _read_file_lines(file_path: str) -> list[str]:
+        """Read file and return lines, or empty list on error."""
         try:
             with open(file_path, encoding="utf-8", errors="replace") as f:
-                content = f.read()
+                return f.read().split("\n")
         except (OSError, FileNotFoundError):
             return []
 
+    @staticmethod
+    def _build_test_case(file_path: str, test_name: str, line: int) -> dict[str, Any]:
+        """Build a standard test case dict."""
+        return {
+            "id": f"{file_path}:{test_name}",
+            "name": test_name,
+            "filePath": os.path.relpath(file_path, os.getcwd()).replace("\\", "/"),
+            "line": line,
+            "status": "pending",
+        }
+
+    @staticmethod
+    async def _parse_python_test_cases(file_path: str) -> list[dict[str, Any]]:
+        """Parse test function names from a Python test file."""
+        lines = await TestRunnerService._read_file_lines(file_path)
+        if not lines:
+            return []
+
         test_cases: list[dict[str, Any]] = []
-        lines = content.split("\n")
-
         for i, line in enumerate(lines):
-            stripped = line.strip()
-            # Match test functions: def test_*, async def test_*
-            match = re.match(r"(?:async\s+)?def\s+(test_\w+)", stripped)
+            match = re.match(r"(?:async\s+)?def\s+(test_\w+)", line.strip())
             if match:
-                test_name = match.group(1)
-                test_cases.append({
-                    "id": f"{file_path}:{test_name}",
-                    "name": test_name,
-                    "filePath": os.path.relpath(file_path, os.getcwd()).replace("\\", "/"),
-                    "line": i + 1,
-                    "status": "pending",
-                })
-
+                test_cases.append(
+                    TestRunnerService._build_test_case(file_path, match.group(1), i + 1)
+                )
         return test_cases
 
     async def _discover_js_tests(self) -> list[dict[str, Any]]:
@@ -149,29 +157,17 @@ class TestRunnerService:
     @staticmethod
     async def _parse_js_test_cases(file_path: str) -> list[dict[str, Any]]:
         """Parse test names from a JS/TS test file."""
-        try:
-            with open(file_path, encoding="utf-8", errors="replace") as f:
-                content = f.read()
-        except (OSError, FileNotFoundError):
+        lines = await TestRunnerService._read_file_lines(file_path)
+        if not lines:
             return []
 
         test_cases: list[dict[str, Any]] = []
-        lines = content.split("\n")
-
         for i, line in enumerate(lines):
-            stripped = line.strip()
-            # Match: test("name", ...) or it("name", ...) or describe("name", ...)
-            match = re.match(r'(?:test|it)\s*\(\s*["\']([^"\']+)["\']', stripped)
+            match = re.match(r'(?:test|it)\s*\(\s*["\']([^"\']+)["\']', line.strip())
             if match:
-                test_name = match.group(1)
-                test_cases.append({
-                    "id": f"{file_path}:{test_name}",
-                    "name": test_name,
-                    "filePath": os.path.relpath(file_path, os.getcwd()).replace("\\", "/"),
-                    "line": i + 1,
-                    "status": "pending",
-                })
-
+                test_cases.append(
+                    TestRunnerService._build_test_case(file_path, match.group(1), i + 1)
+                )
         return test_cases
 
     async def _discover_rust_tests(self) -> list[dict[str, Any]]:
