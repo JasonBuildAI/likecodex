@@ -178,6 +178,8 @@ class ShellTools:
         job.stderr.extend(stderr)
         job.exit_code = job.proc.returncode
         job.done = True
+        # Clean up completed job after 5 minutes to prevent memory leak
+        asyncio.get_running_loop().call_later(300, self._jobs.pop, job.job_id, None)
 
     def bash_output_schema(self) -> dict[str, Any]:
         return {

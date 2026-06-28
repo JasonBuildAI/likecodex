@@ -67,6 +67,7 @@ class VectorMemory:
                     {"text": doc, "metadata": meta or {}, "score": 1.0} for doc, meta in zip(docs, metas, strict=False)
                 ]
             except Exception:
+                logger.warning("chromadb search failed, falling back to JSONL search", exc_info=True)
                 pass
         return self._search_jsonl(query, top_k)
 

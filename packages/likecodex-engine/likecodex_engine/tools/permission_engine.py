@@ -333,6 +333,9 @@ class PermissionEngine:
 
     def _audit(self, result: AgentPermissionResult) -> None:
         self._audit_log.append(result)
+        # Cap audit log at 1000 entries to prevent memory leak
+        if len(self._audit_log) > 1000:
+            self._audit_log.pop(0)
 
     def clear_audit(self) -> None:
         self._audit_log.clear()
