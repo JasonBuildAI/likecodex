@@ -51,22 +51,28 @@ class HistoryTools:
         self.session_db_path = session_db_path
         self.global_dir = Path.home() / ".likecodex" / "sessions"
 
+    @staticmethod
+    def _glob_jsonl_texts(directory: Path, *, recursive: bool = False) -> list[tuple[str, str]]:
+        """Read all .jsonl files in a directory, returning [(path, text), ...]."""
+        if not directory.exists():
+            return []
+        glob_fn = directory.rglob if recursive else directory.glob
+        return [
+            (str(p), p.read_text(encoding="utf-8", errors="replace"))
+            for p in sorted(glob_fn("*.jsonl"))
+        ]
+
     def _collect_docs(self, scope: str) -> list[tuple[str, str, str]]:
         docs: list[tuple[str, str, str]] = []
         archive_dir = self.working_dir / ".likecodex" / "archive"
-        if archive_dir.exists():
-            for path in sorted(archive_dir.glob("*.jsonl")):
-                text = path.read_text(encoding="utf-8", errors="replace")
-                docs.append((str(path), "archive", text))
+        for path, text in self._glob_jsonl_texts(archive_dir):
+            docs.append((path, "archive", text))
         sessions_dir = self.working_dir / ".likecodex" / "sessions"
-        if sessions_dir.exists():
-            for path in sorted(sessions_dir.glob("*.jsonl")):
-                text = path.read_text(encoding="utf-8", errors="replace")
-                docs.append((str(path), "session", text))
-        if scope == "global" and self.global_dir.exists():
-            for path in self.global_dir.rglob("*.jsonl"):
-                text = path.read_text(encoding="utf-8", errors="replace")
-                docs.append((str(path), "global", text))
+        for path, text in self._glob_jsonl_texts(sessions_dir):
+            docs.append((path, "session", text))
+        if scope == "global":
+            for path, text in self._glob_jsonl_texts(self.global_dir, recursive=True):
+                docs.append((path, "global", text))
         return docs
 
     def _around_slice(
