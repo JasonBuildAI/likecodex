@@ -54,19 +54,19 @@ class TodoTools:
             },
         }
 
+    @staticmethod
+    def _clean_todo(item: dict[str, Any], index: int) -> dict[str, Any]:
+        status = str(item.get("status", "pending"))
+        if status not in _VALID_STATUS:
+            status = "pending"
+        return {
+            "id": str(item.get("id", index + 1)),
+            "content": str(item.get("content", "")),
+            "status": status,
+        }
+
     async def todo_write(self, todos: list[dict[str, Any]]) -> str:
-        cleaned: list[dict[str, Any]] = []
-        for item in todos:
-            status = str(item.get("status", "pending"))
-            if status not in _VALID_STATUS:
-                status = "pending"
-            cleaned.append(
-                {
-                    "id": str(item.get("id", len(cleaned) + 1)),
-                    "content": str(item.get("content", "")),
-                    "status": status,
-                }
-            )
+        cleaned = [self._clean_todo(item, i) for i, item in enumerate(todos)]
         if self._ledger is not None:
             missing = self._ledger.newly_completed_without_receipt(self._todos, cleaned)
             if missing:
@@ -88,25 +88,26 @@ class TodoTools:
     def current(self) -> list[dict[str, Any]]:
         return list(self._todos)
 
+    def _find_in_progress(self, predicate=None) -> dict[str, Any] | None:
+        """Return the first in_progress item, optionally filtered by predicate."""
+        for item in self._todos:
+            if item["status"] == "in_progress" and (predicate is None or predicate(item)):
+                return item
+        return None
+
     def advance_on_complete(self, step: str) -> str:
         """Host-side todo advancement when complete_step accepts."""
         if not self._todos:
             return "no todos"
         step_lower = step.lower()
+        # Try matching by content/id first, then fall back to any in_progress
+        target = self._find_in_progress(
+            lambda it: step_lower in it["content"].lower() or step_lower in str(it["id"]).lower()
+        ) or self._find_in_progress()
         matched = False
-        for item in self._todos:
-            if item["status"] == "in_progress" and (
-                step_lower in item["content"].lower() or step_lower in str(item["id"]).lower()
-            ):
-                item["status"] = "completed"
-                matched = True
-                break
-        if not matched:
-            for item in self._todos:
-                if item["status"] == "in_progress":
-                    item["status"] = "completed"
-                    matched = True
-                    break
+        if target:
+            target["status"] = "completed"
+            matched = True
         for item in self._todos:
             if item["status"] == "pending":
                 item["status"] = "in_progress"
