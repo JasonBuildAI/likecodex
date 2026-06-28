@@ -204,7 +204,7 @@ def _run_web(port: int) -> None:
 
     if not _check_engine_running(port):
         console.print("[yellow]Starting LikeCodex engine...[/yellow]")
-        proc = _start_engine_in_background(port)
+        _start_engine_in_background(port)
         time.sleep(2)
 
     url = f"http://127.0.0.1:{port}"
@@ -245,20 +245,18 @@ def _start_engine_in_background(port: int) -> None:
 
 def _find_engine_root() -> str:
     """Find the project root directory (where pyproject.toml lives)."""
-    # Check common locations
-    candidates = [
+    # Check env-based candidates first
+    for candidate in (
         os.environ.get("LIKECODEX_ENGINE_ROOT"),
         os.environ.get("LIKECODEX_HOME"),
         str(Path.home() / ".likecodex" / "install"),
-    ]
-
-    for candidate in candidates:
+    ):
         if candidate and Path(candidate).joinpath("pyproject.toml").exists():
             return candidate
 
     # Walk up from cwd
     cwd = Path.cwd()
-    for parent in [cwd] + list(cwd.parents):
+    for parent in (cwd, *cwd.parents):
         if parent.joinpath("pyproject.toml").exists():
             return str(parent)
 
