@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAppStore } from '@/lib/store';
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -123,14 +123,17 @@ function matchesShortcut(e: KeyboardEvent, config: ShortcutConfig): boolean {
  * Automatically handles input focus detection and prevents conflicts
  */
 export function useGlobalShortcuts(customShortcuts?: ShortcutConfig[]) {
-  const shortcuts = [...defaultShortcuts, ...(customShortcuts || [])];
+  // Use ref to avoid recreating shortcuts array on every render
+  const shortcutsRef = useRef<ShortcutConfig[]>([]);
+  shortcutsRef.current = [...defaultShortcuts, ...(customShortcuts || [])];
 
+  // Stable event handler: always reads the latest shortcuts from ref
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     // Skip if typing in input/textarea
     if (isInputFocused()) return;
 
     // Find matching shortcut
-    const matchingShortcut = shortcuts.find(config => matchesShortcut(e, config));
+    const matchingShortcut = shortcutsRef.current.find(config => matchesShortcut(e, config));
     
     if (matchingShortcut) {
       if (matchingShortcut.preventDefault) {
@@ -138,8 +141,9 @@ export function useGlobalShortcuts(customShortcuts?: ShortcutConfig[]) {
       }
       matchingShortcut.handler(e);
     }
-  }, [shortcuts]);
+  }, []);
 
+  // Bind once on mount, unbind on unmount — never re-binds
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
     
@@ -148,12 +152,20 @@ export function useGlobalShortcuts(customShortcuts?: ShortcutConfig[]) {
     };
   }, [handleKeyDown]);
 
-  // Expose getShortcuts for help panel
+  // Expose getShortcuts for help panel (stable reference)
+  const displayShortcuts = useMemo(
+    () =>
+      shortcutsRef.current.map(s => ({
+        keys: `${s.modifiers?.ctrl ? 'Ctrl+' : ''}${s.modifiers?.meta ? 'Cmd+' : ''}${s.modifiers?.shift ? 'Shift+' : ''}${s.modifiers?.alt ? 'Alt+' : ''}${s.key.toUpperCase()}`,
+        description: s.description || '',
+      })),
+    // customShortcuts changes rarely; re-memoize only when it changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [customShortcuts],
+  );
+
   return {
-    shortcuts: shortcuts.map(s => ({
-      keys: `${s.modifiers?.ctrl ? 'Ctrl+' : ''}${s.modifiers?.meta ? 'Cmd+' : ''}${s.modifiers?.shift ? 'Shift+' : ''}${s.modifiers?.alt ? 'Alt+' : ''}${s.key.toUpperCase()}`,
-      description: s.description || '',
-    })),
+    shortcuts: displayShortcuts,
   };
 }
 
