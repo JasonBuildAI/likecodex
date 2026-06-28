@@ -985,8 +985,6 @@ async def deepseek_api_switch_model(request: web.Request) -> web.Response:
             status=400,
         )
 
-    from likecodex_engine.llm.factory import create_provider
-
     model_map = {"flash": "deepseek-v4-flash", "pro": "deepseek-v4-pro"}
     resolved = model_map.get(model, model)
 
