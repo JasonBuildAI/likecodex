@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -32,8 +33,6 @@ class McpClient:
     async def start(self) -> None:
         if self._proc and self._proc.returncode is None:
             return
-        import os
-
         merged_env = {**dict(os.environ), **self.env}
         self._proc = await asyncio.create_subprocess_exec(
             self.command,
