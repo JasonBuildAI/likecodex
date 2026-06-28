@@ -28,13 +28,23 @@ class WebSearchTools:
             return await self._tavily_search(query, max_results)
         return await self._duckduckgo_search(query, max_results)
 
+    async def _fetch_json(self, request_or_url, *, query: str, method: str = "GET", data: bytes | None = None, headers: dict | None = None, timeout: int = 10) -> tuple[dict | None, str | None]:
+        """Fetch JSON from a URL. Returns (data, None) on success or (None, error_json) on failure."""
+        if isinstance(request_or_url, str):
+            req = urllib.request.Request(request_or_url)
+        else:
+            req = request_or_url
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8")), None
+        except Exception as exc:
+            return None, json.dumps({"error": str(exc), "query": query})
+
     async def _duckduckgo_search(self, query: str, max_results: int) -> str:
         url = "https://api.duckduckgo.com/?" + urllib.parse.urlencode({"q": query, "format": "json", "no_html": 1})
-        try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except Exception as exc:
-            return json.dumps({"error": str(exc), "query": query})
+        data, err = await self._fetch_json(url, query=query)
+        if err:
+            return err
         results = []
         for item in (data.get("RelatedTopics") or [])[:max_results]:
             if isinstance(item, dict) and "Text" in item:
@@ -50,11 +60,9 @@ class WebSearchTools:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except Exception as exc:
-            return json.dumps({"error": str(exc), "query": query})
+        data, err = await self._fetch_json(req, query=query, timeout=15)
+        if err:
+            return err
         results = [
             {
                 "title": r.get("title"),
