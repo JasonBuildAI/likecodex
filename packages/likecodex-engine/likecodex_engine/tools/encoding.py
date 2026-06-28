@@ -70,12 +70,19 @@ def detect_encoding(raw: bytes) -> str:
     return "latin-1"
 
 
+def _safe_encode(text: str, encoding: str) -> tuple[bytes, str]:
+    """Encode text, falling back to UTF-8 on failure. Returns (bytes, encoding_used)."""
+    enc = encoding or "utf-8"
+    try:
+        return text.encode(enc), enc
+    except (UnicodeEncodeError, LookupError):
+        return text.encode("utf-8"), "utf-8"
+
+
 def decode_bytes(raw: bytes) -> DecodedText:
     """Decode bytes using the detected encoding."""
     enc = detect_encoding(raw)
     had_bom = any(raw.startswith(bom) for bom, name in _BOMS if name == enc)
-    if enc == "utf-8-sig":
-        had_bom = True
     text = raw.decode(enc, errors="replace")
     return DecodedText(text=text, encoding=enc, had_bom=had_bom)
 
@@ -93,21 +100,13 @@ def encode_text(text: str, encoding: str) -> bytes:
     Falls back to UTF-8 if the original encoding cannot represent the new
     content (for example, new non-GBK characters added to a GBK file).
     """
-    enc = encoding or "utf-8"
-    try:
-        return text.encode(enc)
-    except (UnicodeEncodeError, LookupError):
-        return text.encode("utf-8")
+    data, _ = _safe_encode(text, encoding)
+    return data
 
 
 def write_text_preserve(path, text: str, encoding: str) -> str:
     """Write text to disk preserving the given encoding. Returns encoding used."""
-    enc = encoding or "utf-8"
-    try:
-        data = text.encode(enc)
-    except (UnicodeEncodeError, LookupError):
-        enc = "utf-8"
-        data = text.encode("utf-8")
+    data, enc = _safe_encode(text, encoding)
     with open(path, "wb") as handle:
         handle.write(data)
     return enc
