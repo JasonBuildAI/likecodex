@@ -1040,9 +1040,13 @@ async def ide_skills_update(request: web.Request) -> web.Response:
     if not name:
         return web.json_response({"error": "name is required"}, status=400)
     fields = {}
-    for key in ("name", "description", "body", "run_as", "model", "allowed_tools"):
+    for key in ("description", "body", "run_as", "model", "allowed_tools"):
         if key in data:
             fields[key] = data[key]
+    # Handle rename separately
+    new_name = data.get("new_name") or data.get("name")
+    if new_name and new_name != name:
+        fields["name"] = new_name
     try:
         path = _update_skill(working_dir, name, **fields)
     except ValueError as e:
