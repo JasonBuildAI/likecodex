@@ -134,6 +134,22 @@ def _load_skill_file(path: Path) -> Skill | None:
     )
 
 
+def _load_skill_directory(dir_path: Path) -> Skill | None:
+    """Load a skill from a directory containing SKILL.md (agentskills.io format)."""
+    skill_md = dir_path / "SKILL.md"
+    if not skill_md.is_file():
+        return None
+    skill = _load_skill_file(skill_md)
+    if skill is None:
+        return None
+    # Override name with directory name if not explicitly set in frontmatter
+    if not skill.name or skill.name == "SKILL":
+        skill.name = dir_path.name
+    skill.source_dir = dir_path
+    skill.source_type = _infer_source_type(dir_path)
+    return skill
+
+
 def discover_skills(
     working_dir: str | Path,
     disabled: list[str] | None = None,
@@ -155,20 +171,26 @@ def discover_skills(
 
     skills: dict[str, Skill] = {}
     for root in roots:
-        if root.name == "builtins":
+        is_builtin = root.name == "builtins"
+        # Scan directory-format skills: <name>/SKILL.md
+        if not is_builtin:
+            for child in sorted(root.iterdir()) if root.is_dir() else []:
+                if child.is_dir() and (child / "SKILL.md").is_file():
+                    skill = _load_skill_directory(child)
+                    if skill and skill.name.lower() not in disabled_set:
+                        skills[skill.name] = skill
+        # Scan flat-file skills: *.md
+        if is_builtin:
             for path in sorted(root.glob("*.md")):
                 skill = _load_skill_file(path)
                 if skill and skill.name.lower() not in disabled_set:
                     skills[skill.name] = skill
-            continue
-        for path in sorted(root.rglob("*.md")):
-            skill = _load_skill_file(path)
-            if skill and skill.name.lower() not in disabled_set:
-                skills[skill.name] = skill
-        for path in sorted(root.glob("*.md")):
-            skill = _load_skill_file(path)
-            if skill and skill.name.lower() not in disabled_set:
-                skills[skill.name] = skill
+        else:
+            for path in sorted(root.glob("*.md")):
+                # Skip SKILL.md inside subdirs (already handled above)
+                skill = _load_skill_file(path)
+                if skill and skill.name.lower() not in disabled_set:
+                    skills[skill.name] = skill
     return [skills[k] for k in sorted(skills.keys())]
 
 
