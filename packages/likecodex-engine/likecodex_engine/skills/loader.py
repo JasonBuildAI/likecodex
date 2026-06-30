@@ -6,6 +6,8 @@ Follows the agentskills.io open standard for SKILL.md files.
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -200,6 +202,8 @@ def skills_prefix_block(skills: list[Skill]) -> str:
         return ""
     lines = ["The following skills are available (invoke via run_skill):"]
     for skill in skills:
+        if not skill.enabled:
+            continue
         extras = []
         if skill.model:
             extras.append(f"model={skill.model}")
@@ -208,3 +212,40 @@ def skills_prefix_block(skills: list[Skill]) -> str:
         suffix = f" ({', '.join(extras)})" if extras else ""
         lines.append(f"- **{skill.name}**: {skill.description} (runAs={skill.run_as}){suffix}")
     return "\n".join(lines)
+
+
+def inject_dynamic_context(body: str, skill_dir: Path | None = None) -> str:
+    """Process dynamic context injection syntax in SKILL.md body.
+
+    Replaces `` !`command` `` patterns with the stdout of executing
+    that command (with a 10s timeout). Only executed at skill load
+    time, not during discovery.
+    """
+    pattern = re.compile(r'!`([^`]+)`')
+    matches = list(pattern.finditer(body))
+    if not matches:
+        return body
+    result = body
+    for match in reversed(matches):
+        cmd = match.group(1).strip()
+        # Replace ${SKILL_DIR} variable
+        if skill_dir:
+            cmd = cmd.replace("${SKILL_DIR}", str(skill_dir))
+        try:
+            proc = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=str(skill_dir) if skill_dir else None,
+            )
+            output = proc.stdout.strip()
+            if proc.returncode != 0 and proc.stderr:
+                output = f"[error: {proc.stderr.strip()}]"
+        except subprocess.TimeoutExpired:
+            output = "[error: command timed out after 10s]"
+        except Exception as e:
+            output = f"[error: {e}]"
+        result = result[:match.start()] + output + result[match.end():]
+    return result

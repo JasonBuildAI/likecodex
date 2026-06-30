@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from likecodex_engine.skills.loader import discover_skills
+from likecodex_engine.skills.loader import discover_skills, inject_dynamic_context
 
 if TYPE_CHECKING:
     from likecodex_engine.agent.loop import AgentLoop
@@ -46,6 +46,8 @@ class SkillRunner:
         if not skill:
             return json.dumps({"error": f"Skill {name!r} not found", "available": sorted(self._skills.keys())})
         body = skill.body
+        # Apply dynamic context injection (!`command` syntax)
+        body = inject_dynamic_context(body, skill.source_dir)
         if args:
             body = body.replace("$ARGS", args).replace("$1", args)
         if skill.run_as == "subagent":
