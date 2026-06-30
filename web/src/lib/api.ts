@@ -845,7 +845,119 @@ export async function fetchSkills(): Promise<Skill[]> {
   return (data.skills || []) as Skill[];
 }
 
-// ── NEW: CodeGraph & Index search ──────────────────────────────────────
+export async function fetchSkillsList(): Promise<Skill[]> {
+  const resp = await fetchWithRetry(`${API_BASE}/api/ide/skills/list`);
+  if (!resp.ok) return [];
+  const data = await resp.json();
+  return (data.skills || []) as Skill[];
+}
+
+export async function fetchSkillDetail(name: string): Promise<Skill | null> {
+  const resp = await fetchWithRetry(`${API_BASE}/api/ide/skills/detail?name=${encodeURIComponent(name)}`);
+  if (!resp.ok) return null;
+  return (await resp.json()) as Skill;
+}
+
+export async function createSkill(payload: {
+  name: string;
+  description?: string;
+  body?: string;
+  run_as?: string;
+  model?: string;
+  allowed_tools?: string[];
+  author?: string;
+  version?: string;
+}): Promise<{ ok: boolean; skill: Skill | null }> {
+  const resp = await fetch(`${API_BASE}/api/ide/skills/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return await resp.json();
+}
+
+export async function updateSkill(payload: {
+  name: string;
+  description?: string;
+  body?: string;
+  run_as?: string;
+  model?: string | null;
+  allowed_tools?: string[];
+}): Promise<{ ok: boolean; skill: Skill | null }> {
+  const resp = await fetch(`${API_BASE}/api/ide/skills/update`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return await resp.json();
+}
+
+export async function deleteSkill(name: string): Promise<{ ok: boolean }> {
+  const resp = await fetch(`${API_BASE}/api/ide/skills/delete`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  return await resp.json();
+}
+
+export async function toggleSkill(name: string): Promise<{ ok: boolean; enabled: boolean }> {
+  const resp = await fetch(`${API_BASE}/api/ide/skills/enable`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  return await resp.json();
+}
+
+export async function reloadSkills(): Promise<{ ok: boolean; skills: Skill[] }> {
+  const resp = await fetch(`${API_BASE}/api/ide/skills/reload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  return await resp.json();
+}
+
+export async function invokeSkill(name: string, args?: string, sessionId?: string): Promise<{
+  skill: string;
+  mode: string;
+  result?: string;
+  body?: string;
+}> {
+  const resp = await fetch(`${API_BASE}/api/ide/skills/invoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, args: args || '', session_id: sessionId || '' }),
+  });
+  return await resp.json();
+}
+
+export async function installSkill(url: string): Promise<{ ok: boolean; skill: Skill | null }> {
+  const resp = await fetch(`${API_BASE}/api/ide/skills/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  return await resp.json();
+}
+
+export async function exportSkill(name: string): Promise<Blob> {
+  const resp = await fetch(`${API_BASE}/api/ide/skills/export?name=${encodeURIComponent(name)}`);
+  return await resp.blob();
+}
+
+export async function importSkill(zipData: Blob): Promise<{ ok: boolean; imported: string[] }> {
+  const formData = new FormData();
+  formData.append('file', zipData, 'skills.zip');
+  const resp = await fetch(`${API_BASE}/api/ide/skills/import`, {
+    method: 'POST',
+    body: formData,
+  });
+  return await resp.json();
+}
+
+// ── NEW: Codegraph & Index search ──────────────────────────────────────
 export async function searchCodeGraph(pattern: string): Promise<{ pattern: string; results: SearchResult[]; files?: string[] }> {
   const resp = await fetchWithRetry(`${API_BASE}/codegraph/search?pattern=${encodeURIComponent(pattern)}`);
   if (!resp.ok) return { pattern, results: [] };
