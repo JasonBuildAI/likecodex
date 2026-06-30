@@ -1,13 +1,19 @@
-"""Skill discovery and prefix injection."""
+"""Skill discovery and prefix injection.
+
+Follows the agentskills.io open standard for SKILL.md files.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 
 @dataclass
 class Skill:
+    """Represents a single agent skill loaded from a SKILL.md file."""
+
     name: str
     description: str
     body: str
@@ -15,6 +21,29 @@ class Skill:
     path: Path | None = None
     model: str | None = None
     allowed_tools: list[str] = field(default_factory=list)
+    # agentskills.io extended fields
+    license: str = ""
+    compatibility: str = ""
+    metadata: dict[str, str] = field(default_factory=dict)
+    version: str = ""
+    author: str = ""
+    # Management fields
+    enabled: bool = True
+    source_type: str = "project"  # project | home | builtin
+    source_dir: Path | None = None  # parent directory for directory-format skills
+
+    @property
+    def source(self) -> str:
+        """Backward-compatible source label derived from source_type."""
+        return self.source_type
+
+    def to_dict(self) -> dict:
+        """Serialize to JSON-safe dict (Paths → strings)."""
+        d = asdict(self)
+        d["path"] = str(self.path) if self.path else None
+        d["source_dir"] = str(self.source_dir) if self.source_dir else None
+        d["source"] = self.source
+        return d
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -37,6 +66,17 @@ def _parse_allowed_tools(raw: str) -> list[str]:
     return [part.strip() for part in raw.replace(",", " ").split() if part.strip()]
 
 
+def _infer_source_type(path: Path) -> str:
+    """Derive source_type from path location."""
+    parts = str(path).replace("\\", "/")
+    if "builtins" in parts:
+        return "builtin"
+    home = str(Path.home()).replace("\\", "/")
+    if parts.startswith(home):
+        return "home"
+    return "project"
+
+
 def _load_skill_file(path: Path) -> Skill | None:
     try:
         text = path.read_text(encoding="utf-8")
@@ -45,6 +85,14 @@ def _load_skill_file(path: Path) -> Skill | None:
     meta, body = _parse_frontmatter(text)
     name = meta.get("name", path.stem)
     allowed_raw = meta.get("allowed-tools", meta.get("allowed_tools", ""))
+    # Parse metadata dict from frontmatter
+    raw_meta = meta.get("metadata", "")
+    meta_dict: dict[str, str] = {}
+    if isinstance(raw_meta, str) and raw_meta:
+        try:
+            meta_dict = json.loads(raw_meta)
+        except (json.JSONDecodeError, ValueError):
+            pass
     return Skill(
         name=name,
         description=meta.get("description", name),
@@ -53,6 +101,12 @@ def _load_skill_file(path: Path) -> Skill | None:
         path=path,
         model=meta.get("model") or None,
         allowed_tools=_parse_allowed_tools(allowed_raw),
+        license=meta.get("license", ""),
+        compatibility=meta.get("compatibility", ""),
+        metadata=meta_dict,
+        version=meta.get("version", ""),
+        author=meta.get("author", ""),
+        source_type=_infer_source_type(path),
     )
 
 

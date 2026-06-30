@@ -136,11 +136,12 @@ class CodeSearchTools:
         gi = self.working_dir / ".gitignore"
         if not gi.exists():
             return set()
-        return {
-            line.strip().rstrip("/")
-            for line in gi.read_text(encoding="utf-8", errors="replace").splitlines()
-            if (line := line.strip()) and not line.startswith("#")
-        }
+        result = set()
+        for line in gi.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = line.strip().rstrip("/")
+            if stripped and not stripped.startswith("#"):
+                result.add(stripped)
+        return result
 
     def _gitignore_skip(self, path: Path) -> bool:
         rel = path.relative_to(self.working_dir)

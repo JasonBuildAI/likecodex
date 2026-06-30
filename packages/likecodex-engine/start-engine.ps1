@@ -1,0 +1,5 @@
+$env:LIKECODEX_LLM_API_KEY = "YOUR_API_KEY_HERE"
+$env:DEEPSEEK_API_KEY = "YOUR_API_KEY_HERE"
+$env:LIKECODEX_ENGINE_HOST = "127.0.0.1"
+$env:LIKECODEX_ENGINE_PORT = "9091"
+uv run python -m likecodex_engine.server

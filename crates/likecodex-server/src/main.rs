@@ -294,7 +294,7 @@ async fn get_doctor(
         } else if !engine_ok {
             Some("Run `likecodex start` to launch the Python engine")
         } else {
-            None::<String>
+            None::<&str>
         },
     }))
 }
