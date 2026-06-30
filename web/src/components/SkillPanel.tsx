@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { fetchSkillsList, toggleSkill, reloadSkills } from '@/lib/api';
+import { fetchSkillsList, toggleSkill, reloadSkills, importSkill } from '@/lib/api';
 import { useAppStore, type Skill } from '@/lib/store';
 
 export function SkillPanel() {
@@ -75,6 +75,26 @@ export function SkillPanel() {
     setSkillDetail(null);
   };
 
+  const handleImport = async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.zip';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        const res = await importSkill(file);
+        if (res.ok) {
+          addToast({ type: 'success', message: `Imported ${res.imported.length} skill(s)` });
+          await loadSkills();
+        }
+      } catch {
+        addToast({ type: 'error', message: 'Import failed' });
+      }
+    };
+    input.click();
+  };
+
   const filters: Array<{ key: 'all' | 'builtin' | 'project' | 'home'; label: string }> = [
     { key: 'all', label: 'All' },
     { key: 'builtin', label: 'Built-in' },
@@ -95,6 +115,13 @@ export function SkillPanel() {
               title="Create new skill"
             >
               + New
+            </button>
+            <button
+              onClick={handleImport}
+              className="px-2 py-0.5 text-xs rounded bg-surface-hover hover:bg-surface-active transition"
+              title="Import from zip"
+            >
+              ↑ Import
             </button>
             <button
               onClick={handleReload}
