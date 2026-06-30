@@ -45,6 +45,8 @@ from likecodex_engine.skills.manager import (
     update_skill as _update_skill,
     delete_skill as _delete_skill,
     install_skill_from_url as _install_skill,
+    export_skill as _export_skill,
+    import_skill as _import_skill,
 )
 from likecodex_engine.tools.registry import ToolRegistry
 
@@ -1186,6 +1188,52 @@ async def ide_skills_install(request: web.Request) -> web.Response:
     })
 
 
+async def ide_skills_export(request: web.Request) -> web.Response:
+    """Export a skill as a zip archive download."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    name = request.query.get("name", "")
+    if not name:
+        return web.json_response({"error": "name query parameter is required"}, status=400)
+    try:
+        data = _export_skill(working_dir, name)
+    except FileNotFoundError as e:
+        return web.json_response({"error": str(e)}, status=404)
+    return web.Response(
+        body=data,
+        status=200,
+        headers={
+            "Content-Type": "application/zip",
+            "Content-Disposition": f'attachment; filename="{name}.zip"',
+        },
+    )
+
+
+async def ide_skills_import(request: web.Request) -> web.Response:
+    """Import skills from an uploaded zip archive."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    reader = await request.multipart()
+    if reader is None:
+        # Fallback to JSON body with base64-encoded data
+        data = await request.json()
+        import base64
+        zip_b64 = data.get("data", "")
+        if not zip_b64:
+            return web.json_response({"error": "multipart file or base64 data required"}, status=400)
+        zip_data = base64.b64decode(zip_b64)
+    else:
+        field = await reader.next()
+        if field is None:
+            return web.json_response({"error": "No file uploaded"}, status=400)
+        zip_data = await field.read(decode=False)
+    try:
+        names = _import_skill(working_dir, zip_data)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"ok": True, "imported": names, "count": len(names)})
+
+
 # ── DeepSeek-specific API handlers ────────────────────────────
 
 
@@ -2167,6 +2215,8 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_post("/api/ide/skills/reload", ide_skills_reload)
     app.router.add_post("/api/ide/skills/invoke", ide_skills_invoke)
     app.router.add_post("/api/ide/skills/install", ide_skills_install)
+    app.router.add_get("/api/ide/skills/export", ide_skills_export)
+    app.router.add_post("/api/ide/skills/import", ide_skills_import)
 
     # ── Workspace API endpoints ─────────────────────────────
     app.router.add_get("/workspace/list", workspace_list)
