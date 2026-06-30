@@ -38,6 +38,7 @@ from likecodex_engine.persistence.session import SessionEvent, SessionStore
 from likecodex_engine.server_turn import prepare_turn, run_manual_compact_responses
 from likecodex_engine.skills.loader import discover_skills, skills_prefix_block
 from likecodex_engine.skills.state import is_skill_enabled, set_skill_enabled, load_skill_state
+from likecodex_engine.skills.manager import create_skill as _create_skill, validate_skill_name
 from likecodex_engine.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -982,6 +983,43 @@ async def ide_skills_detail(request: web.Request) -> web.Response:
                 files.append(str(f.relative_to(skill.source_dir)))
         result["directory_files"] = files
     return web.json_response(result)
+
+
+async def ide_skills_create(request: web.Request) -> web.Response:
+    """Create a new skill with directory-format SKILL.md."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    err = validate_skill_name(name)
+    if err:
+        return web.json_response({"error": err}, status=400)
+    try:
+        path = _create_skill(
+            working_dir,
+            name,
+            description=data.get("description", ""),
+            body=data.get("body", ""),
+            run_as=data.get("run_as", "inline"),
+            model=data.get("model"),
+            allowed_tools=data.get("allowed_tools", []),
+            author=data.get("author", ""),
+            version=data.get("version", "0.1.0"),
+        )
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    # Reload and return the created skill
+    skills = discover_skills(working_dir)
+    skill = next((s for s in skills if s.name == name), None)
+    return web.json_response({
+        "ok": True,
+        "path": str(path),
+        "skill": skill.to_dict() if skill else None,
+    })
 
 
 # ── DeepSeek-specific API handlers ────────────────────────────
@@ -1958,6 +1996,7 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_get("/skills", list_skills)
     app.router.add_get("/api/ide/skills/list", ide_skills_list)
     app.router.add_get("/api/ide/skills/detail", ide_skills_detail)
+    app.router.add_post("/api/ide/skills/create", ide_skills_create)
 
     # ── Workspace API endpoints ─────────────────────────────
     app.router.add_get("/workspace/list", workspace_list)
