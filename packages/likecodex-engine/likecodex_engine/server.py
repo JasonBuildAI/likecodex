@@ -1073,6 +1073,41 @@ async def ide_skills_delete(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "deleted": name})
 
 
+async def ide_skills_enable(request: web.Request) -> web.Response:
+    """Toggle enable/disable state for a skill."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    # Get current state and toggle
+    current = is_skill_enabled(working_dir, name)
+    set_skill_enabled(working_dir, name, not current)
+    return web.json_response({
+        "ok": True,
+        "name": name,
+        "enabled": not current,
+    })
+
+
+async def ide_skills_reload(request: web.Request) -> web.Response:
+    """Force rediscovery of all skills."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    # Clear any cached skill state and re-discover
+    skills = discover_skills(working_dir)
+    # Also reload active agent loops if they have skill runners
+    for sid, loop in _ACTIVE_LOOPS.items():
+        if hasattr(loop, "tools") and hasattr(loop.tools, "_skill_runner"):
+            loop.tools._skill_runner.reload()
+    return web.json_response({
+        "ok": True,
+        "skills_count": len(skills),
+        "skills": [s.to_dict() for s in skills],
+    })
+
+
 # ── DeepSeek-specific API handlers ────────────────────────────
 
 
@@ -2050,6 +2085,8 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_post("/api/ide/skills/create", ide_skills_create)
     app.router.add_put("/api/ide/skills/update", ide_skills_update)
     app.router.add_delete("/api/ide/skills/delete", ide_skills_delete)
+    app.router.add_post("/api/ide/skills/enable", ide_skills_enable)
+    app.router.add_post("/api/ide/skills/reload", ide_skills_reload)
 
     # ── Workspace API endpoints ─────────────────────────────
     app.router.add_get("/workspace/list", workspace_list)
