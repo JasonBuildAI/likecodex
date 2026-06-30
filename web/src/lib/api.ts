@@ -567,6 +567,7 @@ export async function streamChat(
   signal?: AbortSignal,
   agentMode: 'ask' | 'agent' | 'manual' = 'agent',
   activeFiles?: string[],
+  skillName?: string,
 ): Promise<void> {
   const resp = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
@@ -576,6 +577,7 @@ export async function streamChat(
       agent_mode: agentMode,
       ...(sessionId ? { session_id: sessionId } : {}),
       ...(activeFiles && activeFiles.length > 0 ? { active_files: activeFiles } : {}),
+      ...(skillName ? { skill: skillName } : {}),
     }),
     signal,
   });
