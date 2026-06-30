@@ -442,6 +442,28 @@ async def chat(request: web.Request) -> web.StreamResponse:
     if active_files and isinstance(active_files, list):
         context.inject_active_files(active_files, working_dir)
 
+    # Detect skill invocation from request
+    skill_name = data.get("skill")
+    skill_event = None
+    if skill_name:
+        skills = discover_skills(working_dir)
+        skill = next((s for s in skills if s.name == skill_name), None)
+        if skill:
+            body = inject_dynamic_context(skill.body, skill.source_dir)
+            skill_args = data.get("skill_args", "")
+            if skill_args:
+                body = body.replace("$ARGS", skill_args).replace("$1", skill_args)
+            # Inject skill content into context
+            context.add_context_block(f"[Skill: {skill.name}]\n{skill.description}\n\n{body[:8000]}")
+            skill_event = {
+                "type": "skill_invoked",
+                "content": json.dumps({
+                    "skill": skill.name,
+                    "mode": skill.run_as,
+                    "body": body[:2000],
+                }),
+            }
+
     # Inject mode-specific system instructions per turn
     if agent_mode in ("ask", "agent", "manual"):
         _mode_prompt_file = Path(__file__).parent / "prompts" / f"{agent_mode}_mode.txt"
@@ -469,6 +491,10 @@ async def chat(request: web.Request) -> web.StreamResponse:
 
     async with _SSEKeepalive(response):
         try:
+            # Send skill invocation event if applicable
+            if skill_event:
+                await _sse_write(response, json.dumps(skill_event))
+
             if prepared.expanded.compact_trigger:
                 async for resp in _run_manual_compact(context, loop.llm, prepared.expanded.compact_focus):
                     payload = json.dumps(_serialize_response(resp))
