@@ -239,13 +239,32 @@ def import_skill(working_dir: str | Path, zip_data: bytes) -> list[str]:
             if "/" in name:
                 # Directory-format skill: <skill-name>/SKILL.md
                 skill_name = name.split("/")[0]
-                target = skills_dir / skill_name / Path(name).name
+                base_name = Path(name).name
+                target = skills_dir / skill_name / base_name
+            elif name == "SKILL.md":
+                # Standalone SKILL.md from directory-format export
+                # Need to read frontmatter to determine skill name
+                content = zf.read(info)
+                from likecodex_engine.skills.loader import _parse_frontmatter as _parse_frontmatter_str
+                fm, _ = _parse_frontmatter_str(content.decode("utf-8", errors="replace"))
+                skill_name = (fm.get("name") or "").strip() or "unnamed"
+                target = skills_dir / skill_name / "SKILL.md"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+                imported.append(skill_name)
+                continue
             else:
+                # Flat file: <name>.md
                 target = skills_dir / name
+                skill_name = None
+                base_name = name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(zf.read(info))
-            if name.endswith("SKILL.md"):
-                imported.append(target.parent.name if target.name == "SKILL.md" else target.stem)
+            if name.endswith("SKILL.md") or name.endswith(".md"):
+                imported_name = target.parent.name if base_name == "SKILL.md" else target.stem
+                if skill_name:
+                    imported_name = skill_name
+                imported.append(imported_name)
     return imported
 
 

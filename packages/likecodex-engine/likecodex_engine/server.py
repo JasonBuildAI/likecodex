@@ -1243,8 +1243,14 @@ async def ide_skills_import(request: web.Request) -> web.Response:
     """Import skills from an uploaded zip archive."""
     cfg = _resolve_config(request.app[APP_CONFIG])
     working_dir = cfg.get("working_dir", ".")
-    reader = await request.multipart()
-    if reader is None:
+    content_type = request.content_type or ""
+    if content_type.startswith("multipart/"):
+        reader = await request.multipart()
+        field = await reader.next()
+        if field is None:
+            return web.json_response({"error": "No file uploaded"}, status=400)
+        zip_data = await field.read(decode=False)
+    else:
         # Fallback to JSON body with base64-encoded data
         data = await request.json()
         import base64
@@ -1252,11 +1258,6 @@ async def ide_skills_import(request: web.Request) -> web.Response:
         if not zip_b64:
             return web.json_response({"error": "multipart file or base64 data required"}, status=400)
         zip_data = base64.b64decode(zip_b64)
-    else:
-        field = await reader.next()
-        if field is None:
-            return web.json_response({"error": "No file uploaded"}, status=400)
-        zip_data = await field.read(decode=False)
     try:
         names = _import_skill(working_dir, zip_data)
     except Exception as e:
