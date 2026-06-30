@@ -157,6 +157,12 @@ def discover_skills(
     disabled: list[str] | None = None,
 ) -> list[Skill]:
     disabled_set = {name.strip().lower() for name in (disabled or []) if name.strip()}
+
+    # Load per-project enable/disable state
+    from likecodex_engine.skills.state import load_skill_state
+
+    skill_state = load_skill_state(working_dir)
+
     roots: list[Path] = []
     builtins = Path(__file__).resolve().parent / "builtins"
     if builtins.exists():
@@ -193,6 +199,13 @@ def discover_skills(
                 skill = _load_skill_file(path)
                 if skill and skill.name.lower() not in disabled_set:
                     skills[skill.name] = skill
+
+    # Apply enabled/disabled state from skills-state.json
+    for skill in skills.values():
+        entry = skill_state.get(skill.name)
+        if entry and not entry.get("enabled", True):
+            skill.enabled = False
+
     return [skills[k] for k in sorted(skills.keys())]
 
 
