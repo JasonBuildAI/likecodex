@@ -36,7 +36,7 @@ from likecodex_engine.permissions.evaluator import ApprovalMode, PermissionEvalu
 from likecodex_engine.permissions.policy import Policy
 from likecodex_engine.persistence.session import SessionEvent, SessionStore
 from likecodex_engine.server_turn import prepare_turn, run_manual_compact_responses
-from likecodex_engine.skills.loader import discover_skills, skills_prefix_block
+from likecodex_engine.skills.loader import discover_skills, skills_prefix_block, inject_dynamic_context
 from likecodex_engine.skills.state import is_skill_enabled, set_skill_enabled, load_skill_state
 from likecodex_engine.skills.manager import (
     create_skill as _create_skill,
@@ -1108,6 +1108,53 @@ async def ide_skills_reload(request: web.Request) -> web.Response:
     })
 
 
+async def ide_skills_invoke(request: web.Request) -> web.Response:
+    """Invoke a skill manually (inline or subagent execution)."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    data = await request.json()
+    name = data.get("name", "").strip()
+    args = data.get("args", "")
+    session_id = data.get("session_id", "")
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    skills = discover_skills(working_dir)
+    skill = next((s for s in skills if s.name == name), None)
+    if not skill:
+        return web.json_response({"error": f"Skill {name!r} not found"}, status=404)
+    # Process dynamic context
+    body = inject_dynamic_context(skill.body, skill.source_dir)
+    if args:
+        body = body.replace("$ARGS", args).replace("$1", args)
+    if skill.run_as == "subagent":
+        if not session_id:
+            return web.json_response({"error": "session_id required for subagent skills"}, status=400)
+        loop = _resolve_loop(session_id)
+        if loop is None:
+            return web.json_response({"error": "Session not found"}, status=404)
+        prompt = f"{skill.description}\n\n{body}"
+        if args:
+            prompt += f"\n\nArguments: {args}"
+        from likecodex_engine.agent.loop import build_subagent_loop
+        subagent = build_subagent_loop(loop, skill.allowed_tools or None, None)
+        parts: list[str] = []
+        async for resp in subagent.run(prompt):
+            if resp.event_type == "assistant" and resp.content:
+                parts.append(resp.content)
+        result_text = "\n".join(parts).strip()
+        return web.json_response({
+            "skill": name,
+            "mode": "subagent",
+            "result": result_text,
+        })
+    # Inline mode
+    return web.json_response({
+        "skill": name,
+        "mode": "inline",
+        "body": body[:8000],
+    })
+
+
 # ── DeepSeek-specific API handlers ────────────────────────────
 
 
@@ -2087,6 +2134,7 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_delete("/api/ide/skills/delete", ide_skills_delete)
     app.router.add_post("/api/ide/skills/enable", ide_skills_enable)
     app.router.add_post("/api/ide/skills/reload", ide_skills_reload)
+    app.router.add_post("/api/ide/skills/invoke", ide_skills_invoke)
 
     # ── Workspace API endpoints ─────────────────────────────
     app.router.add_get("/workspace/list", workspace_list)
