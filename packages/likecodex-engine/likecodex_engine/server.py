@@ -963,6 +963,27 @@ async def ide_skills_list(request: web.Request) -> web.Response:
     return web.json_response({"skills": [s.to_dict() for s in skills]})
 
 
+async def ide_skills_detail(request: web.Request) -> web.Response:
+    """Get detailed info for a single skill including body and directory files."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    name = request.query.get("name", "")
+    if not name:
+        return web.json_response({"error": "name query parameter is required"}, status=400)
+    skills = discover_skills(working_dir)
+    skill = next((s for s in skills if s.name == name), None)
+    if not skill:
+        return web.json_response({"error": f"Skill {name!r} not found"}, status=404)
+    result = skill.to_dict()
+    if skill.source_dir and skill.source_dir.is_dir():
+        files = []
+        for f in sorted(skill.source_dir.rglob("*")):
+            if f.is_file():
+                files.append(str(f.relative_to(skill.source_dir)))
+        result["directory_files"] = files
+    return web.json_response(result)
+
+
 # ── DeepSeek-specific API handlers ────────────────────────────
 
 
@@ -1936,6 +1957,7 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_post("/sessions/delete", delete_session)
     app.router.add_get("/skills", list_skills)
     app.router.add_get("/api/ide/skills/list", ide_skills_list)
+    app.router.add_get("/api/ide/skills/detail", ide_skills_detail)
 
     # ── Workspace API endpoints ─────────────────────────────
     app.router.add_get("/workspace/list", workspace_list)
