@@ -38,7 +38,7 @@ from likecodex_engine.persistence.session import SessionEvent, SessionStore
 from likecodex_engine.server_turn import prepare_turn, run_manual_compact_responses
 from likecodex_engine.skills.loader import discover_skills, skills_prefix_block
 from likecodex_engine.skills.state import is_skill_enabled, set_skill_enabled, load_skill_state
-from likecodex_engine.skills.manager import create_skill as _create_skill, validate_skill_name
+from likecodex_engine.skills.manager import create_skill as _create_skill, validate_skill_name, update_skill as _update_skill
 from likecodex_engine.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -1022,6 +1022,35 @@ async def ide_skills_create(request: web.Request) -> web.Response:
     })
 
 
+async def ide_skills_update(request: web.Request) -> web.Response:
+    """Update fields of an existing skill."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    fields = {}
+    for key in ("name", "description", "body", "run_as", "model", "allowed_tools"):
+        if key in data:
+            fields[key] = data[key]
+    try:
+        path = _update_skill(working_dir, name, **fields)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    if path is None:
+        return web.json_response({"error": f"Skill {name!r} not found"}, status=404)
+    # Reload and return
+    skills = discover_skills(working_dir)
+    updated_name = data.get("name", name)
+    skill = next((s for s in skills if s.name == updated_name), None)
+    return web.json_response({
+        "ok": True,
+        "path": str(path),
+        "skill": skill.to_dict() if skill else None,
+    })
+
+
 # ── DeepSeek-specific API handlers ────────────────────────────
 
 
@@ -1997,6 +2026,7 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_get("/api/ide/skills/list", ide_skills_list)
     app.router.add_get("/api/ide/skills/detail", ide_skills_detail)
     app.router.add_post("/api/ide/skills/create", ide_skills_create)
+    app.router.add_put("/api/ide/skills/update", ide_skills_update)
 
     # ── Workspace API endpoints ─────────────────────────────
     app.router.add_get("/workspace/list", workspace_list)
