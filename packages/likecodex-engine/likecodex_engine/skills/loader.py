@@ -46,24 +46,44 @@ class Skill:
         return d
 
 
-def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
+def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Parse YAML frontmatter from a SKILL.md file.
+
+    Uses PyYAML for proper nested structures (metadata dict, lists, etc.)
+    with a fallback to the naive parser if PyYAML is unavailable.
+    """
     if not text.startswith("---"):
         return {}, text
     parts = text.split("---", 2)
     if len(parts) < 3:
         return {}, text
-    meta: dict[str, str] = {}
-    for line in parts[1].strip().splitlines():
-        if ":" in line:
-            key, val = line.split(":", 1)
-            meta[key.strip()] = val.strip()
-    return meta, parts[2].strip()
+    yaml_block = parts[1].strip()
+    body = parts[2].strip()
+    try:
+        import yaml
+        meta = yaml.safe_load(yaml_block)
+        if not isinstance(meta, dict):
+            meta = {}
+        return meta, body
+    except ImportError:
+        # Fallback: naive line-by-line parser
+        meta: dict = {}
+        for line in yaml_block.splitlines():
+            if ":" in line:
+                key, val = line.split(":", 1)
+                meta[key.strip()] = val.strip()
+        return meta, body
+    except Exception:
+        return {}, body
 
 
-def _parse_allowed_tools(raw: str) -> list[str]:
+def _parse_allowed_tools(raw) -> list[str]:
+    """Parse allowed-tools from frontmatter (string, list, or None)."""
     if not raw:
         return []
-    return [part.strip() for part in raw.replace(",", " ").split() if part.strip()]
+    if isinstance(raw, list):
+        return [str(t).strip() for t in raw if t]
+    return [part.strip() for part in str(raw).replace(",", " ").split() if part.strip()]
 
 
 def _infer_source_type(path: Path) -> str:
@@ -88,9 +108,13 @@ def _load_skill_file(path: Path) -> Skill | None:
     # Parse metadata dict from frontmatter
     raw_meta = meta.get("metadata", "")
     meta_dict: dict[str, str] = {}
-    if isinstance(raw_meta, str) and raw_meta:
+    if isinstance(raw_meta, dict):
+        meta_dict = {str(k): str(v) for k, v in raw_meta.items()}
+    elif isinstance(raw_meta, str) and raw_meta:
         try:
-            meta_dict = json.loads(raw_meta)
+            parsed = json.loads(raw_meta)
+            if isinstance(parsed, dict):
+                meta_dict = {str(k): str(v) for k, v in parsed.items()}
         except (json.JSONDecodeError, ValueError):
             pass
     return Skill(
