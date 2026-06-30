@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import textwrap
 import uuid
 from collections.abc import AsyncIterator
@@ -43,6 +44,7 @@ from likecodex_engine.skills.manager import (
     validate_skill_name,
     update_skill as _update_skill,
     delete_skill as _delete_skill,
+    install_skill_from_url as _install_skill,
 )
 from likecodex_engine.tools.registry import ToolRegistry
 
@@ -1155,6 +1157,35 @@ async def ide_skills_invoke(request: web.Request) -> web.Response:
     })
 
 
+async def ide_skills_install(request: web.Request) -> web.Response:
+    """Install a skill from a Git URL (e.g. GitHub repo)."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    data = await request.json()
+    url = data.get("url", "").strip()
+    if not url:
+        return web.json_response({"error": "url is required"}, status=400)
+    try:
+        path = _install_skill(working_dir, url)
+    except FileExistsError as e:
+        return web.json_response({"error": str(e)}, status=409)
+    except subprocess.TimeoutExpired:
+        return web.json_response({"error": "Git clone timed out"}, status=408)
+    except RuntimeError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    # Reload and return
+    skills = discover_skills(working_dir)
+    skill_name = path.name
+    skill = next((s for s in skills if s.name == skill_name), None)
+    return web.json_response({
+        "ok": True,
+        "path": str(path),
+        "skill": skill.to_dict() if skill else None,
+    })
+
+
 # ── DeepSeek-specific API handlers ────────────────────────────
 
 
@@ -2135,6 +2166,7 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_post("/api/ide/skills/enable", ide_skills_enable)
     app.router.add_post("/api/ide/skills/reload", ide_skills_reload)
     app.router.add_post("/api/ide/skills/invoke", ide_skills_invoke)
+    app.router.add_post("/api/ide/skills/install", ide_skills_install)
 
     # ── Workspace API endpoints ─────────────────────────────
     app.router.add_get("/workspace/list", workspace_list)
