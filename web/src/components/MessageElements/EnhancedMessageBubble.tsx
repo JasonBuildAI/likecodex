@@ -157,6 +157,31 @@ const HoverActions = memo(function HoverActions({ onCopy, onRegenerate }: HoverA
   );
 });
 
+// ── Skill Invocation Card ─────────────────────────────────────────────
+const SkillInvokeCard = memo(function SkillInvokeCard({ content }: { content: string }) {
+  try {
+    const data = JSON.parse(content);
+    return (
+      <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-primary text-sm">▶</span>
+          <span className="text-xs font-semibold text-primary">{data.skill || 'skill'}</span>
+          <span className="text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+            {data.mode || 'inline'}
+          </span>
+        </div>
+        {(data.result || data.body) && (
+          <div className="text-xs text-muted/80 max-h-32 overflow-y-auto whitespace-pre-wrap">
+            {(data.result || data.body || '').slice(0, 2000)}
+          </div>
+        )}
+      </div>
+    );
+  } catch {
+    return <div className="text-xs text-muted">{content}</div>;
+  }
+});
+
 // ── Enhanced MessageBubble ───────────────────────────────────────────────
 interface MessageBubbleProps {
   msg: Message;
@@ -236,6 +261,8 @@ export const EnhancedMessageBubble = memo(function EnhancedMessageBubble({
         {/* Content */}
         {isEmpty ? (
           <TypingIndicator />
+        ) : msg.eventType === 'skill_invoke' ? (
+          <SkillInvokeCard content={msg.content} />
         ) : (
           msg.content && (
             <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
