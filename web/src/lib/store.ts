@@ -65,7 +65,21 @@ export interface Toast {
 export interface Skill {
   name: string;
   description: string;
+  body?: string;
+  run_as?: string;
+  path?: string | null;
+  model?: string | null;
+  allowed_tools?: string[];
+  license?: string;
+  compatibility?: string;
+  metadata?: Record<string, string>;
+  version?: string;
+  author?: string;
+  enabled?: boolean;
+  source_type?: string;
+  source_dir?: string | null;
   source?: string;
+  directory_files?: string[];
 }
 
 export interface SearchResult {
@@ -119,6 +133,10 @@ interface AppState {
   commandPaletteOpen: boolean;
   approvalMode: string;
   skills: Skill[];
+  skillDetail: Skill | null;
+  skillEditorOpen: boolean;
+  skillSearchQuery: string;
+  skillFilter: 'all' | 'builtin' | 'project' | 'home';
   codeGraphResults: SearchResult[];
 
   // ── File tree & editor state ──────────────────────────────
@@ -172,6 +190,10 @@ interface AppState {
   setCommandPaletteOpen: (open: boolean) => void;
   setApprovalMode: (mode: string) => void;
   setSkills: (skills: Skill[]) => void;
+  setSkillDetail: (skill: Skill | null) => void;
+  setSkillEditorOpen: (open: boolean) => void;
+  setSkillSearchQuery: (query: string) => void;
+  setSkillFilter: (filter: 'all' | 'builtin' | 'project' | 'home') => void;
   setCodeGraphResults: (results: SearchResult[]) => void;
 
   // ── File tree & editor actions ─────────────────────────────
@@ -216,6 +238,10 @@ export const useAppStore = create<AppState>((set) => ({
   commandPaletteOpen: false,
   approvalMode: 'auto',
   skills: [],
+  skillDetail: null,
+  skillEditorOpen: false,
+  skillSearchQuery: '',
+  skillFilter: 'all',
   codeGraphResults: [],
   agentMode: 'agent',
 
@@ -357,6 +383,10 @@ export const useAppStore = create<AppState>((set) => ({
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setApprovalMode: (mode) => set({ approvalMode: mode }),
   setSkills: (skills) => set({ skills }),
+  setSkillDetail: (skill) => set({ skillDetail: skill }),
+  setSkillEditorOpen: (open) => set({ skillEditorOpen: open }),
+  setSkillSearchQuery: (query) => set({ skillSearchQuery: query }),
+  setSkillFilter: (filter) => set({ skillFilter: filter }),
   setCodeGraphResults: (results) => set({ codeGraphResults: results }),
 
   // ── File tree & editor actions ───────────────────────────────────
