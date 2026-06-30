@@ -37,6 +37,7 @@ from likecodex_engine.permissions.policy import Policy
 from likecodex_engine.persistence.session import SessionEvent, SessionStore
 from likecodex_engine.server_turn import prepare_turn, run_manual_compact_responses
 from likecodex_engine.skills.loader import discover_skills, skills_prefix_block
+from likecodex_engine.skills.state import is_skill_enabled, set_skill_enabled, load_skill_state
 from likecodex_engine.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -950,8 +951,16 @@ async def list_skills(request: web.Request) -> web.Response:
     working_dir = cfg.get("working_dir", ".")
     skills = discover_skills(working_dir)
     return web.json_response(
-        {"skills": [{"name": s.name, "description": s.description, "source": s.source} for s in skills]}
+        {"skills": [{"name": s.name, "description": s.description, "source": s.source, "enabled": s.enabled} for s in skills]}
     )
+
+
+async def ide_skills_list(request: web.Request) -> web.Response:
+    """List all skills with full metadata (enhanced endpoint)."""
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    skills = discover_skills(working_dir)
+    return web.json_response({"skills": [s.to_dict() for s in skills]})
 
 
 # ── DeepSeek-specific API handlers ────────────────────────────
@@ -1926,6 +1935,7 @@ def create_app(config: dict | None = None) -> web.Application:
     app.router.add_post("/resume", resume_session)
     app.router.add_post("/sessions/delete", delete_session)
     app.router.add_get("/skills", list_skills)
+    app.router.add_get("/api/ide/skills/list", ide_skills_list)
 
     # ── Workspace API endpoints ─────────────────────────────
     app.router.add_get("/workspace/list", workspace_list)
