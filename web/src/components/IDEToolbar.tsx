@@ -5,6 +5,13 @@ import { useAppStore } from '@/lib/store';
 
 /**
  * IDE top toolbar: logo, panel tabs, mode selector, cache indicator
+ *
+ * Phase 7.6: Debug Toolbar
+ * - Future: Add debug controls (step over, step into, step out, continue)
+ * - Add breakpoint toggle button (F9)
+ * - Add thread/process selector dropdown
+ * - Add debug session status indicator (running/paused/stopped)
+ * - Wire into the debug adapter protocol (DAP) backend
  */
 export const IDEToolbar: React.FC = () => {
   const cacheHitRate = useAppStore((s) => s.cacheHitRate);
