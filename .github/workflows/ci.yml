@@ -28,8 +28,56 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Build workspace
         run: cargo build --workspace
-      - name: Run Rust tests
+      - name: Run all Rust tests (workspace)
         run: cargo test --workspace
+
+  # ------------------------------------------------------------------
+  # Rust (likecodex-ide-fs): dedicated crate tests
+  # ------------------------------------------------------------------
+  rust-ide-fs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: "true"
+      - name: Build likecodex-ide-fs
+        run: cargo build -p likecodex-ide-fs
+      - name: Run likecodex-ide-fs tests (unit + integration)
+        run: cargo test -p likecodex-ide-fs -- --nocapture
+
+  # ------------------------------------------------------------------
+  # Rust (likecodex-cli): CLI crate tests
+  # ------------------------------------------------------------------
+  rust-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: "true"
+      - name: Build likecodex-cli
+        run: cargo build -p likecodex-cli
+      - name: Run likecodex-cli tests
+        run: cargo test -p likecodex-cli
+
+  # ------------------------------------------------------------------
+  # Rust (likecodex-acp): ACP crate tests
+  # ------------------------------------------------------------------
+  rust-acp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: "true"
+      - name: Build likecodex-acp
+        run: cargo build -p likecodex-acp
+      - name: Run likecodex-acp tests
+        run: cargo test -p likecodex-acp
 
   # ------------------------------------------------------------------
   # Python-Only (fast): lint, type-check, unit tests — no Rust compilation
