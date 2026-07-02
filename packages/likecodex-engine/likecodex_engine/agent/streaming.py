@@ -12,12 +12,18 @@ from likecodex_engine.llm.errors import StreamInterruptedError
 from likecodex_engine.llm.retry import take_pending_retries
 from likecodex_engine.llm.tool_repair import merge_tool_calls
 
-MAX_STREAM_RECOVERIES = 5
+MAX_STREAM_RECOVERIES = 8
+
+# Backoff schedule: 1s, 2s, 4s, 8s, 16s, 30s, 60s, 120s
+_BACKOFF_SCHEDULE = [1, 2, 4, 8, 16, 30, 60, 120]
 
 
 def backoff_delay(attempt: int) -> float:
-    """Exponential backoff with jitter: 1s, 2s, 4s, 8s, 16s + random jitter."""
-    delay = 2 ** attempt  # 1, 2, 4, 8, 16
+    """Exponential backoff with jitter: 1s->2s->4s->8s->16s->30s->60s->120s + jitter.
+    Uses a predefined schedule with random jitter of up to 50% of the delay.
+    """
+    idx = min(attempt - 1, len(_BACKOFF_SCHEDULE) - 1) if attempt > 0 else 0
+    delay = _BACKOFF_SCHEDULE[idx]
     jitter = random.uniform(0, 0.5 * delay)
     return delay + jitter
 
