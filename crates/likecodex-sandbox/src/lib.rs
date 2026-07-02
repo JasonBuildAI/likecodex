@@ -5,7 +5,6 @@ pub mod policy;
 use anyhow::Result;
 use likecodex_core::config::SandboxConfig;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 use tracing::{info, warn};

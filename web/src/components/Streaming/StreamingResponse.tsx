@@ -178,3 +178,92 @@ export const ThinkingIndicator: React.FC<{ message?: string }> = ({ message = 'A
   );
 };
 export default StreamingResponse;
+
+// ── ReasoningPanel: displays AI's reasoning/thinking process ────────────
+interface ReasoningPanelProps {
+  reasoningContent: string;
+  isStreaming: boolean;
+}
+
+export const ReasoningPanel: React.FC<ReasoningPanelProps> = ({
+  reasoningContent,
+  isStreaming,
+}) => {
+  const [expanded, setExpanded] = useState(true);
+
+  if (!reasoningContent && !isStreaming) return null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, height: 0 }}
+      animate={{ opacity: 1, height: 'auto' }}
+      className="rounded-lg border border-blue-500/20 bg-blue-500/5 overflow-hidden mb-2"
+    >
+      {/* Header */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-blue-400 hover:bg-blue-500/10 transition-colors"
+      >
+        <motion.svg
+          animate={{ rotate: expanded ? 90 : 0 }}
+          className="h-3 w-3 shrink-0"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </motion.svg>
+        <span className="font-medium">Thinking</span>
+        {isStreaming && (
+          <span className="inline-flex gap-0.5">
+            <motion.span
+              animate={{ opacity: [0.3, 1, 0.3] }}
+              transition={{ duration: 1.2, repeat: Infinity, delay: 0 }}
+              className="w-1 h-1 rounded-full bg-blue-400"
+            />
+            <motion.span
+              animate={{ opacity: [0.3, 1, 0.3] }}
+              transition={{ duration: 1.2, repeat: Infinity, delay: 0.2 }}
+              className="w-1 h-1 rounded-full bg-blue-400"
+            />
+            <motion.span
+              animate={{ opacity: [0.3, 1, 0.3] }}
+              transition={{ duration: 1.2, repeat: Infinity, delay: 0.4 }}
+              className="w-1 h-1 rounded-full bg-blue-400"
+            />
+          </span>
+        )}
+        {reasoningContent && (
+          <span className="text-[10px] text-muted/60 ml-auto">
+            {reasoningContent.length} chars
+          </span>
+        )}
+      </button>
+
+      {/* Content */}
+      <AnimatePresence initial={false}>
+        {expanded && reasoningContent && (
+          <motion.div
+            key="content"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="px-3 pb-3 text-[11px] text-muted leading-relaxed whitespace-pre-wrap font-mono">
+              {reasoningContent}
+              {isStreaming && (
+                <motion.span
+                  animate={{ opacity: [1, 0, 1] }}
+                  transition={{ duration: 0.8, repeat: Infinity }}
+                  className="inline-block w-1.5 h-3 bg-blue-400 ml-0.5 align-middle"
+                />
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+};

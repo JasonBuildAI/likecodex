@@ -450,6 +450,22 @@ function applyParsedEvent(
         eventType: 'tool_result',
         timestamp: Date.now(),
       });
+      // Update active tool call status to completed
+      try {
+        const state = useAppStore.getState();
+        const activeCalls = state.activeToolCalls;
+        if (activeCalls.length > 0) {
+          const lastRunning = [...activeCalls].reverse().find(c => c.status === 'running');
+          if (lastRunning) {
+            state.upsertToolCallStatus({
+              ...lastRunning,
+              status: parsed.content?.toLowerCase().includes('error') ? 'error' : 'completed',
+              completedAt: Date.now(),
+              result: parsed.content,
+            });
+          }
+        }
+      } catch { /* store not available */ }
       break;
     case 'permission':
       if (parsed.permission) handlers.onPermission?.(parsed.permission);
@@ -486,6 +502,10 @@ function applyParsedEvent(
     case 'reasoning_delta':
       if (parsed.reasoningContent) {
         handlers.onReasoningDelta?.(parsed.reasoningContent);
+        // Directly update store for reasoning display
+        try {
+          useAppStore.getState().appendReasoningContent(parsed.reasoningContent);
+        } catch { /* store not available */ }
       }
       break;
     case 'agent_activity':
@@ -508,6 +528,21 @@ function applyParsedEvent(
         eventType: 'agent_thinking',
         timestamp: Date.now(),
       });
+      break;
+    case 'tool_executing':
+      if (parsed.call) {
+        handlers.onToolCallStart?.(parsed.call);
+        // Directly update store for real-time tool call status
+        try {
+          const state = useAppStore.getState();
+          state.upsertToolCallStatus({
+            id: parsed.call.id || `${parsed.call.name}-${Date.now()}`,
+            call: parsed.call,
+            status: 'running',
+            startedAt: Date.now(),
+          });
+        } catch { /* store not available */ }
+      }
       break;
     default:
       break;

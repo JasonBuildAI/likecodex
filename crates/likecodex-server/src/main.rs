@@ -591,30 +591,28 @@ async fn index_search(Query(query): Query<IndexSearchQuery>) -> Json<serde_json:
     .unwrap_or_else(|_| PathBuf::from("."));
 
     let pattern = query.pattern.clone();
-    let results = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || -> Vec<serde_json::Value> {
         let mut index = FileIndex::new();
-        match index.index_or_load(&cwd) {
-            Ok(()) => index
-                .search_by_name(&pattern)
-                .into_iter()
-                .take(50)
-                .map(|entry| {
-                    serde_json::json!({
-                        "path": entry.path.display().to_string(),
-                        "language": entry.language,
-                        "size": entry.size,
-                    })
-                })
-                .collect::<Vec<_>>(),
-            Err(e) => {
-                return (false, e.to_string(), vec![]);
-            }
+        if index.index_or_load(&cwd).is_err() {
+            return vec![];
         }
+        index
+            .search_by_name(&pattern)
+            .into_iter()
+            .take(50)
+            .map(|entry| {
+                serde_json::json!({
+                    "path": entry.path.display().to_string(),
+                    "language": entry.language,
+                    "size": entry.size,
+                })
+            })
+            .collect::<Vec<_>>()
     })
     .await
-    .unwrap_or_else(|_| (false, "task panicked".to_string(), vec![]));
+    .unwrap_or_default();
 
-    Json(serde_json::json!({ "pattern": query.pattern, "results": results.2 }))
+    Json(serde_json::json!({ "pattern": query.pattern, "results": result }))
 }
 
 fn percent_encode_query(value: &str) -> String {
