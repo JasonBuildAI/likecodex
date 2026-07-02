@@ -137,13 +137,14 @@ async def run_manual_compact_responses(
         metadata={"trigger": "manual", "focus": focus},
     )
     info = await context.compact_async(instructions=focus, force=True)
+    compacted = info.get("compacted") if isinstance(info, dict) else False
     yield LLMResponse(
         content=str(info),
         model="system",
         event_type="compaction_done",
         metadata=info if isinstance(info, dict) else {},
     )
-    if info.get("compacted"):
+    if compacted:
         reply = "Context compacted."
         if focus:
             reply += f" Focus: {focus}"

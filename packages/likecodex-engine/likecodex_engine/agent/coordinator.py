@@ -167,6 +167,18 @@ class Coordinator:
         )
         plan = await self._plan_with_tools(prompt)
         yield LLMResponse(content=plan, model="planner", event_type="plan")
+
+        # Inject Planner's research findings into Executor context
+        injected = 0
+        for msg in self._planner_context.messages:
+            if msg.role in ("assistant", "tool") and msg.content and len(msg.content) > 100:
+                self.executor.context.add_context_block(
+                    f"[Planner Research]\n{msg.content[:1500]}"
+                )
+                injected += 1
+                if injected >= 3:  # Limit to avoid bloating context
+                    break
+
         yield LLMResponse(content="", model="executor", event_type="phase", metadata={"phase": "executing"})
         async for resp in self.executor.run(format_handoff(prompt, plan)):
             yield resp
