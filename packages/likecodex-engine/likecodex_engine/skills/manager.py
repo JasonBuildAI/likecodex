@@ -5,6 +5,7 @@ Provides high-level operations used by the HTTP API layer.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
@@ -12,10 +13,130 @@ import subprocess
 import textwrap
 import zipfile
 from pathlib import Path
+from typing import Any
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9\-]{0,63}$")
+
+# Default remote skills registry index
+DEFAULT_SKILLS_INDEX = "https://raw.githubusercontent.com/JasonBuildAI/likecodex-skills/main/index.json"
+
+
+async def fetch_remote_index(
+    index_url: str | None = None,
+) -> dict[str, Any]:
+    """Fetch the remote skills marketplace index.
+
+    Returns a dict with:
+        {
+            "version": "1.0",
+            "skills": [
+                {
+                    "name": str,
+                    "description": str,
+                    "version": str,
+                    "author": str,
+                    "download_url": str,
+                    "tags": [str],
+                    "license": str,
+                },
+                ...
+            ]
+        }
+    """
+    url = index_url or DEFAULT_SKILLS_INDEX
+    logger.info("Fetching remote skills index from %s", url)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise ValueError("Remote index is not a JSON object")
+            return data
+    except Exception as e:
+        logger.warning("Failed to fetch remote skills index: %s", e)
+        return {"skills": [], "error": str(e)}
+
+
+async def search_remote_skills(
+    query: str,
+    index_url: str | None = None,
+) -> list[dict[str, Any]]:
+    """Search the remote skills marketplace by name or description."""
+    index = await fetch_remote_index(index_url)
+    skills = index.get("skills", [])
+    if not query:
+        return skills
+    q = query.lower()
+    return [
+        s for s in skills
+        if q in s.get("name", "").lower()
+        or q in s.get("description", "").lower()
+        or any(q in t.lower() for t in s.get("tags", []))
+    ]
+
+
+async def install_skill_from_marketplace(
+    working_dir: str | Path,
+    skill_name: str,
+    index_url: str | None = None,
+) -> Path:
+    """One-click install a skill from the remote marketplace by name."""
+    index = await fetch_remote_index(index_url)
+    skills = index.get("skills", [])
+    match = next(
+        (s for s in skills if s.get("name", "").lower() == skill_name.lower()),
+        None,
+    )
+    if not match:
+        available = [s.get("name", "?") for s in skills]
+        raise FileNotFoundError(
+            f"Skill {skill_name!r} not found in marketplace. "
+            f"Available: {', '.join(available)}"
+        )
+    download_url = match.get("download_url") or match.get("url")
+    if not download_url:
+        raise ValueError(f"Skill {skill_name!r} has no download URL")
+    logger.info("Installing skill %s from %s", skill_name, download_url)
+    if download_url.endswith(".git"):
+        return install_skill_from_url(working_dir, download_url)
+    # Download as zip
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.get(download_url)
+        resp.raise_for_status()
+        data = resp.content
+    return _install_skill_from_zip_data(working_dir, skill_name, data)
+
+
+def _install_skill_from_zip_data(
+    working_dir: str | Path,
+    skill_name: str,
+    zip_data: bytes,
+) -> Path:
+    """Install a skill from in-memory zip data."""
+    import io
+
+    skills_dir = _skills_dir(working_dir)
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    target = skills_dir / skill_name
+    if target.exists():
+        raise FileExistsError(f"Skill {skill_name!r} already exists")
+    target.mkdir(parents=True)
+    buf = io.BytesIO(zip_data)
+    with zipfile.ZipFile(buf, "r") as zf:
+        zf.extractall(target)
+    # Ensure SKILL.md exists
+    skill_md = target / "SKILL.md"
+    if not skill_md.exists():
+        # Look for any .md file to rename
+        md_files = list(target.glob("*.md"))
+        if md_files:
+            md_files[0].rename(skill_md)
+    return skill_md
 
 
 def validate_skill_name(name: str) -> str | None:
