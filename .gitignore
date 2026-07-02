@@ -49,6 +49,7 @@ Thumbs.db
 .plans/
 engine.err
 engine.log
+engine.out
 .trae/
 *.egg-info/
 /test_server.py
