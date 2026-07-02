@@ -365,7 +365,14 @@ export function EditorPanel() {
           />
         </div>
 
-        {/* Inline AI edit input bar */}
+        {/* Inline AI edit input bar — positioned at bottom via flex layout
+       *  TODO: For floating overlay behavior (over editor, not below):
+       *  1. Use fixed/absolute positioning anchored to editor selection
+       *  2. Add z-index layer above Monaco
+       *  3. Animate entry/exit via framer-motion
+       *  4. Handle overflow on small screens
+       *  Currently uses flex layout which pushes editor up — works but not ideal.
+       *  Floating approach preferred once we capture editor container offsets. */}
         <InlineEditInput
           state={inlineEdit}
           onClose={handleInlineClose}
