@@ -31,6 +31,7 @@ export class GhostTextManager {
   private readonly TRIGGER_CHARS = /[a-zA-Z0-9_.)\]>}\s]/;
   private readonly MAX_PREFIX_CHARS = 2000;
   private readonly MAX_SUFFIX_CHARS = 500;
+  private requestSerial = 0;
 
   constructor(editor: MonacoEditor, monaco: MonacoNS) {
     this.editor = editor;
