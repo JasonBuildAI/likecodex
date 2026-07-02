@@ -55,9 +55,15 @@ export function TerminalPanel() {
   const [completions, setCompletions] = useState<CompletionItem[]>([]);
   const [completionIdx, setCompletionIdx] = useState(-1);
   const [showHelp, setShowHelp] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [useRegex, setUseRegex] = useState(false);
+  const [searchMatches, setSearchMatches] = useState<number[]>([]);
+  const [searchIndex, setSearchIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const historySearchRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
@@ -89,6 +95,43 @@ export function TerminalPanel() {
       historySearchRef.current.focus();
     }
   }, [showHistorySearch]);
+
+  // Focus terminal search input
+  useEffect(() => {
+    if (showSearch && searchInputRef.current) {
+      searchInputRef.current.focus();
+    }
+  }, [showSearch]);
+
+  // Compute search matches when query or session changes
+  useEffect(() => {
+    if (!showSearch || !searchQuery.trim() || !activeSession) {
+      setSearchMatches([]);
+      setSearchIndex(0);
+      return;
+    }
+    const matches: number[] = [];
+    const q = searchQuery;
+    activeSession.lines.forEach((line, i) => {
+      try {
+        if (useRegex) {
+          const flags = q.startsWith('(?i)') ? 'u' : 'iu';
+          const pattern = q.startsWith('(?i)') ? q.slice(4) : q;
+          if (new RegExp(pattern, flags).test(line.content)) {
+            matches.push(i);
+          }
+        } else {
+          if (line.content.toLowerCase().includes(q.toLowerCase())) {
+            matches.push(i);
+          }
+        }
+      } catch {
+        // Invalid regex, skip
+      }
+    });
+    setSearchMatches(matches);
+    setSearchIndex(matches.length > 0 ? 0 : -1);
+  }, [searchQuery, showSearch, activeSession, useRegex]);
 
   const handleSubmit = useCallback(() => {
     if (!input.trim() || isExecuting) return;
@@ -142,8 +185,20 @@ export function TerminalPanel() {
         setShowHistorySearch(true);
         setHistorySearchQuery('');
         setHistorySearchIdx(0);
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setShowSearch(true);
+        setSearchQuery('');
+        setSearchMatches([]);
+        setSearchIndex(0);
       } else if (e.key === 'Escape') {
-        if (completions.length > 0) {
+        if (showSearch) {
+          e.preventDefault();
+          setShowSearch(false);
+          setSearchQuery('');
+          setSearchMatches([]);
+          setSearchIndex(0);
+        } else if (completions.length > 0) {
           e.preventDefault();
           setCompletions([]);
           setCompletionIdx(-1);
@@ -221,26 +276,148 @@ export function TerminalPanel() {
         ref={scrollRef}
         className="flex-1 overflow-y-auto p-2 font-mono text-xs leading-relaxed min-h-0"
       >
-        {activeSession.lines.map((line, i) => (
-          <div
-            key={i}
-            className={
-              line.type === 'input'
-                ? 'text-blue-300'
-                : line.type === 'error'
-                  ? 'text-red-400'
-                  : line.type === 'system'
-                    ? 'text-gray-500'
-                    : 'text-gray-300'
-            }
-          >
-            {line.type === 'input' ? `$ ${line.content}` : line.content}
-          </div>
-        ))}
+        {activeSession.lines.map((line, i) => {
+          const isMatch = searchMatches.includes(i);
+          const isActiveMatch = isMatch && searchMatches.indexOf(i) === searchIndex;
+          return (
+            <div
+              key={i}
+              ref={isActiveMatch ? (el) => {
+                if (el) {
+                  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                }
+              } : undefined}
+              className={
+                (isActiveMatch
+                  ? 'bg-yellow-500/30 text-white'
+                  : isMatch
+                    ? 'bg-yellow-500/15'
+                    : '') +
+                ' ' +
+                (line.type === 'input'
+                  ? 'text-blue-300'
+                  : line.type === 'error'
+                    ? 'text-red-400'
+                    : line.type === 'system'
+                      ? 'text-gray-500'
+                      : 'text-gray-300')
+              }
+            >
+              {line.type === 'input' ? `$ ${line.content}` : line.content}
+            </div>
+          );
+        })}
         {activeSession.isRunning && (
           <div className="text-yellow-400 animate-pulse">▊</div>
         )}
       </div>
+
+      {/* Terminal search overlay */}
+      {showSearch && (
+        <div className="border-t border-gray-700 bg-[#252535] p-2 shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-yellow-400 shrink-0">🔍</span>
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setShowSearch(false);
+                  setSearchQuery('');
+                  setSearchMatches([]);
+                  setSearchIndex(0);
+                  inputRef.current?.focus();
+                } else if (e.key === 'Enter') {
+                  e.preventDefault();
+                  if (e.shiftKey) {
+                    // Navigate previous
+                    setSearchIndex((prev) => {
+                      const max = searchMatches.length - 1;
+                      if (max < 0) return -1;
+                      return prev <= 0 ? max : prev - 1;
+                    });
+                  } else {
+                    // Navigate next
+                    setSearchIndex((prev) => {
+                      const max = searchMatches.length - 1;
+                      if (max < 0) return -1;
+                      return prev >= max ? 0 : prev + 1;
+                    });
+                  }
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setSearchIndex((prev) => {
+                    const max = searchMatches.length - 1;
+                    if (max < 0) return -1;
+                    return prev <= 0 ? max : prev - 1;
+                  });
+                } else if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setSearchIndex((prev) => {
+                    const max = searchMatches.length - 1;
+                    if (max < 0) return -1;
+                    return prev >= max ? 0 : prev + 1;
+                  });
+                }
+              }}
+              className="flex-1 bg-[#1e1e2e] text-gray-200 text-xs border border-gray-600 rounded px-2 py-1 focus:outline-none focus:border-blue-500 font-mono"
+              placeholder="搜索终端输出... (Enter 下一个, Shift+Enter 上一个)"
+            />
+            <button
+              onClick={() => setUseRegex(!useRegex)}
+              className={`px-1.5 py-0.5 text-[10px] rounded ${useRegex ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400'} hover:bg-blue-700`}
+              title="正则模式"
+            >
+              .*
+            </button>
+            <button
+              onClick={() => setShowSearch(false)}
+              className="px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white"
+              title="关闭搜索 (Esc)"
+            >
+              ✕
+            </button>
+          </div>
+          {searchQuery && (
+            <div className="flex items-center gap-2 mt-1">
+              <div className="text-[10px] text-gray-500">
+                {searchMatches.length > 0
+                  ? `${searchIndex + 1} / ${searchMatches.length} 匹配`
+                  : '无匹配结果'}
+              </div>
+              {searchMatches.length > 0 && (
+                <div className="flex gap-1 ml-auto">
+                  <button
+                    onClick={() => setSearchIndex((prev) => {
+                      const max = searchMatches.length - 1;
+                      return prev <= 0 ? max : prev - 1;
+                    })}
+                    className="px-1.5 py-0.5 text-[10px] bg-gray-700 text-gray-300 rounded hover:bg-gray-600"
+                    title="上一个 (Shift+Enter)"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    onClick={() => setSearchIndex((prev) => {
+                      const max = searchMatches.length - 1;
+                      return prev >= max ? 0 : prev + 1;
+                    })}
+                    className="px-1.5 py-0.5 text-[10px] bg-gray-700 text-gray-300 rounded hover:bg-gray-600"
+                    title="下一个 (Enter)"
+                  >
+                    ▼
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* AI Command Input */}
       {showAIInput && (
