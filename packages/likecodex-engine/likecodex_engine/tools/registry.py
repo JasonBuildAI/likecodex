@@ -23,6 +23,7 @@ from likecodex_engine.tools.shell import ShellTools
 from likecodex_engine.tools.todo import TodoTools
 from likecodex_engine.tools.web_fetch import WebFetchTools
 from likecodex_engine.tools.web_search import WebSearchTools
+from likecodex_engine.tools.refactor import RefactorTools
 
 AgentFactory = Callable[[list[str] | None, int | None], Any]
 
@@ -120,6 +121,11 @@ class ToolRegistry:
 
         notebook = NotebookTools(self.working_dir)
         self.register("notebook_edit", notebook.notebook_edit_schema(), notebook.notebook_edit)
+
+        refactor = RefactorTools(self.working_dir)
+        self.register("refactor_rename", refactor.refactor_rename_schema(), refactor.refactor_rename)
+        self.register("refactor_extract", refactor.refactor_extract_schema(), refactor.refactor_extract)
+        self.register("refactor_move_to_file", refactor.refactor_move_to_file_schema(), refactor.refactor_move_to_file)
 
         lsp_sem = LspSemanticTools(self.working_dir)
         self.register("lsp_definition", lsp_sem.lsp_definition_schema(), lsp_sem.lsp_definition, read_only=True)

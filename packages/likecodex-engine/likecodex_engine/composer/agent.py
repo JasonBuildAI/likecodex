@@ -284,7 +284,11 @@ class ComposerAgent:
             yield {"type": "composer_error", "content": str(exc)}
 
     async def _run_background(self, task_id: str, message: str, mentions: list[dict], session_id: str):
-        """Run a composer task in the background, collecting changes."""
+        """Run a composer task in the background, collecting changes.
+
+        3.6: Uses a dedicated ComposerAgent instance for isolated background execution.
+        Results are stored in _bg_results for later retrieval via get_bg_changes().
+        """
         try:
             # Use a dedicated ComposerAgent instance for background execution
             bg_agent = ComposerAgent(self.config, self.working_dir)
