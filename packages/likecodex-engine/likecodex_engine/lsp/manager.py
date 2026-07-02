@@ -6,6 +6,7 @@ import asyncio
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 from likecodex_engine.lsp.client import LspClient
 from likecodex_engine.lsp.position import find_symbol_column
@@ -20,6 +21,9 @@ class LspManager:
         self._clients: dict[str, LspClient] = {}
 
         self._opened: set[str] = set()
+
+        # ── Diagnostic storage ──────────────────────────────────────
+        self._diagnostics: dict[str, list[dict]] = {}
 
     async def _get_client(self, lang: str) -> LspClient | None:
 
@@ -197,3 +201,67 @@ class LspManager:
         self._clients.clear()
 
         self._opened.clear()
+
+    # ── Diagnostics ──────────────────────────────────────────────────
+
+    def diagnostics_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Retrieve LSP diagnostics (errors/warnings) for a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Relative file path"},
+                },
+                "required": ["file_path"],
+            },
+        }
+
+    async def diagnostics(self, file_path: str) -> str:
+        """Get diagnostics for a file from LSP server, or from cache if already fetched."""
+        path = (self.root / file_path).resolve()
+        if not path.exists():
+            return json.dumps({"error": f"File not found: {file_path}"})
+
+        client = await self._get_client(self.detect_language(path))
+        if not client:
+            return json.dumps({"error": "No LSP server available for this language"})
+
+        uri = await self._ensure_open(client, path)
+
+        # Try pull-based diagnostics first (LSP 3.17+)
+        try:
+            result = await client.request(
+                "textDocument/diagnostic",
+                {
+                    "textDocument": {"uri": uri},
+                    "identifier": "likecodex-diag",
+                },
+            )
+            if result and "items" in (result.get("kind") or {}):
+                items = result["kind"]["items"]
+            elif result and isinstance(result, dict):
+                items = result.get("items", [])
+            else:
+                items = []
+        except Exception:
+            items = self._diagnostics.get(uri, [])
+
+        formatted = [
+            {
+                "line": d.get("range", {}).get("start", {}).get("line", 0) + 1,
+                "column": d.get("range", {}).get("start", {}).get("character", 0) + 1,
+                "severity": {1: "error", 2: "warning", 3: "info", 4: "hint"}.get(d.get("severity"), "info"),
+                "message": d.get("message", ""),
+                "source": d.get("source", "lsp"),
+                "code": d.get("code"),
+            }
+            for d in (items or [])
+        ]
+
+        return json.dumps({
+            "file": file_path,
+            "diagnostics": formatted,
+            "count": len(formatted),
+            "errors": sum(1 for d in formatted if d["severity"] == "error"),
+            "warnings": sum(1 for d in formatted if d["severity"] == "warning"),
+        })
