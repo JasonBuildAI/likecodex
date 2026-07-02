@@ -28,6 +28,35 @@ SUMMARY_SYSTEM = """You are compacting a coding agent conversation. Write under 
 ## Pending & next step
 Be terse. Preserve paths and identifiers exactly."""
 
+SUMMARY_STRUCTURED_SYSTEM = """You are compacting a coding agent conversation into a structured summary. Output in this format:
+
+## Standing facts & constraints
+- ...
+
+## Goal
+- ...
+
+## completed_steps
+- step1: ...
+- step2: ...
+
+## current_status
+- ...
+
+## key_decisions
+- decision1: ...
+
+## pending_items
+- ...
+
+## Errors & fixes
+- ...
+
+## next_step
+- ...
+
+Be terse. Preserve paths and identifiers exactly. Omit empty sections."""
+
 LEVEL1_COMPACT_RATIO = 0.70
 LEVEL2_COMPACT_RATIO = 0.80
 LEVEL3_COMPACT_RATIO = 0.92
@@ -147,11 +176,38 @@ class CacheFirstCompactor:
         """
         return self._consecutive_noop_compacts >= MAX_CONSECUTIVE_NOOP_COMPACTS
 
-    def summarize_log(self, log: list[Message]) -> str:
-        """Level-aware rule-based summary."""
+    def summarize_log(self, log: list[Message], llm: LLMProvider | None = None) -> str:
+        """Level-aware summary with optional LLM structured generation."""
+        if llm is not None:
+            try:
+                return self._llm_structured_summarize(log, llm)
+            except Exception:
+                pass  # fall through to rule-based
         if self.compact_level == CompactLevel.LEVEL3:
             return self._summarize_level3(log)
         return self._summarize_default(log)
+
+    def _llm_structured_summarize(self, log: list[Message], llm: LLMProvider) -> str:
+        """LLM-generated structured summary with completed_steps, current_status, etc."""
+        lines: list[str] = []
+        for m in log:
+            role = m.role.value
+            content = m.content[:3000]
+            if m.role == Role.TOOL:
+                lines.append(f"[tool result]: {content[:1500]}")
+            else:
+                lines.append(f"[{role}]: {content}")
+        transcript = "\n".join(lines[-60:])
+        user_content = f"Generate structured summary for this transcript:\n\n{transcript}"
+        messages = [
+            Message(role=Role.SYSTEM, content=SUMMARY_STRUCTURED_SYSTEM),
+            Message(role=Role.USER, content=user_content),
+        ]
+        resp = llm.complete(messages, tools=None, temperature=0.0, max_tokens=2048)
+        body = (resp.content or "").strip()
+        if not body:
+            return self._summarize_default(log)
+        return f"{SUMMARY_TAG_OPEN}\n{body}\n{SUMMARY_TAG_CLOSE}"
 
     def _summarize_default(self, log: list[Message]) -> str:
         """Default summary (Level1/Level2 compatible)."""
@@ -246,8 +302,12 @@ class CacheFirstCompactor:
         llm: LLMProvider,
         *,
         instructions: str = "",
+        structured: bool = True,
     ) -> str:
-        """Structured LLM summary using deepseek-v4-flash."""
+        """Structured LLM summary with completed_steps/current_status fields."""
+        if structured:
+            return self._llm_structured_summarize(log, llm)
+        # Legacy unstructured path
         lines: list[str] = []
         for m in log:
             role = m.role.value

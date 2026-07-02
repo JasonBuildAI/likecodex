@@ -321,6 +321,7 @@ class CacheFirstContext:
                     foldable,
                     self._compact_llm,
                     instructions=instructions,
+                    structured=True,
                 )
             except Exception:
                 summary = self.compactor.summarize_log(foldable)
