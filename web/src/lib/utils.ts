@@ -2,23 +2,13 @@
  * Utility functions for LikeCodex UI
  */
 
-// ── Class Name Merger ──────────────────────────────────────────────────
-// Lightweight cn() implementation (no clsx/tailwind-merge dependency)
-type ClassValue = string | number | boolean | undefined | null | { [key: string]: boolean | undefined | null };
+import { clsx } from 'clsx';
+import { twMerge } from 'tailwind-merge';
 
-export function cn(...inputs: ClassValue[]): string {
-  const classes: string[] = [];
-  for (const input of inputs) {
-    if (!input) continue;
-    if (typeof input === 'string' || typeof input === 'number') {
-      classes.push(String(input));
-    } else if (typeof input === 'object') {
-      for (const [key, value] of Object.entries(input)) {
-        if (value) classes.push(key);
-      }
-    }
-  }
-  return classes.join(' ');
+// ── Class Name Merger ──────────────────────────────────────────────────
+// Uses clsx for conditional classes + tailwind-merge for conflict resolution
+export function cn(...inputs: Parameters<typeof clsx>): string {
+  return twMerge(clsx(inputs));
 }
 
 // ── Formatting Utilities ───────────────────────────────────────────────
