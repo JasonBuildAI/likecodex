@@ -1,6 +1,6 @@
 ﻿use std::path::{Path, PathBuf};
 use tokio::fs;
-use tracing::{error, info};
+use tracing::error;
 
 /// Errors that can occur during file operations.
 #[derive(Debug, thiserror::Error)]
@@ -199,3 +199,4 @@ mod tests {
         let _ = async_fs::remove_dir_all(&dir).await;
     }
 }
+
