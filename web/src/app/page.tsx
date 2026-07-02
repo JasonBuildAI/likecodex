@@ -367,15 +367,32 @@ export default function Home() {
             {/* Input Area */}
             <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-surface via-surface to-transparent">
               <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
+                {/* ── Mode capsule selector ──
+                 *  Phase 5.12: Enhanced with descriptions, tooltips, and active indicator.
+                 *  - ask: Q&A only, no code changes
+                 *  - agent: Full AI agent with autonomous actions
+                 *  - manual: Step-by-step with approval per action */}
                 <div className="flex items-center justify-center mb-3">
                   <div className="inline-flex items-center gap-1 bg-background/80 backdrop-blur-sm border border-border rounded-full px-1.5 py-1 shadow-lg">
-                    {(['ask', 'agent', 'manual'] as const).map((mode) => {
+                    {([
+                      { mode: 'ask' as const, label: 'Ask', desc: 'Q&A, no code changes' },
+                      { mode: 'agent' as const, label: 'Agent', desc: 'Autonomous actions' },
+                      { mode: 'manual' as const, label: 'Manual', desc: 'Step-by-step approval' },
+                    ]).map(({ mode, label, desc }) => {
                       const isActive = agentMode === mode;
                       const colorMap = { ask: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30', agent: 'bg-blue-500/20 text-blue-400 border-blue-500/30', manual: 'bg-amber-500/20 text-amber-400 border-amber-500/30' };
                       return (
                         <button key={mode} type="button" onClick={() => setAgentMode(mode)}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${isActive ? `${colorMap[mode]} shadow-md` : 'text-muted hover:text-foreground hover:bg-accent/10'}`}>
-                          <span>{mode === 'ask' ? 'Ask' : mode === 'agent' ? 'Agent' : 'Manual'}</span>
+                          title={desc}
+                          className={`group relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${isActive ? `${colorMap[mode]} shadow-md` : 'text-muted hover:text-foreground hover:bg-accent/10'}`}>
+                          {isActive && (
+                            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-current animate-pulse" />
+                          )}
+                          <span>{label}</span>
+                          {/* Tooltip on hover */}
+                          <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-surface border border-border text-[9px] text-muted whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg">
+                            {desc}
+                          </span>
                         </button>
                       );
                     })}
