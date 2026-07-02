@@ -1,6 +1,9 @@
 """Static file serving route handlers.
 
 Handles: serving Web UI static files, SPA fallback, and lite version.
+The static files are embedded in the package at `likecodex_engine/static/`.
+
+To use: `cli.py --web` starts the engine which serves these files.
 """
 
 from __future__ import annotations
@@ -16,6 +19,16 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 LITE_HTML = STATIC_DIR / "lite" / "index.html"
+
+
+def get_static_dir() -> Path:
+    """Return the path to the static files directory."""
+    return STATIC_DIR
+
+
+def has_static_files() -> bool:
+    """Check if static files are available."""
+    return STATIC_DIR.exists() and (STATIC_DIR / "index.html").exists()
 
 
 async def spa_handler(request: web.Request) -> web.FileResponse:
