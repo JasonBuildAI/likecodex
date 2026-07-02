@@ -1,6 +1,6 @@
-[project]
+﻿[project]
 name = "likecodex"
-version = "0.1.0"
+version = "0.2.0"
 description = "LikeCodex - DeepSeek V4 native AI coding assistant"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,7 +19,6 @@ Changelog = "https://github.com/JasonBuildAI/likecodex/blob/main/CHANGELOG.md"
 
 [project.scripts]
 likecodex-engine = "likecodex_engine.cli:main"
-# Note: 'likecodex' CLI is provided by Rust binary; Python entrypoint renamed to avoid conflict
 
 [project.classifiers]
 classifiers = [
@@ -40,13 +39,15 @@ classifiers = [
 
 [project.optional-dependencies]
 sandbox = [
-    "docker>=6.0",
+    "docker>=7.0",
 ]
 dev = [
-    "ruff>=0.5",
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "mypy>=1.10",
+    "ruff>=0.9",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "mypy>=1.14",
+    "pytest-cov>=6.0",
+    "pytest-xdist>=3.6",
 ]
 all = [
     "likecodex-engine[sandbox]",
@@ -71,11 +72,21 @@ line-length = 120
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "ARG", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
 
 [tool.pytest.ini_options]
 testpaths = ["packages/likecodex-engine/tests", "tests"]
 python_files = ["test_*.py", "*_test.py"]
 markers = [
     "integration: full-stack tests requiring engine and Rust server",
+    "slow: tests that take longer than 5 seconds",
 ]
+
+[tool.coverage.run]
+source = ["likecodex_engine"]
+omit = ["*/tests/*", "*/static/*"]
