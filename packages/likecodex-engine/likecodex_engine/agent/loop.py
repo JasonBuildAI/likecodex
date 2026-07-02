@@ -1112,17 +1112,12 @@ class AgentLoop:
                     if resp.status >= 400 or "error" in body:
                         err = body.get("error", f"sandbox HTTP {resp.status}")
                         if no_fallback:
-                            yield self._emit(
-                                "tool",
-                                json.dumps({"error": f"Sandbox execution failed: {err}"}),
-                                tool_calls=[],
-                            )
-                            return
+                            return json.dumps({"error": f"Sandbox execution failed: {err}"})
                         tagged = await self.tools.execute(tool_name, arguments)
                         self._sandbox_fallbacks += 1
                         if self._sandbox_fallbacks >= 3 and self._degradation_level < 2:
                             self._degradation_level += 1
-                        yield self._emit(
+                        self._emit(
                             LLMResponse(
                                 content=f"Sandbox unavailable, falling back to local execution: {err}",
                                 model="system",
@@ -1136,7 +1131,7 @@ class AgentLoop:
                 if no_fallback:
                     return json.dumps({"error": f"Sandbox unreachable: {exc}"})
                 tagged = await self.tools.execute(tool_name, arguments)
-                yield self._emit(
+                self._emit(
                     LLMResponse(
                         content=f"Sandbox unreachable, falling back to local execution: {exc}",
                         model="system",
