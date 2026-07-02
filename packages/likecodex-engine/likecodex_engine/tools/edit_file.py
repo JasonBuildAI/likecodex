@@ -25,20 +25,28 @@ class EditFileTools:
 
     def edit_file_schema(self) -> dict:
         return {
-            "description": "Replace old_string with new_string in a file. Prefer over write_file for edits.",
+            "description": "Edit a file. Supports three modes: search_replace (default), patch (git diff patch), replace (full file).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Relative file path"},
-                    "old_string": {"type": "string", "description": "Exact text to replace"},
-                    "new_string": {"type": "string", "description": "Replacement text"},
+                    "old_string": {"type": "string", "description": "Exact text to replace (search_replace mode)"},
+                    "new_string": {"type": "string", "description": "Replacement text (search_replace mode)"},
+                    "patch": {"type": "string", "description": "Git unified diff patch to apply (patch mode)"},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["search_replace", "patch", "replace"],
+                        "description": "Edit mode: search_replace (old→new), patch (git diff), replace (full content via content param)",
+                        "default": "search_replace",
+                    },
+                    "content": {"type": "string", "description": "Full file content (replace mode only)"},
                     "replace_all": {
                         "type": "boolean",
-                        "description": "Replace all occurrences",
+                        "description": "Replace all occurrences (search_replace mode)",
                         "default": False,
                     },
                 },
-                "required": ["path", "old_string", "new_string"],
+                "required": ["path"],
             },
         }
 
