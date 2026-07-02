@@ -38,17 +38,12 @@ import { useAppStore, type Skill } from '@/lib/store';
 import { useAppInit } from '@/hooks/useAppInit';
 import { useEventSubscription } from '@/hooks/useEventSubscription';
 import { useChatLogic } from '@/hooks/useChatLogic';
+import { usePageLogic } from '@/hooks/usePageLogic';
 
 export default function Home() {
   const [input, setInput] = useState('');
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const [chatOpen, setChatOpen] = useState(true);
-  const [diffOpen, setDiffOpen] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [leftPanel, setLeftPanel] = useState<'files' | 'agents' | 'sessions' | 'search' | 'git' | 'tests' | 'skills'>('files');
-  const [debugOpen, setDebugOpen] = useState(false);
-  const [ideSettingsOpen, setIdeSettingsOpen] = useState(false);
   const [showSkillAutocomplete, setShowSkillAutocomplete] = useState(false);
   const [skillAutocompleteQuery, setSkillAutocompleteQuery] = useState('');
   const [skillAutocompleteIndex, setSkillAutocompleteIndex] = useState(0);
@@ -60,6 +55,12 @@ export default function Home() {
   const [mentions, setMentions] = useState<ContextMention[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const {
+    chatOpen, diffOpen, terminalOpen, leftPanel, debugOpen, ideSettingsOpen,
+    setChatOpen, setDiffOpen, setTerminalOpen, setLeftPanel, setDebugOpen, setIdeSettingsOpen,
+    toggleDiff,
+  } = usePageLogic();
 
   // Extract store slices
   const messages = useAppStore((s) => s.messages);
