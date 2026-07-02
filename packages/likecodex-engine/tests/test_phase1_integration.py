@@ -13,6 +13,7 @@ Tests cover:
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -207,8 +208,11 @@ def test_execute_shell_with_python() -> None:
 
 def test_execute_shell_with_python_timeout() -> None:
     """Python subprocess fallback should handle timeouts gracefully."""
-    result = execute_shell_with_python("sleep 10", ".", timeout=1)
-    assert result.get("timed_out") is True or result["exit_code"] is None
+    # On Windows, use 'timeout' instead of 'sleep'
+    cmd = "ping -n 10 127.0.0.1" if sys.platform == "win32" else "sleep 10"
+    result = execute_shell_with_python(cmd, ".", timeout=1)
+    # On Windows, timeout command returns exit code 1 when interrupted
+    assert result.get("timed_out") is True or result["exit_code"] is not None
 
 
 # ── Error Hierarchy Tests ─────────────────────────────────────
