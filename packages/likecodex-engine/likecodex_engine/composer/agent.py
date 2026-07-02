@@ -108,6 +108,21 @@ class ComposerAgent:
                             args,
                         )
                         if change and change.file_path not in self._captured_paths:
+                            # Conflict detection: check if file was modified externally
+                            abs_path = change.file_path if os.path.isabs(change.file_path) else \
+                                os.path.join(self.working_dir, change.file_path)
+                            if os.path.exists(abs_path) and change.change_type != "create":
+                                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                                    current_content = f.read()
+                                if current_content != change.original_content:
+                                    yield {
+                                        "type": "conflict_detected",
+                                        "filePath": change.file_path,
+                                        "originalContent": change.original_content,
+                                        "currentContent": current_content,
+                                        "modifiedContent": change.modified_content,
+                                    }
+                                    continue
                             self.change_set.append(change)
                             self._captured_paths.add(change.file_path)
                             # Generate unified diff
