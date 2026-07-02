@@ -22,6 +22,45 @@ def _is_error_message(content: str) -> bool:
     return any(lower.startswith(prefix) for prefix in ERROR_PREFIXES)
 
 
+def _is_error_message(content: str) -> bool:
+    lower = content.lower().strip()
+    return any(lower.startswith(prefix) for prefix in ERROR_PREFIXES)
+
+
+def _is_duplicate_tool_result(log: list[Message], idx: int) -> bool:
+    """Check if this tool result is a duplicate of a nearby one."""
+    msg = log[idx]
+    if msg.role != Role.TOOL:
+        return False
+    content = (msg.content or "")[:200]
+    # Compare with nearby tool results
+    for j in range(max(0, idx - 5), idx):
+        other = log[j]
+        if other.role == Role.TOOL and (other.content or "")[:200] == content:
+            return True
+    return False
+
+
+def merge_consecutive_messages(log: list[Message]) -> list[Message]:
+    """Merge consecutive user+assistant turns into single entries."""
+    if len(log) < 2:
+        return log
+    merged = [log[0]]
+    for i in range(1, len(log)):
+        prev = merged[-1]
+        curr = log[i]
+        # Merge consecutive assistant messages
+        if prev.role == Role.ASSISTANT and curr.role == Role.ASSISTANT:
+            merged[-1] = Message(
+                role=prev.role,
+                content=(prev.content or "") + "\n" + (curr.content or ""),
+                tool_call_id=prev.tool_call_id,
+            )
+            continue
+        merged.append(curr)
+    return merged
+
+
 def prune_stale_tool_results(log: list[Message], *, tail_keep: int = 8) -> tuple[list[Message], PruneStats]:
     """Elide large tool results outside the protected tail."""
     stats = PruneStats()
