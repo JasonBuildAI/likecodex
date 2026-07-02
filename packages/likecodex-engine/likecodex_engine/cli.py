@@ -29,14 +29,35 @@ from pathlib import Path
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="likecodex",
-        description="LikeCodex - DeepSeek V4 native AI coding assistant",
+        description=(
+            "LikeCodex - DeepSeek V4 native AI coding assistant\n\n"
+            "LikeCodex is an open-source coding agent powered by DeepSeek V4.\n"
+            "Describe a task in natural language; the agent reads your codebase,\n"
+            "runs commands, edits files, and reports back."
+        ),
         epilog=(
             "Examples:\n"
-            "  likecodex                           Start interactive chat\n"
-            "  likecodex 'fix this bug'            One-shot task\n"
-            "  likecodex --mode agent 'refactor'   Agent mode\n"
-            "  echo 'hello' | likecodex           Stdin pipe\n"
-            "  likecodex --json 'task'             JSON output format"
+            "  likecodex                               Start interactive chat\n"
+            "  likecodex 'fix this bug'                 One-shot task\n"
+            "  likecodex --mode agent 'refactor'        Agent mode\n"
+            "  likecodex --model pro 'complex task'     Use pro model\n"
+            "  echo 'hello' | likecodex                Stdin pipe\n"
+            "  likecodex --json 'task'                  JSON output format\n"
+            "  likecodex --setup                        Configuration wizard\n"
+            "  likecodex --doctor                       Health diagnostics\n"
+            "  likecodex --web                          Start engine + open browser\n"
+            "\n"
+            "Modes:\n"
+            "  ask       Read-only Q&A - AI answers without modifications\n"
+            "  agent     Auto-execute - AI reads, writes, runs autonomously\n"
+            "  manual    Step-by-step - each action requires confirmation\n"
+            "\n"
+            "Models:\n"
+            "  flash     DeepSeek V4 Flash (fast, economical)\n"
+            "  pro       DeepSeek V4 Pro (more capable, slower)\n"
+            "\n"
+            "Documentation: https://github.com/JasonBuildAI/likecodex\n"
+            "Issues: https://github.com/JasonBuildAI/likecodex/issues"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -53,7 +74,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--web",
         action="store_true",
-        help="Start engine and open Web UI in browser",
+        help="Start engine server and open Web UI in browser",
     )
     parser.add_argument(
         "--port",
@@ -69,17 +90,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--setup",
         action="store_true",
-        help="Run interactive configuration wizard",
+        help="Run interactive configuration wizard (API key, config, project memory)",
     )
     parser.add_argument(
         "--doctor",
         action="store_true",
-        help="Run diagnostics and health checks",
+        help="Run environment diagnostics and health checks",
     )
     parser.add_argument(
         "--version",
         action="store_true",
-        help="Show version and exit",
+        help="Show version information and exit",
     )
     parser.add_argument(
         "--mode",
@@ -91,19 +112,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model",
         choices=["flash", "pro"],
         default=None,
-        help="Model selection: flash (fast/economical) or pro (more capable)",
+        help="Model selection: flash (fast/economical) or pro (more capable, slower)",
     )
     parser.add_argument(
         "--json",
         dest="output_json",
         action="store_true",
-        help="Output results in JSON format",
+        help="Output results in JSON format (machine-readable)",
     )
     parser.add_argument(
         "--plain",
         dest="output_plain",
         action="store_true",
-        help="Output results in plain text (no Rich formatting)",
+        help="Output results in plain text (disable Rich formatting)",
     )
     return parser.parse_args(argv)
 
@@ -202,6 +223,7 @@ def _run_one_shot(
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=None) as client:
             response = client.post("/run", json=payload)
+            response.raise_for_status()
             result = response.json()
 
             if output_json:
@@ -209,8 +231,15 @@ def _run_one_shot(
             else:
                 content = result.get("content", result.get("response", str(result)))
                 print(content)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+    except httpx.HTTPStatusError as e:
+        print(f"[error] Server returned {e.response.status_code}: {e.response.text[:500]}", file=sys.stderr)
+        sys.exit(1)
+    except httpx.RequestError as e:
+        print(f"[error] Cannot connect to engine at 127.0.0.1:{port}: {e}", file=sys.stderr)
+        print(f"[hint]  Start the engine with: likecodex --web  or  likecodex --chat", file=sys.stderr)
+        sys.exit(1)
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        print(f"[error] Invalid response from engine: {e}", file=sys.stderr)
         sys.exit(1)
 
 
