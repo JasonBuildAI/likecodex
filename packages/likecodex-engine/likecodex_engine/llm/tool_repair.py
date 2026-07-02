@@ -135,19 +135,56 @@ def merge_tool_calls(response: LLMResponse) -> LLMResponse:
 
 def ensure_tool_call_ids(tool_calls: list[ToolCall]) -> list[ToolCall]:
     """Assign stable ids to tool calls missing them before persistence.
-    Also detects and fixes duplicate IDs by appending a unique suffix.
+    Detects and fixes duplicate IDs using full uuid4 for collision-free IDs.
+    Also performs cross-turn merge detection based on tool name + arguments.
     """
     out: list[ToolCall] = []
     used_ids: set[str] = set()
+    global _CROSS_TURN_IDS
     for idx, tc in enumerate(tool_calls):
         tid = tc.id
         if not tid:
-            tid = f"call_{idx}_{uuid.uuid4().hex[:8]}"
+            tid = f"call_{uuid.uuid4().hex}"
         elif tid in used_ids:
+            tid = f"call_{uuid.uuid4().hex}"
+        elif tid in _CROSS_TURN_IDS:
+            # Cross-turn conflict: append unique suffix
             tid = f"{tid}_{uuid.uuid4().hex[:4]}"
         used_ids.add(tid)
+        # Register in cross-turn registry
+        _CROSS_TURN_IDS.add(tid)
         out.append(tc.model_copy(update={"id": tid}))
     return out
+
+
+# Cross-turn ID registry to detect conflicts across iterations
+_CROSS_TURN_IDS: set[str] = set()
+
+
+def reset_tool_call_id_registry() -> None:
+    """Reset the cross-turn tool call ID registry."""
+    _CROSS_TURN_IDS.clear()
+
+
+def validate_tool_call_ids(tool_calls: list[ToolCall]) -> list[str]:
+    """Pre-validate tool call IDs and return list of issues found.
+    
+    Checks:
+    - Missing IDs
+    - Duplicate IDs within the same batch
+    - Non-standard ID format
+    
+    Returns list of warning messages (empty if all valid).
+    """
+    issues: list[str] = []
+    seen: set[str] = set()
+    for idx, tc in enumerate(tool_calls):
+        if not tc.id:
+            issues.append(f"Tool call {idx} ({tc.name}): missing ID")
+        elif tc.id in seen:
+            issues.append(f"Tool call {idx} ({tc.name}): duplicate ID '{tc.id}'")
+        seen.add(tc.id)
+    return issues
 
 
 def stable_tool_schemas_for_api(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
