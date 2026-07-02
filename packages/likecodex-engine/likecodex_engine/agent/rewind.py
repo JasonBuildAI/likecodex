@@ -135,3 +135,17 @@ class RewindController:
             kept = msgs[:2] + msgs[cut:]
             self.context._log = kept  # noqa: SLF001
         return RewindResult(True, mode, summary, {"cut": cut})
+
+    def diff_between(self, checkpoint_a: str | None, checkpoint_b: str | None) -> dict[str, Any]:
+        """Compare two checkpoints and return a summary of differences."""
+        cps = self.checkpoints.list_checkpoints()
+        cp_a = next((cp for cp in cps if cp.id == checkpoint_a), None) if checkpoint_a else None
+        cp_b = next((cp for cp in cps if cp.id == checkpoint_b), None) if checkpoint_b else None
+        return {
+            "checkpoint_a": checkpoint_a,
+            "checkpoint_b": checkpoint_b,
+            "a_files": list(cp_a.paths) if cp_a else [],
+            "b_files": list(cp_b.paths) if cp_b else [],
+            "a_label": cp_a.label if cp_a else "",
+            "b_label": cp_b.label if cp_b else "",
+        }
