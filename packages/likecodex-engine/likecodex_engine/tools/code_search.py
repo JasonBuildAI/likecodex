@@ -1,4 +1,11 @@
-"""Code search tools: grep and simple symbol search."""
+"""Code search tools: grep and simple symbol search.
+
+Phase 7.3: Call Graph Visualization (Tool Layer)
+- Future: expose a codegraph_viz() tool that returns a JSON edge list
+  for frontend D3 force-directed graph or vis.js network rendering.
+- Integrate with codegraph_callers() and codegraph_symbols() to
+  build interactive call graphs.
+"""
 
 from __future__ import annotations
 
