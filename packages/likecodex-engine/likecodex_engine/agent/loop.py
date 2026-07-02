@@ -13,6 +13,7 @@ from typing import Any
 import aiohttp
 
 from likecodex_engine.agent.checkpoints import CheckpointManager
+from likecodex_engine.agent.config import LoopConfig
 from likecodex_engine.agent.coordinator import EXECUTOR_HANDOFF_MARKER, should_plan
 from likecodex_engine.agent.dispatch import execute_tool_calls_parallel
 from likecodex_engine.agent.evidence import EvidenceLedger
@@ -88,6 +89,7 @@ class AgentLoop:
         is_subagent: bool = False,
         executor_handoff_guard: bool = False,
         agent_mode: str = "agent",
+        loop_config: LoopConfig | None = None,
     ) -> None:
         self.llm = llm
         self.tools = tools
@@ -105,6 +107,7 @@ class AgentLoop:
         self.no_tools = no_tools
         self.agent_mode = agent_mode
         self.checkpoints = checkpoints or CheckpointManager(tools.working_dir)
+        self.config = loop_config or LoopConfig(max_iterations=max_iterations)
         self.pending_permissions: dict[str, asyncio.Future[bool]] = {}
         self.loop_guard = LoopGuard()
         self.repeat_guard = RepeatSuccessGuard()
@@ -131,15 +134,33 @@ class AgentLoop:
         self._no_tool_turns: int = 0
         self._watchdog_event: asyncio.Event | None = None
         self._last_activity_time: float = 0.0
+        self._start_time: float = 0.0
+        self._watchdog_fired: bool = False
         self.circuit_breaker = ToolCircuitBreaker()
-        self._degradation_level: int = 0  # 0=normal, 1=no-write, 2=ask-mode, 3=text-only
+        self._degradation_level: int = 0
         self._model_swap_attempted: bool = False
         self._sandbox_fallbacks: int = 0
+
+        # -- internal "return values" for async-generator helpers -------
+        self._stream_response: LLMResponse | None = None
+        self._stream_turn_result: StreamTurnResult | None = None
+        self._stream_prefix_shape: PrefixShape | None = None
+        self._cur_prefix_shape: PrefixShape | None = None
+        self._guard_should_break: bool = False
+        self._guard_should_continue: bool = False
+        self._guard_reason: str = ""
+        self._build_tool_schemas: list[dict[str, Any]] = []
+        self._stream_recoveries: int = 0
+        self._last_prefix_shape: PrefixShape | None = None
+        self._have_last_prefix_shape: bool = False
+
         if hasattr(context, "set_working_dir"):
             context.set_working_dir(tools.working_dir)
         if hasattr(context, "set_compact_llm"):
             context.set_compact_llm(llm)
         tools.set_session_log_provider(lambda: self.context.messages)
+
+    # ── public API ────────────────────────────────────────────────────
 
     async def run(self, prompt: str) -> AsyncIterator[LLMResponse]:
         """Execute the loop for a single user prompt."""
@@ -147,8 +168,49 @@ class AgentLoop:
             async for resp in self._run_with_retry_context(prompt):
                 yield resp
 
+    async def respond_permission(self, request_id: str, approved: bool, grant_scope: str = "once") -> bool:
+        future = self.pending_permissions.get(request_id)
+        if future is None or future.done():
+            return False
+        self._pending_grant_scope = grant_scope if approved else "once"
+        future.set_result(approved)
+        return True
+
+    async def wait_for_ask(self, request_id: str, questions: list[dict[str, Any]]) -> str:
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self.pending_asks[request_id] = future
+        return await future
+
+    async def respond_ask(self, request_id: str, answers: list[dict[str, Any]]) -> bool:
+        future = self.pending_asks.get(request_id)
+        if future is None or future.done():
+            return False
+        result = self.ask_handler.respond(request_id, answers)
+        if result is None:
+            future.set_result(self.ask_handler.headless_fallback([]))
+        else:
+            future.set_result(result)
+        return True
+
+    def list_pending_asks(self) -> list[dict[str, Any]]:
+        return [{"request_id": rid} for rid in self.pending_asks if not self.pending_asks[rid].done()]
+
+    def list_pending_permissions(self) -> list[dict[str, Any]]:
+        return [{"request_id": rid} for rid in self.pending_permissions if not self.pending_permissions[rid].done()]
+
+    def rewind(self, checkpoint_id: str | None = None) -> dict[str, Any]:
+        return self.checkpoints.rewind(checkpoint_id)
+
+    def list_checkpoints(self) -> list[dict[str, Any]]:
+        return [c.to_dict() for c in self.checkpoints.list_checkpoints()]
+
+    async def run_stream(self, prompt: str) -> AsyncIterator[LLMResponse]:
+        async for chunk in self.run(prompt):
+            yield chunk
+
+    # ── top-level run orchestration ───────────────────────────────────
+
     async def _run_with_retry_context(self, prompt: str) -> AsyncIterator[LLMResponse]:
-        # Emit mode_changed event at start of run
         yield self._emit(
             LLMResponse(
                 content="",
@@ -163,7 +225,6 @@ class AgentLoop:
                 snippet = "\n".join(f"- {m.get('text', '')}" for m in memories)
                 self.context.add_context_block(f"Relevant memory:\n{snippet}")
 
-        # Inject reasoning_language transient block (not part of immutable prefix)
         reasoning_language = getattr(self, "_reasoning_language", "")
         if reasoning_language:
             self.context.add_context_block(f"<reasoning-language>{reasoning_language}</reasoning-language>")
@@ -232,6 +293,7 @@ class AgentLoop:
                 from likecodex_engine.agent.subagent import SubAgentOrchestrator
 
                 collected: list[LLMResponse] = []
+
                 def _on_progress(p: dict[str, Any]) -> None:
                     collected.append(
                         LLMResponse(
@@ -246,14 +308,12 @@ class AgentLoop:
                 results_task = asyncio.create_task(
                     orchestrator.run_parallel([(step.id, step.description) for step in parallel])
                 )
-                # Yield progress events as they come in
                 while not results_task.done():
                     if collected:
                         evt = collected.pop(0)
                         yield self._emit(evt)
                     await asyncio.sleep(0.1)
                 results = await results_task
-                # Emit any remaining progress
                 for evt in collected:
                     yield self._emit(evt)
                 summary = SubAgentOrchestrator.summarize(results)
@@ -301,431 +361,70 @@ class AgentLoop:
             if summary:
                 self.memory.add(summary, {"session_id": self.session_id})
 
+    # ══════════════════════════════════════════════════════════════════
+    #  THE MAIN INNER LOOP  —  now a slim orchestrator
+    # ══════════════════════════════════════════════════════════════════
+
     async def _run_inner(self, prompt: str) -> AsyncIterator[LLMResponse]:
-        if prompt and self.context.messages[-1].role.value != "user":
-            self.context.add_user_message(prompt)
+        """Orchestrate the 5 phases of each iteration through the loop.
 
-        self._plan_exec_window = self.plan_state.execution_window_active
-        tool_schemas = [] if self.no_tools else flatten_tool_schemas(self.tools.to_openai_schema())
-        # Apply degradation: strip write tools at level 1+, reduce to read-only at level 2+
-        if self._degradation_level >= 1 and tool_schemas:
-            degraded = [s for s in tool_schemas if self.tools.is_read_only(s.get("function", {}).get("name", ""))]
-            if self._degradation_level >= 2:
-                tool_schemas = degraded  # read-only only
-            elif degraded:
-                tool_schemas = degraded  # no write tools
-        stream_recoveries = 0
-        last_prefix_shape: PrefixShape | None = None
-        have_last_prefix_shape = False
-
-        # Start watchdog
-        self._last_activity_time = time.time()
-        self._watchdog_event = asyncio.Event()
-        _watchdog_interval = 15  # seconds
-        _watchdog_timeout = 300   # 5 minutes
-        _loop_start_time = time.time()
-        _watchdog_fired = False
+        Phase 0 — :meth:`_build_context`     setup tool schemas / watchdog
+        Phase 1 — :meth:`_stream_model_turn`  LLM call with recovery
+        Phase 2 — :meth:`_process_turn_result` cache / compaction / context
+        Phase 3a — :meth:`_check_guards_and_termination`  early exit checks
+        Phase 3b — :meth:`_execute_tool_calls`  tool execution
+        Phase 4 — :meth:`_post_exec_guard_check`  storm / circuit / watchdog
+        """
+        await self._build_context(prompt)
 
         iteration = 0
         hit_max_iterations = False
+
         while True:
             if self.max_iterations > 0 and iteration >= self.max_iterations:
                 hit_max_iterations = True
                 break
-            # Cache messages once per iteration to avoid redundant serialization
-            _cached_messages = self.context.get_messages()
-            messages = _cached_messages
-            cur_prefix_shape = self._capture_prefix_shape(tool_schemas)
-            response: LLMResponse | None = None
 
-            while True:
-                turn_result: StreamTurnResult | None = None
-                async for event in stream_model_turn(
-                    self.llm,
-                    messages,
-                    tool_schemas if tool_schemas else None,
-                ):
-                    if isinstance(event, StreamTurnResult):
-                        turn_result = event
-                    else:
-                        yield self._emit(event)
-
-                if turn_result is None:
-                    break
-
-                if turn_result.interrupted:
-                    partial_text = turn_result.partial_text
-                    if partial_text:
-                        self.context.add_assistant_message(content=partial_text)
-                    if stream_recoveries < MAX_STREAM_RECOVERIES:
-                        stream_recoveries += 1
-                        delay = backoff_delay(stream_recoveries)
-                        await asyncio.sleep(delay)
-                        recovery = stream_recovery_message(bool(partial_text), turn_result.partial_tool_started)
-                        self.context.add_user_message(recovery)
-                        yield self._emit(
-                            LLMResponse(
-                                content=recovery,
-                                model="system",
-                                event_type="retrying",
-                                metadata={
-                                    "retry_attempt": stream_recoveries,
-                                    "retry_max": MAX_STREAM_RECOVERIES,
-                                    "retry_delay_s": round(delay, 2),
-                                    "reason": "stream_recovery",
-                                },
-                            )
-                        )
-                        messages = self.context.get_messages()
-                        continue
-                    response = turn_result.response
-                    break
-
-                # Escalate degradation when stream recovery exhausted
-                if self._degradation_level < 2:
-                    self._degradation_level += 1
-                    yield self._emit(
-                        LLMResponse(
-                            content=f"Degradation escalated to level {self._degradation_level} after stream recovery exhaustion.",
-                            model="system",
-                            event_type="degraded",
-                            metadata={"degradation_level": self._degradation_level},
-                        )
-                    )
-                stream_recoveries = 0
-                response = turn_result.response
-                break
-
+            # Phase 1: stream a model turn ---------------------------------
+            async for evt in self._stream_model_turn():
+                yield evt
+            response = self._stream_response
             if response is None:
-                # API timeout: try asking user to rephrase if agent
-                if not self.is_subagent:
-                    yield self._emit(
-                        LLMResponse(
-                            content="API returned no response. Trying to continue with reduced context.",
-                            model="system",
-                            event_type="degraded",
-                            metadata={"degradation": "api_timeout"},
-                        )
-                    )
                 break
 
-            response = merge_tool_calls(response)
-            if response.tool_calls:
-                response = response.model_copy(update={"tool_calls": ensure_tool_call_ids(response.tool_calls)})
-            global_cache_metrics().record(response.usage)
-            usage_event = self._usage_event(
-                response.usage,
-                last_prefix_shape if have_last_prefix_shape else None,
-                cur_prefix_shape,
-            )
-            if usage_event is not None:
-                yield self._emit(usage_event)
-            last_prefix_shape = cur_prefix_shape
-            have_last_prefix_shape = True
-            if hasattr(self.context, "record_prompt_tokens"):
-                self.context.record_prompt_tokens(response.usage)
+            # Phase 2: process the turn result (cache, compaction, context) -
+            async for evt in self._process_turn_result(response):
+                yield evt
 
-                # Three-tier compaction strategy (Reasonix parity):
-                # 1. soft_compact_ratio (0.5) -> one-time notice
-                # 2. compact_ratio (0.8) -> normal compaction
-                # 3. compact_force_ratio (0.9) -> forced compaction
-
-                prompt_tokens = getattr(self.context, "last_prompt_tokens", 0)
-                compactor = self.context.compactor
-
-                async def _emit_compaction(trigger: str, force: bool = False) -> None:
-                    yield self._emit(LLMResponse(
-                        content=json.dumps({"trigger": trigger, "prompt_tokens": prompt_tokens}),
-                        model="system",
-                        event_type="compaction_started",
-                    ))
-                    info = await self.context.compact_async(force=force)
-                    yield self._emit(LLMResponse(
-                        content=json.dumps(info),
-                        model="system",
-                        event_type="compaction_done",
-                    ))
-
-                if hasattr(self.context, "compact_async") and compactor.should_force_compact(prompt_tokens):
-                    async for evt in _emit_compaction("force", force=True):
-                        yield evt
-                elif hasattr(self.context, "compact_async") and compactor.should_compact(prompt_tokens):
-                    async for evt in _emit_compaction("auto"):
-                        yield evt
-                elif hasattr(self.context, "_soft_notice_emitted") and compactor.should_soft_compact(prompt_tokens):
-                    if not self.context._soft_notice_emitted:
-                        self.context._soft_notice_emitted = True
-                        notice = (
-                            f"[soft-compact] Context usage at {prompt_tokens:,} tokens. "
-                            f"Consider wrapping up or the system will auto-compact soon."
-                        )
-                        yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
-
-            raw_tool_calls: str | None = None
-            tool_call_payload: list[dict[str, Any]] | None = None
-            if response.tool_calls:
-                tool_call_payload = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": stable_json_dumps(tc.arguments),
-                        },
-                    }
-                    for tc in response.tool_calls
-                ]
-                raw_tool_calls = stable_tool_calls_json(tool_call_payload)
-
-            self.context.add_assistant_message(
-                content=response.content,
-                tool_calls=tool_call_payload,
-                raw_tool_calls=raw_tool_calls,
-                reasoning_content=getattr(response, "reasoning_content", None),
-            )
-
-            yield self._emit(
-                LLMResponse(
-                    content=response.content,
-                    tool_calls=response.tool_calls,
-                    model=response.model,
-                    usage=response.usage,
-                    event_type="assistant",
-                )
-            )
-
-            finish_notice = finish_reason_notice(response.usage)
-            if finish_notice:
-                yield self._emit(LLMResponse(content=finish_notice, model="system", event_type="notice"))
-
+            # Phase 3a: no tool calls → guard & termination checks ---------
             if not response.tool_calls:
-                if (
-                    self._handoff_active
-                    and not self._used_any_tool
-                    and self._handoff_nudges < MAX_EXECUTOR_HANDOFF_NUDGES
-                    and response.content
-                ):
-                    self._handoff_nudges += 1
-                    notice = (
-                        "[executor-handoff] You are in the executor phase. Use your available tools now "
-                        "to carry out the task instead of only restating the plan."
-                    )
-                    self.context.add_context_block(notice)
-                    yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
+                async for evt in self._check_guards_and_termination(response):
+                    yield evt
+                if self._guard_should_continue:
                     continue
-                if not self.is_subagent and not has_visible_final_answer(response.content):
-                    finish = "unknown"
-                    if response.usage:
-                        finish = str(response.usage.get("finish_reason", finish))
-                    self._empty_final_blocks += 1
-                    if self._empty_final_blocks >= MAX_EMPTY_FINAL_BLOCKS:
-                        # Graceful degradation: downgrade from agent to ask mode
-                        if self.agent_mode == "agent" and not self._mode_downgraded:
-                            self._mode_downgraded = True
-                            self.agent_mode = "ask"
-                            self._empty_final_blocks = 0
-                            downgrade_msg = (
-                                "[mode-downgraded] Agent loop returned empty responses consecutively. "
-                                "Downgraded to ask mode. You can still read files and search code."
-                            )
-                            self.context.add_context_block(downgrade_msg)
-                            yield self._emit(
-                                LLMResponse(
-                                    content=downgrade_msg,
-                                    model="system",
-                                    event_type="mode_downgraded",
-                                    metadata={"from_mode": "agent", "to_mode": "ask"},
-                                )
-                            )
-                            continue
-                        yield self._emit(
-                            LLMResponse(
-                                content=(
-                                    f"Model finished without a visible final answer {self._empty_final_blocks} times."
-                                ),
-                                model="system",
-                                event_type="error",
-                            )
-                        )
-                        break
-                    notice = empty_final_notice(
-                        response.model,
-                        finish_reason=finish,
-                        reasoning_len=len(response.content or ""),
-                    )
-                    self.context.add_context_block(empty_final_retry_message())
-                    yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
-                    continue
-                if response.content and not self.is_subagent:
-                    readiness = final_readiness_check(
-                        self.evidence,
-                        plan_mode_active=self.plan_state.active,
-                        project_checks=self.project_checks,
-                        external_todos=self.tools.todo.current(),
-                    )
-                    if readiness.blocked and self._final_readiness_blocks < 3:
-                        self._final_readiness_blocks += 1
-                        notice = (
-                            f"[final-readiness] Cannot finish yet: {readiness.reason}. "
-                            "Complete remaining todos or run verification commands, then try again."
-                        )
-                        self.context.add_context_block(notice)
-                        yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
-                        continue
-                # Smart termination: detect "all done" loops
-                self._no_tool_turns += 1
-                content_lower = (response.content or "").lower().strip()
-                done_phrases = {"all done", "done", "finished", "completed", "that's all", "all finished"}
-                if content_lower in done_phrases or (
-                    len(content_lower) < 20 and any(content_lower.startswith(p) for p in done_phrases)
-                ):
-                    self._all_done_counter += 1
-                    if self._all_done_counter >= 3:
-                        yield self._emit(
-                            LLMResponse(
-                                content="Smart termination: model repeated 'done' without tool calls 3 times.",
-                                model="system",
-                                event_type="notice",
-                            )
-                        )
-                        break
-                else:
-                    self._all_done_counter = 0
-
-                # Consecutive turns without tool calls
-                if self._no_tool_turns >= 3:
-                    yield self._emit(
-                        LLMResponse(
-                            content=f"Smart termination: {self._no_tool_turns} consecutive turns without tool calls.",
-                            model="system",
-                            event_type="notice",
-                        )
-                    )
+                if self._guard_should_break:
+                    hit_max_iterations = True
                     break
-
-                # GoalState integration
-                if self.goal_state and not self.is_subagent:
-                    follow_up = self.goal_state.parse_response(response.content or "")
-                    if not follow_up and self._used_any_tool:
-                        yield self._emit(
-                            LLMResponse(
-                                content="GoalState satisfied. Finishing loop.",
-                                model="system",
-                                event_type="notice",
-                            )
-                        )
-                        break
-
-                # Check if evidence ledger shows all steps complete
-                if self.evidence and not self.is_subagent:
-                    pending = self.evidence.pending_steps()
-                    if not pending and self._used_any_tool:
-                        yield self._emit(
-                            LLMResponse(
-                                content="All evidence steps completed. Finishing loop.",
-                                model="system",
-                                event_type="notice",
-                            )
-                        )
-                        break
                 break
 
+            # Phase 3b: tool calls present → execute them ------------------
             self._empty_final_blocks = 0
             self._no_tool_turns = 0
             self._used_any_tool = True
             self._turn_outcomes = []
 
-            for tool_call in response.tool_calls:
-                yield self._emit_tool_dispatch(tool_call, partial=False, model=response.model)
+            async for evt in self._execute_tool_calls(response):
+                yield evt
 
-            # Batch consecutive read-only tools in parallel
-            batch: list[Any] = []
-            for tool_call in response.tool_calls:
-                if self.tools.is_read_only(tool_call.name):
-                    batch.append(tool_call)
-                else:
-                    if batch:
-                        executed = await execute_tool_calls_parallel(self.tools, batch)
-                        for tc, res in executed:
-                            async for resp in self._handle_tool_call(tc, prefetched_result=res):
-                                yield resp
-                        batch = []
-                    async for resp in self._handle_tool_call(tool_call):
-                        yield resp
-            if batch:
-                executed = await execute_tool_calls_parallel(self.tools, batch)
-                for tc, res in executed:
-                    async for resp in self._handle_tool_call(tc, prefetched_result=res):
-                        yield resp
-            storm = self.storm_breaker.apply_turn(self._turn_outcomes)
-            if storm is not None:
-                tool_call_id, new_output, notice = storm
-                self.context.update_tool_result(tool_call_id, new_output)
-                self._turn_outcomes[0].output = new_output
-                yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
-            # Circuit breaker: advance iteration
-            self.circuit_breaker.next_iteration()
-            
-            # Watchdog: periodic check (15s interval) with 5min timeout
-            now = time.time()
-            elapsed = now - self._start_time
-            idle_time = now - self._last_activity_time
-
-            # 5-minute absolute timeout
-            if elapsed > 300 and self._used_any_tool:
-                yield self._emit(
-                    LLMResponse(
-                        content="[watchdog] Total execution time exceeded 5 minute timeout. Forcing termination.",
-                        model="system",
-                        event_type="watchdog_timeout",
-                        metadata={
-                            "elapsed_s": round(elapsed, 1),
-                            "idle_s": round(idle_time, 1),
-                            "action": "timeout_termination",
-                        },
-                    )
-                )
+            # Phase 4: post-execution guards (storm, circuit, watchdog) -----
+            if self._post_exec_guard_check():
                 hit_max_iterations = True
                 break
 
-            # Idle detection
-            if idle_time > 15 and self._used_any_tool:
-                if not self._watchdog_fired:
-                    self._watchdog_fired = True
-                    yield self._emit(
-                        LLMResponse(
-                            content=f"[watchdog] Idle for {idle_time:.0f}s. Checking if stuck.",
-                            model="system",
-                            event_type="watchdog_check",
-                            metadata={
-                                "elapsed_s": round(elapsed, 1),
-                                "idle_s": round(idle_time, 1),
-                                "action": "idle_check",
-                            },
-                        )
-                    )
-                if idle_time > 60:
-                    yield self._emit(
-                        LLMResponse(
-                            content="[watchdog] Extended idle detected. Attempting to re-engage the model.",
-                            model="system",
-                            event_type="watchdog_idle",
-                            metadata={
-                                "elapsed_s": round(elapsed, 1),
-                                "idle_s": round(idle_time, 1),
-                                "action": "idle_nudge",
-                            },
-                        )
-                    )
-                    self._last_activity_time = now
-                    self._watchdog_fired = False
-            else:
-                self._watchdog_fired = False
-            self._last_activity_time = now
-
-            # Prefetch: build context cache for next iteration while idle
+            # Prefetch context for next iteration
             self.context.get_messages()
             iteration += 1
+
         if hit_max_iterations:
             yield self._emit(
                 LLMResponse(
@@ -736,6 +435,530 @@ class AgentLoop:
             )
         if self._plan_exec_window:
             self.plan_state.execution_window_active = False
+
+    # ══════════════════════════════════════════════════════════════════
+    #  PHASE 0 —  _build_context
+    # ══════════════════════════════════════════════════════════════════
+
+    async def _build_context(self, prompt: str) -> None:
+        """Set up iteration-level context: tool schemas, watchdog, counters.
+
+        Extracted from ``_run_inner`` lines 305-328.
+        """
+        if prompt and self.context.messages[-1].role.value != "user":
+            self.context.add_user_message(prompt)
+
+        self._plan_exec_window = self.plan_state.execution_window_active
+        tool_schemas = [] if self.no_tools else flatten_tool_schemas(self.tools.to_openai_schema())
+
+        # Apply degradation: strip write tools at level 1+, reduce to read-only at level 2+
+        if self._degradation_level >= 1 and tool_schemas:
+            degraded = [
+                s
+                for s in tool_schemas
+                if self.tools.is_read_only(s.get("function", {}).get("name", ""))
+            ]
+            if self._degradation_level >= 2:
+                tool_schemas = degraded
+            elif degraded:
+                tool_schemas = degraded
+
+        self._build_tool_schemas = tool_schemas
+        self._stream_recoveries = 0
+        self._last_prefix_shape = None
+        self._have_last_prefix_shape = False
+
+        # Start watchdog
+        self._last_activity_time = time.time()
+        self._watchdog_event = asyncio.Event()
+        self._start_time = time.time()
+        self._watchdog_fired = False
+
+    # ══════════════════════════════════════════════════════════════════
+    #  PHASE 1 —  _stream_model_turn
+    # ══════════════════════════════════════════════════════════════════
+
+    async def _stream_model_turn(self) -> AsyncIterator[LLMResponse]:
+        """Stream one LLM turn with recovery for interruptions.
+
+        Yields streaming delta / dispatch / retry events and sets
+        ``self._stream_response`` / ``self._stream_prefix_shape`` for the
+        caller.
+
+        Extracted from ``_run_inner`` lines 336-410.
+        """
+        messages = self.context.get_messages()
+        cur_prefix_shape = self._capture_prefix_shape(self._build_tool_schemas)
+        response: LLMResponse | None = None
+
+        while True:
+            turn_result: StreamTurnResult | None = None
+            async for event in stream_model_turn(
+                self.llm,
+                messages,
+                self._build_tool_schemas if self._build_tool_schemas else None,
+            ):
+                if isinstance(event, StreamTurnResult):
+                    turn_result = event
+                else:
+                    yield self._emit(event)
+
+            if turn_result is None:
+                break
+
+            if turn_result.interrupted:
+                partial_text = turn_result.partial_text
+                if partial_text:
+                    self.context.add_assistant_message(content=partial_text)
+                max_recoveries = self.config.max_stream_recoveries
+                if self._stream_recoveries < max_recoveries:
+                    self._stream_recoveries += 1
+                    delay = backoff_delay(self._stream_recoveries)
+                    await asyncio.sleep(delay)
+                    recovery = stream_recovery_message(bool(partial_text), turn_result.partial_tool_started)
+                    self.context.add_user_message(recovery)
+                    yield self._emit(
+                        LLMResponse(
+                            content=recovery,
+                            model="system",
+                            event_type="retrying",
+                            metadata={
+                                "retry_attempt": self._stream_recoveries,
+                                "retry_max": max_recoveries,
+                                "retry_delay_s": round(delay, 2),
+                                "reason": "stream_recovery",
+                            },
+                        )
+                    )
+                    messages = self.context.get_messages()
+                    continue
+                response = turn_result.response
+                break
+
+            # Escalate degradation when stream recovery exhausted
+            if self._degradation_level < 2:
+                self._degradation_level += 1
+                yield self._emit(
+                    LLMResponse(
+                        content=(
+                            f"Degradation escalated to level {self._degradation_level}"
+                            " after stream recovery exhaustion."
+                        ),
+                        model="system",
+                        event_type="degraded",
+                        metadata={"degradation_level": self._degradation_level},
+                    )
+                )
+            self._stream_recoveries = 0
+            response = turn_result.response
+            break
+
+        if response is None:
+            if not self.is_subagent:
+                yield self._emit(
+                    LLMResponse(
+                        content="API returned no response. Trying to continue with reduced context.",
+                        model="system",
+                        event_type="degraded",
+                        metadata={"degradation": "api_timeout"},
+                    )
+                )
+
+        self._stream_response = response
+        self._stream_prefix_shape = cur_prefix_shape
+
+    # ══════════════════════════════════════════════════════════════════
+    #  PHASE 2 —  _process_turn_result
+    # ══════════════════════════════════════════════════════════════════
+
+    async def _process_turn_result(self, response: LLMResponse) -> AsyncIterator[LLMResponse]:
+        """Post-stream processing: merge, cache metrics, compaction, context.
+
+        Yields compaction and usage events.
+        Extracted from ``_run_inner`` lines 412-495.
+        """
+        response = merge_tool_calls(response)
+        if response.tool_calls:
+            response = response.model_copy(update={"tool_calls": ensure_tool_call_ids(response.tool_calls)})
+        global_cache_metrics().record(response.usage)
+        usage_event = self._usage_event(
+            response.usage,
+            self._last_prefix_shape if self._have_last_prefix_shape else None,
+            self._stream_prefix_shape,
+        )
+        if usage_event is not None:
+            yield self._emit(usage_event)
+        self._last_prefix_shape = self._stream_prefix_shape
+        self._have_last_prefix_shape = True
+        if hasattr(self.context, "record_prompt_tokens"):
+            self.context.record_prompt_tokens(response.usage)
+
+            prompt_tokens = getattr(self.context, "last_prompt_tokens", 0)
+            compactor = self.context.compactor
+
+            async def _emit_compaction(trigger: str, force: bool = False) -> AsyncIterator[LLMResponse]:
+                yield self._emit(
+                    LLMResponse(
+                        content=json.dumps({"trigger": trigger, "prompt_tokens": prompt_tokens}),
+                        model="system",
+                        event_type="compaction_started",
+                    )
+                )
+                info = await self.context.compact_async(force=force)
+                yield self._emit(
+                    LLMResponse(
+                        content=json.dumps(info),
+                        model="system",
+                        event_type="compaction_done",
+                    )
+                )
+
+            if (
+                hasattr(self.context, "compact_async")
+                and compactor.should_force_compact(prompt_tokens)
+            ):
+                async for evt in _emit_compaction("force", force=True):
+                    yield evt
+            elif (
+                hasattr(self.context, "compact_async")
+                and compactor.should_compact(prompt_tokens)
+            ):
+                async for evt in _emit_compaction("auto"):
+                    yield evt
+            elif (
+                hasattr(self.context, "_soft_notice_emitted")
+                and compactor.should_soft_compact(prompt_tokens)
+            ):
+                if not self.context._soft_notice_emitted:
+                    self.context._soft_notice_emitted = True
+                    notice = (
+                        f"[soft-compact] Context usage at {prompt_tokens:,} tokens. "
+                        "Consider wrapping up or the system will auto-compact soon."
+                    )
+                    yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
+
+        raw_tool_calls: str | None = None
+        tool_call_payload: list[dict[str, Any]] | None = None
+        if response.tool_calls:
+            tool_call_payload = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": stable_json_dumps(tc.arguments),
+                    },
+                }
+                for tc in response.tool_calls
+            ]
+            raw_tool_calls = stable_tool_calls_json(tool_call_payload)
+
+        self.context.add_assistant_message(
+            content=response.content,
+            tool_calls=tool_call_payload,
+            raw_tool_calls=raw_tool_calls,
+            reasoning_content=getattr(response, "reasoning_content", None),
+        )
+
+        yield self._emit(
+            LLMResponse(
+                content=response.content,
+                tool_calls=response.tool_calls,
+                model=response.model,
+                usage=response.usage,
+                event_type="assistant",
+            )
+        )
+
+        finish_notice = finish_reason_notice(response.usage)
+        if finish_notice:
+            yield self._emit(LLMResponse(content=finish_notice, model="system", event_type="notice"))
+
+    # ══════════════════════════════════════════════════════════════════
+    #  PHASE 3a —  _check_guards_and_termination
+    # ══════════════════════════════════════════════════════════════════
+
+    async def _check_guards_and_termination(self, response: LLMResponse) -> AsyncIterator[LLMResponse]:
+        """Inspect the assistant turn for early termination conditions.
+
+        Covers: executor handoff, empty final answers, final-readiness gate,
+        smart termination (done-phrases / no-tool-turns), goal-state
+        completion, and evidence-ledger completion.
+
+        Yields notice / error events and sets ``self._guard_should_break`` /
+        ``self._guard_should_continue`` for the orchestrator.
+
+        Extracted from ``_run_inner`` lines 501-631.
+        """
+        self._guard_should_break = False
+        self._guard_should_continue = False
+        self._guard_reason = ""
+
+        # ── executor hand-off nudge ───────────────────────────────────
+        if (
+            self._handoff_active
+            and not self._used_any_tool
+            and self._handoff_nudges < MAX_EXECUTOR_HANDOFF_NUDGES
+            and response.content
+        ):
+            self._handoff_nudges += 1
+            notice = (
+                "[executor-handoff] You are in the executor phase. Use your available tools now "
+                "to carry out the task instead of only restating the plan."
+            )
+            self.context.add_context_block(notice)
+            yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
+            self._guard_should_continue = True
+            return
+
+        # ── empty final answer detection ──────────────────────────────
+        if not self.is_subagent and not has_visible_final_answer(response.content):
+            finish = "unknown"
+            if response.usage:
+                finish = str(response.usage.get("finish_reason", finish))
+            self._empty_final_blocks += 1
+            if self._empty_final_blocks >= MAX_EMPTY_FINAL_BLOCKS:
+                if self.agent_mode == "agent" and not self._mode_downgraded:
+                    self._mode_downgraded = True
+                    self.agent_mode = "ask"
+                    self._empty_final_blocks = 0
+                    downgrade_msg = (
+                        "[mode-downgraded] Agent loop returned empty responses consecutively. "
+                        "Downgraded to ask mode. You can still read files and search code."
+                    )
+                    self.context.add_context_block(downgrade_msg)
+                    yield self._emit(
+                        LLMResponse(
+                            content=downgrade_msg,
+                            model="system",
+                            event_type="mode_downgraded",
+                            metadata={"from_mode": "agent", "to_mode": "ask"},
+                        )
+                    )
+                    self._guard_should_continue = True
+                    return
+                yield self._emit(
+                    LLMResponse(
+                        content=(
+                            f"Model finished without a visible final answer "
+                            f"{self._empty_final_blocks} times."
+                        ),
+                        model="system",
+                        event_type="error",
+                    )
+                )
+                self._guard_should_break = True
+                return
+            notice = empty_final_notice(
+                response.model,
+                finish_reason=finish,
+                reasoning_len=len(response.content or ""),
+            )
+            self.context.add_context_block(empty_final_retry_message())
+            yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
+            self._guard_should_continue = True
+            return
+
+        # ── final readiness check ────────────────────────────────────
+        if response.content and not self.is_subagent:
+            readiness = final_readiness_check(
+                self.evidence,
+                plan_mode_active=self.plan_state.active,
+                project_checks=self.project_checks,
+                external_todos=self.tools.todo.current(),
+            )
+            max_blocks = self.config.max_final_readiness_blocks
+            if readiness.blocked and self._final_readiness_blocks < max_blocks:
+                self._final_readiness_blocks += 1
+                notice = (
+                    f"[final-readiness] Cannot finish yet: {readiness.reason}. "
+                    "Complete remaining todos or run verification commands, then try again."
+                )
+                self.context.add_context_block(notice)
+                yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
+                self._guard_should_continue = True
+                return
+
+        # ── smart termination: "all done" detection ───────────────────
+        self._no_tool_turns += 1
+        content_lower = (response.content or "").lower().strip()
+        done_phrases = {"all done", "done", "finished", "completed", "that's all", "all finished"}
+        if content_lower in done_phrases or (
+            len(content_lower) < 20 and any(content_lower.startswith(p) for p in done_phrases)
+        ):
+            self._all_done_counter += 1
+            threshold = self.config.all_done_termination_threshold
+            if self._all_done_counter >= threshold:
+                yield self._emit(
+                    LLMResponse(
+                        content="Smart termination: model repeated 'done' without tool calls 3 times.",
+                        model="system",
+                        event_type="notice",
+                    )
+                )
+                self._guard_should_break = True
+                return
+        else:
+            self._all_done_counter = 0
+
+        # ── smart termination: consecutive no-tool turns ──────────────
+        threshold = self.config.no_tool_termination_threshold
+        if self._no_tool_turns >= threshold:
+            yield self._emit(
+                LLMResponse(
+                    content=f"Smart termination: {self._no_tool_turns} consecutive turns without tool calls.",
+                    model="system",
+                    event_type="notice",
+                )
+            )
+            self._guard_should_break = True
+            return
+
+        # ── GoalState integration ─────────────────────────────────────
+        if self.goal_state and not self.is_subagent:
+            follow_up = self.goal_state.parse_response(response.content or "")
+            if not follow_up and self._used_any_tool:
+                yield self._emit(
+                    LLMResponse(
+                        content="GoalState satisfied. Finishing loop.",
+                        model="system",
+                        event_type="notice",
+                    )
+                )
+                self._guard_should_break = True
+                return
+
+        # ── evidence ledger check ─────────────────────────────────────
+        if self.evidence and not self.is_subagent:
+            pending = self.evidence.pending_steps()
+            if not pending and self._used_any_tool:
+                yield self._emit(
+                    LLMResponse(
+                        content="All evidence steps completed. Finishing loop.",
+                        model="system",
+                        event_type="notice",
+                    )
+                )
+                self._guard_should_break = True
+                return
+
+    # ══════════════════════════════════════════════════════════════════
+    #  PHASE 3b —  _execute_tool_calls
+    # ══════════════════════════════════════════════════════════════════
+
+    async def _execute_tool_calls(self, response: LLMResponse) -> AsyncIterator[LLMResponse]:
+        """Execute the tool calls from a model turn.
+
+        Handles batching of read-only tools, dispatches events, and
+        delegates to ``_handle_tool_call``.
+
+        Extracted from ``_run_inner`` lines 638-659.
+        """
+        for tool_call in response.tool_calls:
+            yield self._emit_tool_dispatch(tool_call, partial=False, model=response.model)
+
+        # Batch consecutive read-only tools in parallel
+        batch: list[Any] = []
+        for tool_call in response.tool_calls:
+            if self.tools.is_read_only(tool_call.name):
+                batch.append(tool_call)
+            else:
+                if batch:
+                    executed = await execute_tool_calls_parallel(self.tools, batch)
+                    for tc, res in executed:
+                        async for resp in self._handle_tool_call(tc, prefetched_result=res):
+                            yield resp
+                    batch = []
+                async for resp in self._handle_tool_call(tool_call):
+                    yield resp
+        if batch:
+            executed = await execute_tool_calls_parallel(self.tools, batch)
+            for tc, res in executed:
+                async for resp in self._handle_tool_call(tc, prefetched_result=res):
+                    yield resp
+
+    # ══════════════════════════════════════════════════════════════════
+    #  PHASE 4 —  post-execution guard helpers
+    # ══════════════════════════════════════════════════════════════════
+
+    def _post_exec_guard_check(self) -> bool:
+        """Storm breaker, circuit breaker and watchdog checks.
+
+        Returns ``True`` when the loop should terminate (hit max iterations).
+        """
+        storm = self.storm_breaker.apply_turn(self._turn_outcomes)
+        if storm is not None:
+            tool_call_id, new_output, notice = storm
+            self.context.update_tool_result(tool_call_id, new_output)
+            self._turn_outcomes[0].output = new_output
+            self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
+
+        self.circuit_breaker.next_iteration()
+
+        now = time.time()
+        elapsed = now - self._start_time
+        idle_time = now - self._last_activity_time
+
+        # 5-minute absolute timeout
+        if elapsed > self.config.watchdog_timeout and self._used_any_tool:
+            self._emit(
+                LLMResponse(
+                    content=(
+                        f"[watchdog] Total execution time exceeded "
+                        f"{self.config.watchdog_timeout:.0f} second timeout. "
+                        "Forcing termination."
+                    ),
+                    model="system",
+                    event_type="watchdog_timeout",
+                    metadata={
+                        "elapsed_s": round(elapsed, 1),
+                        "idle_s": round(idle_time, 1),
+                        "action": "timeout_termination",
+                    },
+                )
+            )
+            return True
+
+        # Idle detection
+        if idle_time > self.config.watchdog_interval and self._used_any_tool:
+            if not self._watchdog_fired:
+                self._watchdog_fired = True
+                self._emit(
+                    LLMResponse(
+                        content=f"[watchdog] Idle for {idle_time:.0f}s. Checking if stuck.",
+                        model="system",
+                        event_type="watchdog_check",
+                        metadata={
+                            "elapsed_s": round(elapsed, 1),
+                            "idle_s": round(idle_time, 1),
+                            "action": "idle_check",
+                        },
+                    )
+                )
+            if idle_time > self.config.idle_timeout:
+                self._emit(
+                    LLMResponse(
+                        content="[watchdog] Extended idle detected. Attempting to re-engage the model.",
+                        model="system",
+                        event_type="watchdog_idle",
+                        metadata={
+                            "elapsed_s": round(elapsed, 1),
+                            "idle_s": round(idle_time, 1),
+                            "action": "idle_nudge",
+                        },
+                    )
+                )
+                self._last_activity_time = now
+                self._watchdog_fired = False
+        else:
+            self._watchdog_fired = False
+        self._last_activity_time = now
+
+        return False
+
+    # ══════════════════════════════════════════════════════════════════
+    #  INTERNAL HELPERS
+    # ══════════════════════════════════════════════════════════════════
 
     def _last_assistant_text(self) -> str:
         for msg in reversed(self.context.messages):
@@ -770,10 +993,11 @@ class AgentLoop:
                     )
                 )
                 self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
-                yield self._emit(LLMResponse(content=result, model="tool-result", event_type="tool_result"))
+                yield self._emit(
+                    LLMResponse(content=result, model="tool-result", event_type="tool_result")
+                )
                 return
 
-        # Agent mode: ask mode only allows read-only tools
         if self.agent_mode == "ask" and not self.tools.is_read_only(tool_call.name):
             result = json.dumps({
                 "error": f"Tool '{tool_call.name}' is not allowed in ask mode. Only read-only tools are permitted."
@@ -797,11 +1021,10 @@ class AgentLoop:
             )
             return
 
-        # Circuit breaker: check if tool is tripped
         if self.circuit_breaker.is_tripped(tool_call.name):
             result = json.dumps({
                 "error": self.circuit_breaker.trip_message(tool_call.name),
-                "circuit_breaker": True
+                "circuit_breaker": True,
             })
             self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
             yield self._emit(
@@ -814,7 +1037,6 @@ class AgentLoop:
             )
             return
 
-        # Manual mode: emit suggested_command for each tool call
         if self.agent_mode == "manual" and tool_call.name not in ("ask", "complete_step", "todo_write"):
             yield self._emit(
                 LLMResponse(
@@ -833,9 +1055,7 @@ class AgentLoop:
                     },
                 )
             )
-            # Non-blocking wait for manual approval (max 5 minutes)
             if self.pending_permissions or self.pending_asks:
-                # Yield control back while waiting for approval
                 yield self._emit(
                     LLMResponse(
                         content="",
@@ -913,11 +1133,11 @@ class AgentLoop:
                     )
                 )
                 self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
-                yield self._emit(LLMResponse(content=result, model="tool-result", event_type="tool_result"))
+                yield self._emit(
+                    LLMResponse(content=result, model="tool-result", event_type="tool_result")
+                )
                 return
 
-            # Emit tool_executing event before execution (real-time status for frontend)
-            import time
             yield self._emit(
                 LLMResponse(
                     content="",
@@ -1018,7 +1238,11 @@ class AgentLoop:
         )
 
         self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
-        await fire_hooks("PostToolUse", self.tools.working_dir, {"tool": tool_call.name, "result": result[:500]})
+        await fire_hooks(
+            "PostToolUse",
+            self.tools.working_dir,
+            {"tool": tool_call.name, "result": result[:500]},
+        )
         yield self._emit(
             LLMResponse(
                 content=result,
@@ -1029,39 +1253,14 @@ class AgentLoop:
             )
         )
 
-    async def respond_permission(self, request_id: str, approved: bool, grant_scope: str = "once") -> bool:
-        future = self.pending_permissions.get(request_id)
-        if future is None or future.done():
-            return False
-        self._pending_grant_scope = grant_scope if approved else "once"
-        future.set_result(approved)
-        return True
-
-    async def wait_for_ask(self, request_id: str, questions: list[dict[str, Any]]) -> str:
-        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
-        self.pending_asks[request_id] = future
-        return await future
-
-    async def respond_ask(self, request_id: str, answers: list[dict[str, Any]]) -> bool:
-        future = self.pending_asks.get(request_id)
-        if future is None or future.done():
-            return False
-        result = self.ask_handler.respond(request_id, answers)
-        if result is None:
-            future.set_result(self.ask_handler.headless_fallback([]))
-        else:
-            future.set_result(result)
-        return True
-
-    def list_pending_asks(self) -> list[dict[str, Any]]:
-        return [{"request_id": rid} for rid in self.pending_asks if not self.pending_asks[rid].done()]
-
     async def _handle_ask_tool(self, tool_call: Any) -> AsyncIterator[LLMResponse]:
         questions = tool_call.arguments.get("questions", [])
         request_id = uuid.uuid4().hex[:12]
         payload = json.dumps({"request_id": request_id, "questions": questions})
         yield self._emit(
-            LLMResponse(content=payload, model="ask", event_type="ask", metadata={"request_id": request_id})
+            LLMResponse(
+                content=payload, model="ask", event_type="ask", metadata={"request_id": request_id}
+            )
         )
         if self.interactive_ask:
             try:
@@ -1080,19 +1279,6 @@ class AgentLoop:
                 metadata={"tool_call_id": tool_call.id},
             )
         )
-
-    def list_pending_permissions(self) -> list[dict[str, Any]]:
-        return [{"request_id": rid} for rid in self.pending_permissions if not self.pending_permissions[rid].done()]
-
-    def rewind(self, checkpoint_id: str | None = None) -> dict[str, Any]:
-        return self.checkpoints.rewind(checkpoint_id)
-
-    def list_checkpoints(self) -> list[dict[str, Any]]:
-        return [c.to_dict() for c in self.checkpoints.list_checkpoints()]
-
-    async def run_stream(self, prompt: str) -> AsyncIterator[LLMResponse]:
-        async for chunk in self.run(prompt):
-            yield chunk
 
     async def _execute_in_sandbox(self, tool_name: str, arguments: dict[str, Any]) -> str:
         from likecodex_engine.permissions.classifier import RiskClassifier, RiskLevel
@@ -1115,7 +1301,7 @@ class AgentLoop:
                             return json.dumps({"error": f"Sandbox execution failed: {err}"})
                         tagged = await self.tools.execute(tool_name, arguments)
                         self._sandbox_fallbacks += 1
-                        if self._sandbox_fallbacks >= 3 and self._degradation_level < 2:
+                        if self._sandbox_fallbacks >= self.config.max_sandbox_fallbacks and self._degradation_level < 2:
                             self._degradation_level += 1
                         self._emit(
                             LLMResponse(
@@ -1140,9 +1326,13 @@ class AgentLoop:
                 )
                 return self._tag_result(tagged, "fallback-local")
         if require_sandbox:
-            return json.dumps({"error": f"Tool {tool_name} must run in sandbox but only run_command is supported"})
+            return json.dumps(
+                {"error": f"Tool {tool_name} must run in sandbox but only run_command is supported"}
+            )
         raw = await self.tools.execute(tool_name, arguments)
         return self._tag_result(raw, "sandbox")
+
+    # ── utility methods ────────────────────────────────────────────────
 
     @staticmethod
     def _tag_result(raw_result: str, tag: str) -> str:
@@ -1248,4 +1438,5 @@ def build_subagent_loop(
         session_id=f"{parent.session_id or 'sub'}-sub",
         checkpoints=CheckpointManager(parent.tools.working_dir),
         is_subagent=True,
+        loop_config=parent.config,
     )
