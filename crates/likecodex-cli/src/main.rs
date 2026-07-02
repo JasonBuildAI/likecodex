@@ -240,7 +240,7 @@ async fn run_prompt(client: &Client, url: &str, prompt: &str) -> Result<()> {
             }
             "retrying" | "tool_dispatch" | "compaction_started" | "compaction_done" | "notice"
             | "usage" => {
-                handle_stream_event(client, url, item).await?;
+                handle_stream_event(client, url, &item).await?;
             }
             "plan" => println!("[plan] {content}"),
             "permission" => handle_permission(client, url, content).await?,
