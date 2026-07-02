@@ -7,6 +7,7 @@ import json
 import os
 import uuid
 from collections.abc import AsyncIterator, Callable
+import time
 from typing import Any
 
 import aiohttp
@@ -127,6 +128,8 @@ class AgentLoop:
         self._handoff_active = False
         self._mode_downgraded = False
         self._all_done_counter = 0
+        self._watchdog_event: asyncio.Event | None = None
+        self._last_activity_time: float = 0.0
         self.circuit_breaker = ToolCircuitBreaker()
         if hasattr(context, "set_working_dir"):
             context.set_working_dir(tools.working_dir)
@@ -302,6 +305,9 @@ class AgentLoop:
         stream_recoveries = 0
         last_prefix_shape: PrefixShape | None = None
         have_last_prefix_shape = False
+
+        # Start watchdog
+        self._last_activity_time = time.time()
 
         iteration = 0
         hit_max_iterations = False
@@ -594,6 +600,20 @@ class AgentLoop:
                 yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
             # Circuit breaker: advance iteration
             self.circuit_breaker.next_iteration()
+            
+            # Watchdog: check if stuck (no tool calls for 5 minutes)
+            now = time.time()
+            if self._used_any_tool and (now - self._last_activity_time) > 300:
+                yield self._emit(
+                    LLMResponse(
+                        content="[watchdog] No tool calls for 5 minutes. Injecting prompt to check if stuck.",
+                        model="system",
+                        event_type="notice",
+                    )
+                )
+                self._last_activity_time = now
+            self._last_activity_time = now
+            
             # Prefetch: build context cache for next iteration while idle
             self.context.get_messages()
             iteration += 1
