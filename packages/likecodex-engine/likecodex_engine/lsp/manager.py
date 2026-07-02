@@ -332,3 +332,140 @@ class LspManager:
             "actions": actions,
             "count": len(actions),
         })
+
+    # ── Remote LSP Support ───────────────────────────────────────────
+
+    def register_remote_server_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Register a remote LSP server (TCP/WebSocket)."
+            " Connect to an LSP server running on a remote host.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "language": {"type": "string", "description": "Language ID (e.g. 'python', 'typescript')"},
+                    "host": {"type": "string", "description": "Remote host (e.g. '192.168.1.100')"},
+                    "port": {"type": "integer", "description": "TCP port (e.g. 2087 for pyright)"},
+                },
+                "required": ["language", "host", "port"],
+            },
+        }
+
+    async def register_remote_server(self, language: str, host: str, port: int) -> str:
+        """Connect to a remote LSP server via TCP."""
+        if language in self._clients and language in getattr(self, "_remote_languages", set()):
+            # Already connected remotely
+            return json.dumps({"status": "already_connected", "language": language, "host": host, "port": port})
+
+        try:
+            reader, writer = await asyncio.open_connection(host, port)
+
+            # Wrap the TCP connection in a minimal subprocess-like interface for LspClient
+            proc = _TcpProcess(reader, writer)
+            client = LspClient(proc)
+
+            # Initialize LSP session
+            await client.request(
+                "initialize",
+                {
+                    "processId": None,
+                    "rootUri": self.root.as_uri(),
+                    "capabilities": {},
+                },
+            )
+            await client.request("initialized", {})
+
+            self._clients[language] = client
+            if not hasattr(self, "_remote_languages"):
+                self._remote_languages = set()
+            self._remote_languages.add(language)
+
+            return json.dumps({
+                "status": "connected",
+                "language": language,
+                "host": host,
+                "port": port,
+            })
+        except (OSError, TimeoutError, ConnectionRefusedError) as e:
+            return json.dumps({"error": f"Failed to connect to remote LSP at {host}:{port}: {e}"})
+
+    def list_remote_servers_schema(self) -> dict[str, Any]:
+        return {
+            "description": "List all registered remote LSP server connections.",
+            "parameters": {"type": "object", "properties": {}},
+        }
+
+    async def list_remote_servers(self) -> str:
+        """List active remote LSP connections."""
+        remote = getattr(self, "_remote_languages", set())
+        servers = []
+        for lang in remote:
+            client = self._clients.get(lang)
+            servers.append({
+                "language": lang,
+                "connected": client is not None,
+            })
+        return json.dumps({"remote_servers": servers, "count": len(servers)})
+
+    def disconnect_remote_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Disconnect a remote LSP server by language.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "language": {"type": "string", "description": "Language to disconnect"},
+                },
+                "required": ["language"],
+            },
+        }
+
+    async def disconnect_remote(self, language: str) -> str:
+        """Disconnect a remote LSP server."""
+        client = self._clients.pop(language, None)
+        remote = getattr(self, "_remote_languages", set())
+        remote.discard(language)
+        if client:
+            await client.close()
+            return json.dumps({"status": "disconnected", "language": language})
+        return json.dumps({"error": f"No remote connection for {language}"})
+
+
+class _TcpProcess:
+    """Minimal subprocess-like wrapper around a TCP connection for LspClient compat."""
+
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self.stdin = _TcpStdin(writer)
+        self.stdout = _TcpStdout(reader)
+        self.returncode = None
+
+    def terminate(self) -> None:
+        pass
+
+    def kill(self) -> None:
+        pass
+
+    async def wait(self) -> int:
+        return 0
+
+
+class _TcpStdin:
+    def __init__(self, writer: asyncio.StreamWriter) -> None:
+        self._writer = writer
+
+    def write(self, data: bytes) -> None:
+        self._writer.write(data)
+
+    async def drain(self) -> None:
+        await self._writer.drain()
+
+
+class _TcpStdout:
+    def __init__(self, reader: asyncio.StreamReader) -> None:
+        self._reader = reader
+        self._buffer = b""
+
+    async def readline(self) -> bytes:
+        line = await self._reader.readline()
+        return line
+
+    async def readexactly(self, n: int) -> bytes:
+        return await self._reader.readexactly(n)
