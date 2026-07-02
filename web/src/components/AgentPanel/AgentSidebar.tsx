@@ -1,18 +1,21 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useAgentStore } from '@/store/agentStore';
+import { useAppStore } from '@/lib/store';
 import { ModeSelector } from './ModeSelector';
 import { ConversationHistory } from './ConversationHistory';
 
 // ── Main Agent Sidebar Component ───────────────────────────────────────
 export const AgentPanelSidebar: React.FC = () => {
-  const { currentMode, isSidebarOpen, toggleSidebar, createConversation } = useAgentStore();
+  const agentMode = useAppStore((s) => s.agentMode);
+  const sidebarOpen = useAppStore((s) => s.sidebarOpen);
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const createConversation = useAppStore((s) => s.createConversation);
   const [inputValue, setInputValue] = useState('');
 
   // 根据模式动态生成占位符文本
   const getPlaceholderText = () => {
-    switch (currentMode) {
+    switch (agentMode) {
       case 'ask':
         return 'Ask questions without making changes...';
       case 'agent':
@@ -29,7 +32,7 @@ export const AgentPanelSidebar: React.FC = () => {
     if (!inputValue.trim()) return;
 
     // 创建新对话并发送消息
-    createConversation(inputValue.slice(0, 40), currentMode);
+    createConversation(inputValue.slice(0, 40), agentMode);
 
     // TODO: 发送消息到后端
     console.log('Sending message:', inputValue);
@@ -44,7 +47,7 @@ export const AgentPanelSidebar: React.FC = () => {
   };
 
   // 折叠状态：显示展开按钮
-  if (!isSidebarOpen) {
+  if (!sidebarOpen) {
     return (
       <button
         onClick={toggleSidebar}

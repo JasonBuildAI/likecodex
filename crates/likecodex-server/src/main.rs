@@ -584,26 +584,37 @@ async fn get_session_events(
 }
 
 async fn index_search(Query(query): Query<IndexSearchQuery>) -> Json<serde_json::Value> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut index = FileIndex::new();
-    let results = match index.index(&cwd) {
-        Ok(()) => index
-            .search_by_name(&query.pattern)
-            .into_iter()
-            .take(50)
-            .map(|entry| {
-                serde_json::json!({
-                    "path": entry.path.display().to_string(),
-                    "language": entry.language,
-                    "size": entry.size,
+    let cwd = tokio::task::spawn_blocking(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    })
+    .await
+    .unwrap_or_else(|_| PathBuf::from("."));
+
+    let pattern = query.pattern.clone();
+    let results = tokio::task::spawn_blocking(move || {
+        let mut index = FileIndex::new();
+        match index.index_or_load(&cwd) {
+            Ok(()) => index
+                .search_by_name(&pattern)
+                .into_iter()
+                .take(50)
+                .map(|entry| {
+                    serde_json::json!({
+                        "path": entry.path.display().to_string(),
+                        "language": entry.language,
+                        "size": entry.size,
+                    })
                 })
-            })
-            .collect::<Vec<_>>(),
-        Err(e) => {
-            return Json(serde_json::json!({ "error": e.to_string(), "results": [] }));
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                return (false, e.to_string(), vec![]);
+            }
         }
-    };
-    Json(serde_json::json!({ "pattern": query.pattern, "results": results }))
+    })
+    .await
+    .unwrap_or_else(|_| (false, "task panicked".to_string(), vec![]));
+
+    Json(serde_json::json!({ "pattern": query.pattern, "results": results.2 }))
 }
 
 fn percent_encode_query(value: &str) -> String {
@@ -630,30 +641,42 @@ async fn codegraph_search(
         return Json(body);
     }
 
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut graph = CodeGraph::new();
-    if let Err(e) = graph.build(&cwd) {
-        return Json(serde_json::json!({ "error": e.to_string(), "results": [] }));
-    }
-    let _ = graph.save_cached(&cwd);
-    let results = graph
-        .search(&query.pattern)
-        .into_iter()
-        .take(50)
-        .map(|sym| {
-            serde_json::json!({
-                "name": sym.name,
-                "kind": sym.kind,
-                "path": sym.path.display().to_string(),
-                "line": sym.line,
+    let cwd = tokio::task::spawn_blocking(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    })
+    .await
+    .unwrap_or_else(|_| PathBuf::from("."));
+
+    let pattern = query.pattern.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut graph = CodeGraph::new();
+        if let Err(e) = graph.build(&cwd) {
+            return serde_json::json!({ "error": e.to_string(), "results": [] });
+        }
+        let _ = graph.save_cached(&cwd);
+        let results = graph
+            .search(&pattern)
+            .into_iter()
+            .take(50)
+            .map(|sym| {
+                serde_json::json!({
+                    "name": sym.name,
+                    "kind": sym.kind,
+                    "path": sym.path.display().to_string(),
+                    "line": sym.line,
+                })
             })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "pattern": pattern,
+            "results": results,
+            "files": graph.file_count,
         })
-        .collect::<Vec<_>>();
-    Json(serde_json::json!({
-        "pattern": query.pattern,
-        "results": results,
-        "files": graph.file_count,
-    }))
+    })
+    .await
+    .unwrap_or_else(|_| serde_json::json!({ "error": "task panicked", "results": [] }));
+
+    Json(result)
 }
 
 async fn proxy_run(

@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { useAgentStore, type AgentMode } from '@/store/agentStore';
+import { useAppStore } from '@/lib/store';
+import type { AgentMode } from '@/lib/store';
 
 // ── Mode configuration ─────────────────────────────────────────────────
 const MODE_CONFIG: Record<
@@ -47,18 +48,19 @@ const MODE_CONFIG: Record<
 
 // ── Component ──────────────────────────────────────────────────────────
 export const ModeSelector: React.FC = () => {
-  const { currentMode, switchMode } = useAgentStore();
+  const agentMode = useAppStore((s) => s.agentMode);
+  const setAgentMode = useAppStore((s) => s.setAgentMode);
 
   return (
     <div className="flex items-center gap-1 p-2 border-b border-border">
       {(Object.keys(MODE_CONFIG) as AgentMode[]).map((mode) => {
         const config = MODE_CONFIG[mode];
-        const isActive = currentMode === mode;
+        const isActive = agentMode === mode;
 
         return (
           <button
             key={mode}
-            onClick={() => switchMode(mode)}
+            onClick={() => setAgentMode(mode)}
             title={config.description}
             className={`flex items-center gap-1.5 flex-1 justify-center px-3 py-2 rounded-lg text-xs font-medium transition-all border border-transparent ${
               isActive

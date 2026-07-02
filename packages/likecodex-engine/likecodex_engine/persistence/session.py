@@ -190,6 +190,10 @@ class SessionStore:
         manager._log = restored
         return manager
 
+    def close(self) -> None:
+        """Release any resources held by the session store."""
+        pass
+
     def delete_session(self, session_id: str) -> None:
         """Delete a session and all its events."""
         with sqlite3.connect(self.db_path) as conn:

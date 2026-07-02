@@ -179,6 +179,19 @@ export function parseRustEvent(data: RustEvent): {
         taskId,
         content: String((payload.result as { output?: string })?.output || payload.content || ''),
       };
+    case 'tool_executing': {
+      const callData = payload as Record<string, unknown>;
+      return {
+        kind: 'tool_executing',
+        taskId,
+        call: {
+          id: String(callData.tool_call_id || ''),
+          name: String(callData.tool_name || ''),
+          arguments: (callData.arguments as Record<string, unknown>) || {},
+        },
+        content: String(callData.started_at || ''),
+      };
+    }
     case 'permission_requested': {
       const req = payload.request as Record<string, unknown> | undefined;
       let parsed: Record<string, unknown> = {};
@@ -519,6 +532,10 @@ export type EventHandler = {
   onDiff?: (before: string, after: string) => void;
   onError?: (error: Error) => void;
   onReasoningDelta?: (content: string) => void;
+  /** Called when a tool starts executing (real-time status) */
+  onToolCallStart?: (call: ToolCall) => void;
+  /** Called when a tool completes execution */
+  onToolCallComplete?: (call: ToolCall, result: string) => void;
 };
 
 // ── SSE stream reader shared helper ────────────────────────────────────

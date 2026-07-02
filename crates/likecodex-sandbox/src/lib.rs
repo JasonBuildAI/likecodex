@@ -5,6 +5,9 @@ pub mod policy;
 use anyhow::Result;
 use likecodex_core::config::SandboxConfig;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 pub use docker::DockerExecutor;
@@ -46,11 +49,20 @@ impl SandboxExecutor {
     }
 
     /// Check whether Docker sandboxing is available on this host.
+    /// Result is cached after first check, refreshed every 30 seconds.
     pub async fn is_available(&self) -> bool {
         if !self.config.enabled {
             return false;
         }
-        DockerExecutor::is_available().await
+        static AVAILABLE: OnceLock<Mutex<(bool, tokio::time::Instant)>> = OnceLock::new();
+        let cache = AVAILABLE.get_or_init(|| Mutex::new((false, tokio::time::Instant::now())));
+        let mut guard = cache.lock().await;
+        if guard.1.elapsed() < tokio::time::Duration::from_secs(30) {
+            return guard.0;
+        }
+        let available = DockerExecutor::is_available().await;
+        *guard = (available, tokio::time::Instant::now());
+        available
     }
 
     /// Execute a command in the sandbox, falling back to local execution if Docker is unavailable.
@@ -65,7 +77,7 @@ impl SandboxExecutor {
 
         let working_dir = working_dir.as_ref().to_path_buf();
 
-        if DockerExecutor::is_available().await {
+        if self.is_available().await {
             let docker = DockerExecutor::new(&self.image, self.policy.clone());
             if let Err(e) = docker.ensure_image().await {
                 if !self.config.allow_fallback {

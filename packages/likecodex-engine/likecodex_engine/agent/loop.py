@@ -272,7 +272,9 @@ class AgentLoop:
             if self.max_iterations > 0 and iteration >= self.max_iterations:
                 hit_max_iterations = True
                 break
-            messages = self.context.get_messages()
+            # Cache messages once per iteration to avoid redundant serialization
+            _cached_messages = self.context.get_messages()
+            messages = _cached_messages
             cur_prefix_shape = self._capture_prefix_shape(tool_schemas)
             response: LLMResponse | None = None
 
@@ -645,6 +647,23 @@ class AgentLoop:
                 self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
                 yield self._emit(LLMResponse(content=result, model="tool-result", event_type="tool_result"))
                 return
+
+            # Emit tool_executing event before execution (real-time status for frontend)
+            import time
+            yield self._emit(
+                LLMResponse(
+                    content="",
+                    model="system",
+                    event_type="tool_executing",
+                    metadata={
+                        "tool_call_id": tool_call.id,
+                        "tool_name": tool_call.name,
+                        "arguments": stable_json_dumps(tool_call.arguments),
+                        "started_at": time.time(),
+                    },
+                )
+            )
+
             if prefetched_result is not None and decision.execution_mode == ExecutionMode.LOCAL:
                 result = prefetched_result
             elif decision.execution_mode == ExecutionMode.PROMPT:

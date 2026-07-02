@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { useAgentStore } from '@/store/agentStore';
+import { useAppStore } from '@/lib/store';
 
 // ── Relative time helper (no date-fns dependency) ──────────────────────
 function formatRelativeTime(date: Date): string {
@@ -21,7 +21,9 @@ function formatRelativeTime(date: Date): string {
 
 // ── Component ──────────────────────────────────────────────────────────
 export const ConversationHistory: React.FC = () => {
-  const { conversations, activeConversationId, setActiveConversation } = useAgentStore();
+  const conversations = useAppStore((s) => s.conversations);
+  const activeConversationId = useAppStore((s) => s.activeConversationId);
+  const setActiveConversation = useAppStore((s) => s.setActiveConversation);
 
   if (conversations.length === 0) {
     return (

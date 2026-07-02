@@ -1,8 +1,7 @@
 'use client';
 
 import { memo, useState, useCallback, useRef, useEffect } from 'react';
-import { useAgentStore, type AgentMode } from '@/store/agentStore';
-import { useAppStore } from '@/lib/store';
+import { useAppStore, type AgentMode } from '@/lib/store';
 import { streamChat } from '@/lib/api';
 import { useAgentViewMode } from '@/hooks/useAgentViewMode';
 
@@ -15,7 +14,8 @@ const MODE_BUTTONS: Record<AgentMode, { label: string; shortLabel: string; color
 
 // ── Component ──────────────────────────────────────────────────────────
 export const EmbeddedAgentView = memo(function EmbeddedAgentView() {
-  const { currentMode, switchMode } = useAgentStore();
+  const agentMode = useAppStore((s) => s.agentMode);
+  const setAgentMode = useAppStore((s) => s.setAgentMode);
   const {
     isStreaming,
     setIsStreaming,
@@ -23,7 +23,6 @@ export const EmbeddedAgentView = memo(function EmbeddedAgentView() {
     appendToLastMessage,
     upsertToolDispatch,
     currentSessionId,
-    agentMode,
   } = useAppStore();
   const { mode: viewMode, setMode: setViewMode } = useAgentViewMode();
 
@@ -103,11 +102,11 @@ export const EmbeddedAgentView = memo(function EmbeddedAgentView() {
       <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border/60">
         {(Object.keys(MODE_BUTTONS) as AgentMode[]).map((mode) => {
           const cfg = MODE_BUTTONS[mode];
-          const isActive = currentMode === mode;
+          const isActive = agentMode === mode;
           return (
             <button
               key={mode}
-              onClick={() => switchMode(mode)}
+              onClick={() => setAgentMode(mode)}
               title={cfg.label}
               className={`px-2 py-1 rounded text-[10px] font-medium border transition-all ${
                 isActive

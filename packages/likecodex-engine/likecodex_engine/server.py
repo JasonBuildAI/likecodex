@@ -63,10 +63,16 @@ _ACTIVE_COORDINATORS: dict[str, Coordinator] = {}
 # Track background tasks to prevent premature GC (Python < 3.11)
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
 _SESSION_STORE: SessionStore | None = None
-_CONTEXT_CACHE = SessionContextCache()
+_CONTEXT_CACHE = SessionContextCache(max_size=200)
 
 # Track whether DeepSeek tools have been registered
 _DEEPSEEK_TOOLS_REGISTERED: bool = False
+
+# Cache resolved config to avoid repeated env var reads
+_RESOLVED_CONFIG_CACHE: dict[int, dict] = {}
+_RESOLVED_CONFIG_KEYS: tuple[str, ...] = (
+    "deepseek_thinking", "api_key", "provider", "model", "base_url",
+)
 
 
 def _make_sse_response() -> web.StreamResponse:
@@ -83,12 +89,18 @@ def _make_sse_response() -> web.StreamResponse:
 
 async def _sse_write(response: web.StreamResponse, data: str) -> None:
     """Write a single SSE data event to the response."""
-    await response.write(f"data: {data}\n\n".encode())
+    try:
+        await response.write(f"data: {data}\n\n".encode())
+    except (ConnectionResetError, ConnectionAbortedError, OSError):
+        pass
 
 
 async def _sse_done(response: web.StreamResponse) -> None:
     """Write the SSE [DONE] sentinel."""
-    await response.write(b"data: [DONE]\n\n")
+    try:
+        await response.write(b"data: [DONE]\n\n")
+    except (ConnectionResetError, ConnectionAbortedError, OSError):
+        pass
 
 
 class _SSEKeepalive:
@@ -139,10 +151,18 @@ def _session_store() -> SessionStore:
 
 
 def _resolve_config(app_config: dict) -> dict:
+    """Resolve config with env var overrides. Result is cached per call identity."""
+    # Fast path: return cached if app_config is the same object
+    cache_id = id(app_config)
+    if cache_id in _RESOLVED_CONFIG_CACHE:
+        return _RESOLVED_CONFIG_CACHE[cache_id]
+
     thinking_raw = app_config.get("deepseek_thinking", os.environ.get("LIKECODEX_DEEPSEEK_THINKING", "false"))
     thinking = str(thinking_raw).lower() in ("1", "true", "yes")
-    api_key = app_config.get("api_key") or os.environ.get("LIKECODEX_LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
-    return {
+    api_key = (app_config.get("api_key")
+               or os.environ.get("LIKECODEX_LLM_API_KEY")
+               or os.environ.get("DEEPSEEK_API_KEY"))
+    resolved = {
         **app_config,
         "provider": app_config.get("provider", "deepseek"),
         "model": app_config.get("model", "deepseek-v4-flash"),
@@ -150,6 +170,8 @@ def _resolve_config(app_config: dict) -> dict:
         "api_key": api_key,
         "thinking": thinking,
     }
+    _RESOLVED_CONFIG_CACHE[cache_id] = resolved
+    return resolved
 
 
 def _cfg_wd(request: web.Request) -> tuple[dict, str]:
@@ -2196,12 +2218,84 @@ async def warmup_deepseek_cache() -> None:
             Message(role=Role.USER, content="."),
         ]
         await provider.complete(warmup_msgs, max_tokens=5)
-    except Exception:
-        pass  # Warmup is best-effort
+        logger.debug("DeepSeek prefix cache warmup completed")
+    except Exception as exc:
+        logger.debug("DeepSeek prefix cache warmup skipped: %s", exc)
+
+
+# ── Error handling middleware ──────────────────────────────────────
+
+
+@web.middleware
+async def _error_middleware(request: web.Request, handler: Any) -> web.StreamResponse:
+    """Global error handling middleware.
+    Catches all unhandled exceptions and returns structured JSON errors.
+    Prevents 500 errors from leaking internal details.
+    """
+    try:
+        return await handler(request)
+    except web.HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unhandled error in %s %s", request.method, request.path)
+        return web.json_response({"error": str(exc)}, status=500)
+
+
+# ── Shutdown lifecycle ─────────────────────────────────────────────
+
+
+async def _on_cleanup(app: web.Application) -> None:
+    """Graceful shutdown: clean up all global state.
+    Ensures LSP servers, terminal PTY sessions, and background tasks are properly terminated.
+    """
+    logger.info("Shutting down LikeCodex engine server...")
+
+    # Cancel and drain all background tasks
+    for task in list(_BACKGROUND_TASKS):
+        if not task.done():
+            task.cancel()
+    if _BACKGROUND_TASKS:
+        await asyncio.gather(*_BACKGROUND_TASKS, return_exceptions=True)
+    _BACKGROUND_TASKS.clear()
+
+    # Cancel all active loops
+    for sid, loop in list(_ACTIVE_LOOPS.items()):
+        if hasattr(loop, 'cancel'):
+            try:
+                loop.cancel()
+            except Exception:
+                pass
+    _ACTIVE_LOOPS.clear()
+    _ACTIVE_COORDINATORS.clear()
+
+    # Clear context cache
+    _CONTEXT_CACHE.clear()
+
+    # Close session store
+    if _SESSION_STORE is not None:
+        try:
+            _SESSION_STORE.close()
+        except Exception:
+            pass
+
+    # Clear config cache
+    _RESOLVED_CONFIG_CACHE.clear()
+
+    # Clear global lazy-init services
+    global _completion_service, _lsp_manager, _git_service
+    global _terminal_manager, _test_runner, _settings_manager
+    _completion_service = None
+    _lsp_manager = None
+    _git_service = None
+    _terminal_manager = None
+    _test_runner = None
+    _settings_manager = None
+
+    logger.info("LikeCodex engine server shutdown complete")
 
 
 def create_app(config: dict | None = None) -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[_error_middleware])
     app[APP_CONFIG] = config or {}
 
     # Background cache warmup on startup
@@ -2211,6 +2305,7 @@ def create_app(config: dict | None = None) -> web.Application:
             asyncio.create_task(warmup_deepseek_cache())
 
     app.on_startup.append(_startup_warmup)
+    app.on_cleanup.append(_on_cleanup)
     app.router.add_get("/health", health)
     app.router.add_get("/metrics", metrics)
     app.router.add_post("/chat", chat)

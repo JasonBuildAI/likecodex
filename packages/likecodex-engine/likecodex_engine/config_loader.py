@@ -53,8 +53,15 @@ def project_config_paths(cwd: Path) -> list[Path]:
 
 
 def load_merged_config(cwd: Path | None = None) -> dict[str, Any]:
-    """Merge user + project configs into a flat engine config dict."""
+    """Merge user + project configs into a flat engine config dict.
+    
+    Result is cached per working directory to avoid repeated file I/O.
+    """
     cwd = cwd or Path.cwd()
+    key = str(cwd.resolve())
+    if key in _CONFIG_CACHE:
+        return dict(_CONFIG_CACHE[key])  # Return a shallow copy for safety
+
     merged: dict[str, Any] = {}
 
     user_path = Path.home() / ".likecodex" / "config.toml"
@@ -64,7 +71,12 @@ def load_merged_config(cwd: Path | None = None) -> dict[str, Any]:
     for path in project_config_paths(cwd):
         merged = _merge_dict(merged, _parse_toml(path))
 
+    _CONFIG_CACHE[key] = dict(merged)
     return merged
+
+
+# Config cache: cleared when the module is reloaded
+_CONFIG_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def engine_config_from_env(cwd: Path | None = None) -> dict[str, Any]:

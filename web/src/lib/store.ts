@@ -106,6 +106,32 @@ export interface OpenFile {
   modified: boolean;
 }
 
+// ── Agent types (merged from agentStore) ────────────────────────────────
+export type AgentMode = 'ask' | 'agent' | 'manual';
+
+export interface Conversation {
+  id: string;
+  title: string;
+  mode: AgentMode;
+  createdAt: Date;
+  lastMessageAt: Date;
+  messageCount: number;
+}
+
+export type ToolCallStatus = 'running' | 'waiting_approval' | 'completed' | 'error';
+
+export interface ToolCallStreamItem {
+  id: string;
+  call: ToolCall;
+  status: ToolCallStatus;
+  startedAt: number;
+  completedAt?: number;
+  result?: string;
+  error?: string;
+}
+
+export type AgentViewMode = 'chat' | 'agent' | 'mixed';
+
 // ── App state ──────────────────────────────────────────────────────────
 interface AppState {
   // Core
@@ -125,6 +151,13 @@ interface AppState {
   planModePendingExit: boolean;
   collaborationMode: 'normal' | "plan" | "goal";
   agentMode: 'ask' | 'agent' | 'manual';
+
+  // ── Agent panel state (merged from agentStore) ───────────────
+  conversations: Conversation[];
+  activeConversationId: string | null;
+  isToolCallLogVisible: boolean;
+  agentViewMode: AgentViewMode;
+  activeToolCalls: ToolCallStreamItem[];
   
   // NEW: UI state
   toasts: Toast[];
@@ -150,6 +183,15 @@ interface AppState {
   apiKey: string;
   selectedModel: string;
   reasoningContent: string;
+
+  // ── Agent panel actions (merged from agentStore) ────────────
+  createConversation: (title: string, mode?: AgentMode) => void;
+  setActiveConversation: (id: string | null) => void;
+  toggleToolCallLog: () => void;
+  setAgentViewMode: (mode: AgentViewMode) => void;
+  addMessageToConversation: (conversationId: string, content: string) => void;
+  upsertToolCallStatus: (item: ToolCallStreamItem) => void;
+  clearActiveToolCalls: () => void;
 
   // Core actions
   setSettingsOpen: (open: boolean) => void;
@@ -225,6 +267,13 @@ export const useAppStore = create<AppState>((set) => ({
   collaborationMode: 'normal',
   reasoningContent: '',
 
+  // ── Agent panel defaults (merged from agentStore) ────────────
+  conversations: [],
+  activeConversationId: null,
+  isToolCallLogVisible: false,
+  agentViewMode: 'mixed',
+  activeToolCalls: [],
+
   // ── File tree & editor defaults ────────────────────────────
   fileTree: null,
   fileTreeLoading: false,
@@ -249,6 +298,47 @@ export const useAppStore = create<AppState>((set) => ({
   settingsOpen: false,
   apiKey: typeof window !== 'undefined' ? localStorage.getItem('likecodex_api_key') || '' : '',
   selectedModel: typeof window !== 'undefined' ? localStorage.getItem('likecodex_model') || 'deepseek-v4-flash' : 'deepseek-v4-flash',
+
+  // ── Agent panel actions (merged from agentStore) ───────────────────
+  createConversation: (title, mode = 'agent') => {
+    const newConversation: Conversation = {
+      id: crypto.randomUUID(),
+      title,
+      mode,
+      createdAt: new Date(),
+      lastMessageAt: new Date(),
+      messageCount: 0,
+    };
+    set((state) => ({
+      conversations: [newConversation, ...state.conversations],
+      activeConversationId: newConversation.id,
+    }));
+  },
+  setActiveConversation: (id) => set({ activeConversationId: id }),
+  toggleToolCallLog: () =>
+    set((state) => ({ isToolCallLogVisible: !state.isToolCallLogVisible })),
+  setAgentViewMode: (mode) => set({ agentViewMode: mode }),
+  addMessageToConversation: (conversationId, _content) => {
+    set((state) => ({
+      conversations: state.conversations.map((conv) =>
+        conv.id === conversationId
+          ? { ...conv, lastMessageAt: new Date(), messageCount: conv.messageCount + 1 }
+          : conv
+      ),
+    }));
+  },
+  upsertToolCallStatus: (item) => {
+    set((state) => {
+      const existing = state.activeToolCalls.findIndex(i => i.id === item.id);
+      if (existing >= 0) {
+        const updated = [...state.activeToolCalls];
+        updated[existing] = item;
+        return { activeToolCalls: updated };
+      }
+      return { activeToolCalls: [...state.activeToolCalls, item] };
+    });
+  },
+  clearActiveToolCalls: () => set({ activeToolCalls: [] }),
 
   // ── Core actions ───────────────────────────────────────────────────
   setSettingsOpen: (open) => set({ settingsOpen: open }),
