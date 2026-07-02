@@ -384,6 +384,12 @@ export function SettingsPanel() {
               {apiKey ? 'Configured' : 'Not set'}
             </span>
           </div>
+
+          {/* Cache Hit Rate */}
+          <CacheHitRatePanel sessionId={currentSessionId} />
+
+          {/* Token Statistics */}
+          <TokenStatsPanel sessionId={currentSessionId} />
         </div>
       )}
 
@@ -615,6 +621,276 @@ export function SettingsPanel() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Cache Hit Rate Sub-Component ────────────────────────────────────────
+
+interface CacheStats {
+  hit_rate: number;
+  recent_hit_rate: number;
+  request_count: number;
+  total_hit_tokens: number;
+  total_miss_tokens: number;
+  cost_savings?: number;
+}
+
+function CacheHitRatePanel({ sessionId }: { sessionId: string | null }) {
+  const [stats, setStats] = useState<CacheStats | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchStats = async () => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (sessionId) params.set('session_id', sessionId);
+        const resp = await fetch(`/api/deepseek/cache-stats?${params.toString()}`);
+        if (!cancelled && resp.ok) {
+          const data = await resp.json();
+          const flashInputPrice = 0.10;
+          const flashCachePrice = 0.01;
+          const cacheSavings = (
+            data.total_hit_tokens * (flashInputPrice - flashCachePrice)
+          ) / 1_000_000;
+          setStats({ ...data, cost_savings: cacheSavings });
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    fetchStats();
+    const interval = setInterval(fetchStats, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [sessionId]);
+
+  if (!stats && loading) {
+    return (
+      <div>
+        <label className="block text-xs font-medium text-muted mb-1">Cache Hit Rate</label>
+        <div className="rounded-lg bg-accent/5 px-3 py-2 text-xs text-muted">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!stats) return null;
+
+  const hitRatePct = (stats.hit_rate * 100).toFixed(1);
+  const recentPct = (stats.recent_hit_rate * 100).toFixed(1);
+  const tokensSaved = (stats.total_hit_tokens / 1000).toFixed(0);
+  const totalTokens = ((stats.total_hit_tokens + stats.total_miss_tokens) / 1000).toFixed(0);
+
+  return (
+    <div>
+      <label className="block text-xs font-medium text-muted mb-1">
+        Cache Hit Rate
+        {loading && <span className="ml-1 text-[10px] text-muted/50">⟳</span>}
+      </label>
+      <div className="rounded-lg bg-accent/5 px-3 py-2 space-y-1.5">
+        <div className="flex items-center gap-2">
+          <div className="flex-1 h-2 bg-accent/10 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${
+                stats.hit_rate > 0.6 ? 'bg-green-500' : stats.hit_rate > 0.3 ? 'bg-amber-500' : 'bg-red-500'
+              }`}
+              style={{ width: `${hitRatePct}%` }}
+            />
+          </div>
+          <span className="text-xs font-mono font-medium">{hitRatePct}%</span>
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-[10px]">
+          <div>
+            <span className="text-muted block">Requests</span>
+            <span className="font-mono font-medium">{stats.request_count}</span>
+          </div>
+          <div>
+            <span className="text-muted block">Tokens Saved</span>
+            <span className="font-mono font-medium">{tokensSaved}K</span>
+          </div>
+          <div>
+            <span className="text-muted block">Total /K</span>
+            <span className="font-mono font-medium">{totalTokens}K</span>
+          </div>
+        </div>
+        <div className="flex items-center justify-between pt-1 border-t border-border/50">
+          <span className="text-[10px] text-muted">Est. Savings</span>
+          <span className="text-xs font-mono font-medium text-green-600">
+            ${stats.cost_savings?.toFixed(4) || '0.0000'}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-muted">Recent (last 100)</span>
+          <span className={`text-xs font-mono font-medium ${
+            parseFloat(recentPct) > 60 ? 'text-green-500' : 'text-amber-500'
+          }`}>
+            {recentPct}%
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Token Statistics Sub-Component ──────────────────────────────────────
+
+interface TokenStats {
+  session_id: string;
+  request_count: number;
+  total_tokens: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_hit_tokens: number;
+  total_cache_miss_tokens: number;
+  overall_cache_hit_rate: number;
+  total_cost: number;
+  total_input_cost: number;
+  total_output_cost: number;
+  model_switch_count: number;
+  duration_seconds: number;
+}
+
+function TokenStatsPanel({ sessionId }: { sessionId: string | null }) {
+  const [tokenStats, setTokenStats] = useState<TokenStats | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchData = async () => {
+      if (!sessionId) return;
+      setLoading(true);
+      try {
+        const resp = await fetch(`/api/deepseek/session-cost?session_id=${encodeURIComponent(sessionId)}`);
+        if (!cancelled && resp.ok) {
+          setTokenStats(await resp.json());
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [sessionId]);
+
+  if (!sessionId) return null;
+  if (!tokenStats && loading) {
+    return (
+      <div>
+        <label className="block text-xs font-medium text-muted mb-1">Token Usage</label>
+        <div className="rounded-lg bg-accent/5 px-3 py-2 text-xs text-muted">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!tokenStats) return null;
+
+  const totalInputK = (tokenStats.total_input_tokens / 1000).toFixed(1);
+  const totalOutputK = (tokenStats.total_output_tokens / 1000).toFixed(1);
+  const totalTokensK = (tokenStats.total_tokens / 1000).toFixed(1);
+  const hitPct = (tokenStats.overall_cache_hit_rate * 100).toFixed(1);
+  const inputBarPct = tokenStats.total_tokens > 0
+    ? (tokenStats.total_input_tokens / tokenStats.total_tokens * 100).toFixed(1)
+    : '50';
+
+  return (
+    <div>
+      <label className="block text-xs font-medium text-muted mb-1">Token Usage</label>
+      <div className="rounded-lg bg-accent/5 px-3 py-2 space-y-2">
+        {/* Token bar chart */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[10px]">
+            <span className="text-muted">Input / Output</span>
+            <span className="font-mono font-medium">{totalInputK}K / {totalOutputK}K</span>
+          </div>
+          <div className="h-3 bg-accent/10 rounded-full overflow-hidden flex">
+            <div
+              className="h-full bg-blue-500 transition-all duration-500"
+              style={{ width: `${inputBarPct}%` }}
+              title={`Input: ${totalInputK}K`}
+            />
+            <div
+              className="h-full bg-purple-500 transition-all duration-500"
+              style={{ width: `${(100 - parseFloat(inputBarPct))}%` }}
+              title={`Output: ${totalOutputK}K`}
+            />
+          </div>
+          <div className="flex items-center gap-3 text-[9px] text-muted">
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-2 w-2 rounded bg-blue-500" /> Input
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-2 w-2 rounded bg-purple-500" /> Output
+            </span>
+          </div>
+        </div>
+
+        {/* Model breakdown */}
+        <div className="grid grid-cols-3 gap-2 text-[10px]">
+          <div>
+            <span className="text-muted block">Total Tokens</span>
+            <span className="font-mono font-medium">{totalTokensK}K</span>
+          </div>
+          <div>
+            <span className="text-muted block">Cache Hit</span>
+            <span className="font-mono font-medium">{hitPct}%</span>
+          </div>
+          <div>
+            <span className="text-muted block">Switches</span>
+            <span className="font-mono font-medium">{tokenStats.model_switch_count}</span>
+          </div>
+        </div>
+
+        {/* Model usage breakdown */}
+        <div className="pt-1 border-t border-border/50">
+          <span className="text-[10px] text-muted block mb-1">Model Breakdown</span>
+          <div className="flex gap-2">
+            <div className="flex-1 rounded bg-accent/10 px-2 py-1.5 text-center">
+              <div className="text-[9px] text-muted">Flash</div>
+              <div className="text-xs font-mono font-medium">
+                {tokenStats.total_input_cost > 0 ? 'Active' : '—'}
+              </div>
+            </div>
+            <div className="flex-1 rounded bg-accent/10 px-2 py-1.5 text-center">
+              <div className="text-[9px] text-muted">Pro</div>
+              <div className="text-xs font-mono font-medium">
+                {tokenStats.total_input_cost > 0.01 ? 'Active' : '—'}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Cost estimation */}
+        <div className="flex items-center justify-between pt-1 border-t border-border/50">
+          <span className="text-[10px] text-muted">Est. Cost</span>
+          <span className="text-xs font-mono font-medium">
+            ${tokenStats.total_cost.toFixed(6)}
+          </span>
+        </div>
+
+        {/* Session duration */}
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-muted">Session Duration</span>
+          <span className="text-xs font-mono font-medium">
+            {tokenStats.duration_seconds > 3600
+              ? `${(tokenStats.duration_seconds / 3600).toFixed(1)}h`
+              : tokenStats.duration_seconds > 60
+                ? `${(tokenStats.duration_seconds / 60).toFixed(0)}m`
+                : `${tokenStats.duration_seconds.toFixed(0)}s`}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
