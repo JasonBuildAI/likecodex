@@ -12,13 +12,36 @@ logger = logging.getLogger(__name__)
 
 
 class VectorMemory:
-    """Semantic memory with optional chromadb backend."""
+    """Semantic memory with optional chromadb backend and layered storage.
+    
+    Supports three memory tiers:
+    - working: current session (in-memory only)
+    - episodic: recent sessions (synced to chroma)
+    - semantic: long-term knowledge (project rules, decisions)
+    """
 
     def __init__(self, path: str | Path = ".likecodex/memory.jsonl") -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._collection = None
         self._init_chroma()
+        self._working_memory: list[dict[str, Any]] = []  # current session
+
+    def add_working(self, text: str, metadata: dict[str, Any] | None = None) -> None:
+        """Add to working memory (current session, not persisted)."""
+        self._working_memory.append({"text": text, "metadata": metadata or {}})
+        if len(self._working_memory) > 50:  # Keep working memory bounded
+            self._working_memory.pop(0)
+
+    def search_working(self, query: str) -> list[dict[str, Any]]:
+        """Search working memory for current session context."""
+        query_words = set(query.lower().split())
+        results = []
+        for item in self._working_memory:
+            text_words = set(item["text"].lower().split())
+            if query_words & text_words:
+                results.append(item)
+        return results[:3]
 
     def _init_chroma(self) -> None:
         try:
