@@ -16,6 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+sandbox = [
+    "docker>=6.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -25,6 +28,11 @@ dev = [
 memory = [
     "chromadb>=0.5",
     "faiss-cpu>=1.8",
+]
+all = [
+    "likecodex-engine[sandbox]",
+    "likecodex-engine[memory]",
+    "likecodex-engine[dev]",
 ]
 
 [tool.setuptools.packages.find]

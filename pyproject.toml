@@ -14,11 +14,19 @@ dependencies = [
 likecodex = "likecodex_engine.cli:main"
 
 [project.optional-dependencies]
+sandbox = [
+    "docker>=6.0",
+]
 dev = [
     "ruff>=0.5",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "mypy>=1.10",
+]
+all = [
+    "likecodex-engine[sandbox]",
+    "likecodex-engine[memory]",
+    "likecodex-engine[dev]",
 ]
 
 [tool.setuptools.packages.find]
