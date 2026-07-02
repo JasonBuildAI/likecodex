@@ -49,7 +49,15 @@ if ($rustAvailable) {
     Write-Host "  [OK] $cargoVersion (optional)" -ForegroundColor Green
 } else {
     Write-Host "  [..] Rust not found — Python-only mode will be used" -ForegroundColor Yellow
-    Write-Host "  [..] Install Rust later for enhanced performance: https://rustup.rs" -ForegroundColor DarkYellow
+}
+
+# --- Node.js (optional, for Web UI) ---
+$nodeAvailable = Get-Command node -ErrorAction SilentlyContinue
+if ($nodeAvailable) {
+    $nodeVersion = & node --version 2>&1
+    Write-Host "  [OK] $nodeVersion (optional, for Web UI)" -ForegroundColor Green
+} else {
+    Write-Host "  [..] Node.js not found — Web UI not available" -ForegroundColor DarkYellow
 }
 
 # --- Docker (optional) ---
@@ -58,6 +66,14 @@ if ($dockerAvailable) {
     Write-Host "  [OK] docker" -ForegroundColor Green
 } else {
     Write-Host "  [..] docker not found (optional, for sandbox)" -ForegroundColor DarkYellow
+}
+
+# --- Playwright (optional, for browser tools) ---
+$playwrightAvailable = Get-Command playwright -ErrorAction SilentlyContinue
+if ($playwrightAvailable) {
+    Write-Host "  [OK] playwright (browser tools)" -ForegroundColor Green
+} else {
+    Write-Host "  [..] playwright not found (optional, for browser preview)" -ForegroundColor DarkYellow
 }
 
 # ---------------------------------------------------------------
@@ -80,15 +96,14 @@ Write-Host "`n[3/7] Installing likecodex via pip (primary method)..." -Foregroun
 Push-Location $InstallDir
 
 try {
-    # Install engine and all dependencies via uv/pip
-    uv sync --all-packages 2>&1
+    uv sync --all-packages --group all 2>&1
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "  [OK] likecodex installed via uv sync" -ForegroundColor Green
+        Write-Host "  [OK] likecodex installed via uv sync (with all extras)" -ForegroundColor Green
     } else {
         Write-Host "  [WARN] uv sync had issues, trying pip install..." -ForegroundColor Yellow
-        & pip install -e packages/likecodex-engine 2>&1
+        & pip install -e "packages/likecodex-engine[all]" 2>&1
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "  [OK] likecodex-engine installed via pip" -ForegroundColor Green
+            Write-Host "  [OK] likecodex-engine installed via pip (with all extras)" -ForegroundColor Green
         } else {
             Write-Host "  [ERROR] pip install failed" -ForegroundColor Red
         }
@@ -101,9 +116,18 @@ try {
 Pop-Location
 
 # ---------------------------------------------------------------
-# Step 4: Verify Python installation
+# Step 4: Install browser dependencies (optional)
 # ---------------------------------------------------------------
-Write-Host "`n[4/7] Verifying Python installation..." -ForegroundColor Yellow
+if ($playwrightAvailable) {
+    Write-Host "`n[4/8] Installing Playwright browsers..." -ForegroundColor Yellow
+    & playwright install chromium 2>&1
+    Write-Host "  [OK] Playwright browsers installed" -ForegroundColor Green
+}
+
+# ---------------------------------------------------------------
+# Step 5: Verify Python installation
+# ---------------------------------------------------------------
+Write-Host "`n[5/8] Verifying Python installation..." -ForegroundColor Yellow
 try {
     $verifyOutput = & uv run python -c "import likecodex_engine; print('OK')" 2>&1
     if ($verifyOutput -match "OK") {
@@ -116,34 +140,27 @@ try {
 }
 
 # ---------------------------------------------------------------
-# Step 5: Optional Rust compilation
+# Step 6: Optional Rust compilation
 # ---------------------------------------------------------------
 if ($rustAvailable) {
-    Write-Host "`n[5/7] Building Rust CLI (optional, for enhanced performance)..." -ForegroundColor Yellow
-    Write-Host "  [..] This step is optional. Skip? (Y/n, default Y): " -NoNewline
-    $skipRust = Read-Host
-    if ($skipRust -ne "n" -and $skipRust -ne "N") {
-        Write-Host "  [..] Skipping Rust build. Run later: cargo install --path crates/likecodex-cli --force" -ForegroundColor DarkYellow
+    Write-Host "`n[6/8] Building Rust CLI..." -ForegroundColor Yellow
+    Push-Location $InstallDir
+    $cargoArgs = @("install", "--path", "crates/likecodex-cli", "--force")
+    & cargo $cargoArgs 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  [OK] likecodex CLI built (enhanced mode)" -ForegroundColor Green
     } else {
-        Push-Location $InstallDir
-        $cargoArgs = @("install", "--path", "crates/likecodex-cli", "--force")
-        & cargo $cargoArgs 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "  [OK] likecodex CLI built (enhanced mode)" -ForegroundColor Green
-        } else {
-            Write-Host "  [WARN] CLI build failed — Python-only mode still works" -ForegroundColor Yellow
-        }
-        Pop-Location
+        Write-Host "  [WARN] CLI build failed — Python-only mode still works" -ForegroundColor Yellow
     }
+    Pop-Location
 } else {
-    Write-Host "`n[5/7] Skipping Rust build (not available)" -ForegroundColor DarkYellow
-    Write-Host "  [..] Using Python-only mode" -ForegroundColor Green
+    Write-Host "`n[6/8] Skipping Rust build (not available)" -ForegroundColor DarkYellow
 }
 
 # ---------------------------------------------------------------
-# Step 6: Create default config
+# Step 7: Create default config
 # ---------------------------------------------------------------
-Write-Host "`n[6/7] Creating default configuration..." -ForegroundColor Yellow
+Write-Host "`n[7/8] Creating default configuration..." -ForegroundColor Yellow
 $ConfigDir = Join-Path $env:USERPROFILE ".likecodex"
 New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
 $ConfigPath = Join-Path $ConfigDir "config.toml"
@@ -160,9 +177,24 @@ mode = "auto"
 planner_model = "deepseek-v4-pro"
 executor_model = "deepseek-v4-flash"
 compact_ratio = 0.8
-enable_planner = false
+enable_planner = true
+max_parallel_subagents = 8
+subagent_nesting_depth = 3
+enable_background_agent = true
+enable_dreaming = true
 
 [mcp]
+enabled = true
+
+[browser]
+enabled = false
+headless = true
+port = 9222
+
+[vision]
+enabled = false
+
+[collaboration]
 enabled = false
 
 [sandbox]
@@ -175,10 +207,11 @@ allow_fallback = true
 }
 
 # ---------------------------------------------------------------
-# Step 7: Verify and finish
+# Step 8: Verify and finish
 # ---------------------------------------------------------------
-Write-Host "`n[7/7] Installation complete!" -ForegroundColor Cyan
+Write-Host "`n[8/8] Installation complete!" -ForegroundColor Cyan
 Write-Host "  Run: likecodex --doctor (check setup)" -ForegroundColor White
 Write-Host "  Run: likecodex --setup (configure API key)" -ForegroundColor White
 Write-Host "  Run: likecodex --web   (start Web UI)" -ForegroundColor White
+Write-Host "  Run: likecodex --chat  (start chat CLI)" -ForegroundColor White
 Write-Host "`n==> Happy coding with LikeCodex!" -ForegroundColor Cyan

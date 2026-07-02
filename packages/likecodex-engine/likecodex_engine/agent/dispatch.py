@@ -56,12 +56,35 @@ _tool_breaker = _ToolCircuitBreaker()
 
 # Dedup cache: avoid re-executing identical read-only calls within 5s window
 _dedup_cache: dict[str, tuple[float, str]] = {}  # key -> (timestamp, result)
-_DEDUP_TTL = 5.0  # seconds (extended from 1.0 for better dedup)
+_DEDUP_TTL = 5.0  # seconds
+_DEDUP_MAX_ENTRIES = 1000  # prevent unbounded growth
 
 # Write tool dedup: track identical write calls to merge/skip
-# Key -> (timestamp, tool_name, arguments)
 _write_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
 _WRITE_DEDUP_TTL = 2.0  # seconds
+_WRITE_MAX_ENTRIES = 500  # prevent unbounded growth
+
+
+def _evict_stale_cache(ttl: float, max_entries: int) -> None:
+    """Periodically evict stale entries from dedup caches."""
+    global _dedup_cache, _write_cache
+    now = time.time()
+    # Evict stale dedup entries
+    stale_dedup = [k for k, (ts, _) in _dedup_cache.items() if now - ts > ttl]
+    for k in stale_dedup:
+        del _dedup_cache[k]
+    # Trim dedup cache if over max
+    if len(_dedup_cache) > _DEDUP_MAX_ENTRIES:
+        sorted_dedup = sorted(_dedup_cache.items(), key=lambda x: x[1][0], reverse=True)
+        _dedup_cache = dict(sorted_dedup[:_DEDUP_MAX_ENTRIES])
+    # Evict stale write cache entries
+    stale_write = [k for k, (ts, _, _) in _write_cache.items() if now - ts > ttl]
+    for k in stale_write:
+        del _write_cache[k]
+    # Trim write cache if over max
+    if len(_write_cache) > _WRITE_MAX_ENTRIES:
+        sorted_write = sorted(_write_cache.items(), key=lambda x: x[1][0], reverse=True)
+        _write_cache = dict(sorted_write[:_WRITE_MAX_ENTRIES])
 
 
 def is_read_only_tool(name: str) -> bool:
@@ -96,6 +119,12 @@ async def execute_tool_calls_parallel(
     tool_calls: list[Any],
 ) -> list[tuple[Any, str]]:
     """Execute read-only tools in parallel; others sequentially in order."""
+
+    # Periodic cache eviction (every 100 calls)
+    _evict_stale_cache.counter = getattr(_evict_stale_cache, "counter", 0) + 1
+    if _evict_stale_cache.counter >= 100:  # noqa: B018
+        _evict_stale_cache(_DEDUP_TTL, _DEDUP_MAX_ENTRIES)
+        _evict_stale_cache.counter = 0
 
     # Pre-merge duplicate calls within this batch
     tool_calls = _merge_duplicate_calls(tool_calls)
