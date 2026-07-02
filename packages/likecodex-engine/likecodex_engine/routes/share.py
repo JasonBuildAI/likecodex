@@ -169,33 +169,7 @@ def register_routes(app: web.Application, config: dict[str, Any]) -> None:
     app.router.add_get("/session/share/{token}", handle_get_share)
     app.router.add_post("/session/share/{token}/import", handle_import_share)
     app.router.add_delete("/session/share/{token}", handle_revoke_share)
-"""Session share HTTP API routes.
 
-Endpoints
---------
-POST   /session/share              — create a share link
-GET    /session/share/{token}      — resolve / peek a share link
-POST   /session/share/{token}/import — import a shared session
-DELETE /session/share/{token}      — revoke a share link
-"""
-
-from __future__ import annotations
-
-import json
-import logging
-from typing import Any
-
-from aiohttp import web
-
-from likecodex_engine.errors import ValidationError
-from likecodex_engine.persistence.share import SessionShareService
-from likecodex_engine.persistence.session import SessionStore
-from likecodex_engine.routes._shared import (
-    _session_store,
-    APP_CONFIG,
-)
-
-logger = logging.getLogger(__name__)
 
 # ── Lazy singleton ──────────────────────────────────────────────────────
 

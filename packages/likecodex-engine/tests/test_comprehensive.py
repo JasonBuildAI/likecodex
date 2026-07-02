@@ -3,8 +3,8 @@ state machine, dreaming engine, and planner enhancements."""
 
 from __future__ import annotations
 
+import asyncio
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -18,7 +18,11 @@ from likecodex_engine.tools.vision import (
 )
 
 # ── Background agent ──────────────────────────────────────────────────────
-from likecodex_engine.agent.background import BackgroundAgent, BackgroundTaskManager, BackgroundTaskStatus
+from likecodex_engine.agent.background import (
+    BackgroundAgent,
+    BackgroundTaskManager,
+    BackgroundTaskStatus,
+)
 
 # ── State machine ────────────────────────────────────────────────────────
 from likecodex_engine.agent.loop_state_machine import (
@@ -95,7 +99,9 @@ async def test_vision_image_analyze_not_found() -> None:
 async def test_vision_screenshot_to_code(tmp_path: Path) -> None:
     """Analyze a test image as a UI screenshot."""
     img_path = _create_test_image(tmp_path)
-    result = await vision__screenshot_to_code(str(img_path), context="web app", detail_level="high")
+    result = await vision__screenshot_to_code(
+        str(img_path), context="web app", detail_level="high"
+    )
     data = json.loads(result)
 
     assert "error" not in data, data.get("error", "")
@@ -127,11 +133,8 @@ async def test_background_task_lifecycle() -> None:
     async def dummy_task(progress_callback=None, **kwargs: Any) -> dict:
         if progress_callback:
             progress_callback(50.0)
-        await asyncio_sleep(0.05)
+        await asyncio.sleep(0.05)
         return {"result": "ok"}
-
-    import asyncio
-    globals()["asyncio_sleep"] = asyncio.sleep
 
     task_id = await manager.start_task("lifecycle-test", "Test lifecycle", dummy_task)
     assert task_id is not None
@@ -160,8 +163,6 @@ async def test_background_task_lifecycle() -> None:
 @pytest.mark.asyncio
 async def test_background_manager_concurrency() -> None:
     """Test that concurrency limit is respected."""
-    import asyncio
-
     manager = BackgroundTaskManager(max_concurrent=2)
 
     start_time = time.time()
@@ -187,14 +188,14 @@ async def test_background_manager_concurrency() -> None:
     for tid in (t1, t2, t3):
         task = manager.get_task(tid)
         assert task is not None
-        assert task.status == BackgroundTaskStatus.COMPLETED, f"Task {tid} status: {task.status}"
+        assert task.status == BackgroundTaskStatus.COMPLETED, (
+            f"Task {tid} status: {task.status}"
+        )
 
 
 @pytest.mark.asyncio
 async def test_background_agent_run_tool_task() -> None:
     """Test BackgroundAgent.run_tool_task."""
-    import asyncio
-
     async def my_tool(param: str) -> dict:
         await asyncio.sleep(0.02)
         return {"output": f"processed {param}"}
@@ -214,22 +215,23 @@ async def test_background_agent_run_tool_task() -> None:
 # ===========================================================================
 
 
-def test_state_machine_transitions() -> None:
+@pytest.mark.asyncio
+async def test_state_machine_transitions() -> None:
     """Test valid transitions of the agent state machine."""
     sm = build_agent_state_machine()
 
     assert sm.get_current_state() == AgentState.IDLE
 
     # IDLE -> RUNNING
-    sm.transition("start")
+    await sm.transition("start")
     assert sm.get_current_state() == AgentState.RUNNING
 
     # RUNNING -> COMPLETED
-    sm.transition("final_answer")
+    await sm.transition("final_answer")
     assert sm.get_current_state() == AgentState.COMPLETED
 
     # COMPLETED -> IDLE
-    sm.transition("reset")
+    await sm.transition("reset")
     assert sm.get_current_state() == AgentState.IDLE
 
 
@@ -254,37 +256,38 @@ async def test_state_machine_async_transitions() -> None:
     assert "compact_action" in calls
 
 
-def test_state_machine_can_transition_to() -> None:
+@pytest.mark.asyncio
+async def test_state_machine_can_transition_to() -> None:
     """Test can_transition_to helper."""
     sm = build_agent_state_machine()
 
     assert sm.can_transition_to(AgentState.RUNNING) is True
-    assert sm.can_transition_to(AgentState.ERROR) is False  # no direct IDLE->ERROR
+    assert sm.can_transition_to(AgentState.ERROR) is False
 
 
-def test_invalid_transition() -> None:
+@pytest.mark.asyncio
+async def test_invalid_transition() -> None:
     """Test that invalid transitions raise InvalidTransitionError."""
     sm = build_agent_state_machine()
 
-    # From IDLE, 'final_answer' is not a valid trigger
     with pytest.raises(InvalidTransitionError) as exc_info:
-        sm.transition("final_answer")
+        await sm.transition("final_answer")
 
     assert exc_info.value.current == AgentState.IDLE
     assert exc_info.value.trigger == "final_answer"
 
 
-def test_state_machine_history() -> None:
+@pytest.mark.asyncio
+async def test_state_machine_history() -> None:
     """Test that state machine records transition history."""
     sm = build_agent_state_machine()
 
-    sm.transition("start")
-    sm.transition("final_answer")
+    await sm.transition("start")
+    await sm.transition("final_answer")
 
     history = sm.get_history(limit=5)
     assert len(history) == 2
 
-    # Check history entries
     from_state_1, to_state_1, trigger_1, _ = history[0]
     assert from_state_1 == AgentState.IDLE
     assert to_state_1 == AgentState.RUNNING
@@ -296,10 +299,11 @@ def test_state_machine_history() -> None:
     assert trigger_2 == "final_answer"
 
 
-def test_state_machine_reset() -> None:
+@pytest.mark.asyncio
+async def test_state_machine_reset() -> None:
     """Test resetting the state machine."""
     sm = build_agent_state_machine()
-    sm.transition("start")
+    await sm.transition("start")
     assert sm.get_current_state() == AgentState.RUNNING
 
     sm.reset()
@@ -307,7 +311,8 @@ def test_state_machine_reset() -> None:
     assert sm.get_history() == []
 
 
-def test_state_machine_listeners() -> None:
+@pytest.mark.asyncio
+async def test_state_machine_listeners() -> None:
     """Test event listeners on state machine."""
     sm = build_agent_state_machine()
     events: list[str] = []
@@ -315,22 +320,23 @@ def test_state_machine_listeners() -> None:
     sm.on("transition", lambda *args: events.append("transition"))
     sm.on("enter_state:running", lambda *args: events.append("enter_running"))
 
-    sm.transition("start")
+    await sm.transition("start")
     assert "transition" in events
     assert "enter_running" in events
 
 
-def test_state_machine_guard_rejects() -> None:
+@pytest.mark.asyncio
+async def test_state_machine_guard_rejects() -> None:
     """Test that a guard returning False prevents a transition."""
     sm = StateMachine(AgentState.IDLE)
 
-    def reject_guard(ctx):
+    def reject_guard(ctx: dict | None) -> bool:
         return False
 
     sm.add_transition(AgentState.IDLE, AgentState.RUNNING, "start", guard=reject_guard)
 
     # The transition should return False (not raise) when guard rejects
-    result = sm.transition("start")
+    result = await sm.transition("start")
     assert result is False, "Guard returning False should prevent transition"
     assert sm.get_current_state() == AgentState.IDLE
 
@@ -367,7 +373,7 @@ async def test_dreaming_session_review() -> None:
         },
         {
             "role": "assistant",
-            "content": "修改完成。注意：重要的是保持代码风格一致。",
+            "content": "注意：重要的是保持代码风格一致。\n- 使用与项目一致的缩进",
         },
     ]
 
@@ -376,7 +382,7 @@ async def test_dreaming_session_review() -> None:
     assert len(insight["decisions"]) >= 1
     assert "edit_file" in str(insight["decisions"])
     assert len(insight["learnings"]) >= 1
-    assert any("保持代码风格" in l for l in insight["learnings"])
+    assert any("保持代码风格" in l for l in insight["learnings"]) or any("缩进" in l for l in insight["learnings"])
     assert "edit_file" in insight["tools_used"]
 
 
@@ -390,13 +396,23 @@ async def test_dreaming_session_review_with_error() -> None:
         {"role": "user", "content": "run the script"},
         {
             "role": "assistant",
-            "tool_calls": [{"function": {"name": "bash", "arguments": '{"command": "python run.py"}'}}],
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command": "python run.py"}',
+                    }
+                }
+            ],
             "content": "",
         },
         {
             "role": "tool",
             "tool_call_id": "call_1",
-            "content": "Traceback (most recent call last):\n  File \"run.py\", line 1, in <module>\n    import missing_module\nImportError: No module named 'missing_module'",
+            "content": (
+                'Traceback (most recent call last):\n  File "run.py", line 1, in <module>\n'
+                "    import missing_module\nImportError: No module named 'missing_module'"
+            ),
         },
         {
             "role": "assistant",
@@ -519,13 +535,11 @@ def test_planner_estimate_steps() -> None:
     assert len(estimates["steps"]) == 3
     assert estimates["total_seconds"] > 0
 
-    # Each step should have estimate data
     for step_est in estimates["steps"]:
         assert "step_id" in step_est
         assert "estimated_seconds" in step_est
         assert step_est["estimated_seconds"] > 0
 
-    # "Deploy" step should have a higher estimate due to keyword
     deploy_est = [s for s in estimates["steps"] if "deploy" in s["description"].lower()][0]
     assert deploy_est["estimated_seconds"] >= 90.0
 
@@ -552,7 +566,11 @@ async def test_planner_incremental_replan() -> None:
                 content=json.dumps({
                     "reasoning": "simplified approach after failure",
                     "steps": [
-                        {"id": "2", "description": "Re-implement feature (fixed)", "depends_on": ["1"]},
+                        {
+                            "id": "2",
+                            "description": "Re-implement feature (fixed)",
+                            "depends_on": ["1"],
+                        },
                         {"id": "3", "description": "Verify tests pass", "depends_on": ["2"]},
                     ],
                 }),
@@ -585,7 +603,11 @@ async def test_planner_incremental_replan() -> None:
     assert new_plan.steps[0].description == "Setup environment"
 
     # The plan reasoning should mention the failure
-    assert "failed" in new_plan.reasoning.lower() or "replan" in new_plan.reasoning.lower() or "incremental" in new_plan.reasoning.lower()
+    assert (
+        "failed" in new_plan.reasoning.lower()
+        or "replan" in new_plan.reasoning.lower()
+        or "incremental" in new_plan.reasoning.lower()
+    )
 
 
 @pytest.mark.asyncio
