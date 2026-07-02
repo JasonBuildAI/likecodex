@@ -168,6 +168,20 @@ class Coordinator:
         plan = await self._plan_with_tools(prompt)
         yield LLMResponse(content=plan, model="planner", event_type="plan")
 
+        # Emit plan_approval_request for frontend confirmation dialog
+        import uuid
+        approval_id = uuid.uuid4().hex[:12]
+        yield LLMResponse(
+            content=plan,
+            model="planner",
+            event_type="plan_approval_request",
+            metadata={
+                "approval_id": approval_id,
+                "plan": plan[:1000],
+                "steps": [s.strip() for s in plan.split("\n") if s.strip() and len(s.strip()) > 10][:10],
+            },
+        )
+
         # Inject Planner's research findings into Executor context
         injected = 0
         for msg in self._planner_context.messages:
