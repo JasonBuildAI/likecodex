@@ -60,6 +60,15 @@ The entire system is deeply optimized for **DeepSeek prefix caching** using a th
 - Dual-model coordination: Pro model for planning & research, Flash model for execution
 - Thinking mode, reasoning_effort control, and cache metrics tracking
 
+### 🤖 Multi-Model Support
+
+- **Anthropic Claude**: Full integration with Claude 3 Opus/Sonnet/Haiku support
+- **Google Gemini**: Native Gemini 1.5 Pro/Flash provider with thinking mode
+- **Ollama Local Models**: Support for locally-hosted models via Ollama API
+- **Unified LLM interface**: Abstract provider with factory pattern for dynamic switching
+- **Model fallback chain**: Automatic fallback to backup providers on failure
+- **Per-provider rate limiting & retry logic** with configurable backoff
+
 ### 🛡️ Multi-Layer Security
 
 - **Three approval modes**: Ask (read-only) / Agent (auto-execute) / Manual (step-by-step)
@@ -70,16 +79,26 @@ The entire system is deeply optimized for **DeepSeek prefix caching** using a th
 
 ### 🔧 Rich Tool Ecosystem
 
-40+ built-in professional tools covering filesystem, shell execution, code search, Git operations, web scraping, browser automation, vision recognition, database queries, code review, performance profiling, and more. Extensible via the MCP protocol.
+50+ built-in professional tools covering filesystem, shell execution, code search, Git operations, web scraping, browser automation, vision recognition, database queries, code review, performance profiling, GitHub integration, network diagnostics, log analysis, API testing, and more. Extensible via the MCP protocol.
+
+**New in v0.2.0**:
+- **GitHub Integration**: `github_create_pr`, `github_review_pr`, `github_add_pr_comment`, `github_create_issue`
+- **Database Tools**: `db_query`, `db_schema`, `db_explain`, `db_list_tables` (MySQL/PostgreSQL/SQLite)
+- **Network Diagnostics**: `net_ping`, `net_dns_lookup`, `net_traceroute`, `net_port_scan`
+- **Performance Profiling**: `profile_cpu`, `profile_memory`, `profile_io`
+- **Log Analysis**: `log_analyze`, `log_tail`, `log_grep`, `log_error_summary`
+- **API Testing**: `api_http_request`, `api_websocket_test` with response validation
 
 ### 🧩 Intelligent Agent Capabilities
 
 - **Agent Loop**: LLM reasoning → Tool calls → Result feedback → Continue reasoning, up to 50 automated cycles
+- **Agent Definition System**: Declarative agent specs via `AGENTS.md`, per-agent rules in `.likecodex/rules/`, intent-based routing
 - **Parallel dispatch**: Read-only tools execute concurrently in batches for maximum efficiency
 - **Smart planning**: Automatically determines whether planning is needed, generates multi-step structured plans
 - **Sub-agent orchestration**: Delegate complex sub-tasks to parallel child agents
 - **Skills system**: Markdown-based playbook skills, reusable and shareable
 - **Evidence ledger**: Automatically tracks todo and step completion status
+- **Session sharing & branching**: Export/import sessions as JSON; fork from any checkpoint
 
 ### 💾 Three-Tier Memory System
 
@@ -91,10 +110,11 @@ The entire system is deeply optimized for **DeepSeek prefix caching** using a th
 ### 🌐 Multi-Form Interaction
 
 - **Terminal CLI/TUI**: Full-screen terminal interface powered by Ratatui
-- **Web UI**: Modern Cursor-inspired interface built with Next.js 15
-- **Desktop app**: Native Tauri v2 desktop shell
-- **ACP protocol**: Standard Agent Client Protocol v1 for VS Code, Zed, and other editor integrations
+- **Web UI**: Modern Cursor-inspired interface built with Next.js 15 — drag-and-drop panels, notification center, comprehensive keyboard shortcuts, responsive design, WCAG 2.1 AA accessibility
+- **Desktop app**: Native Tauri v2 desktop shell with system tray, multi-window support, auto-update, native notifications, and custom titlebar
+- **ACP protocol**: Standard Agent Client Protocol v1.1 for VS Code, Zed, and other editor integrations
 - **IM integration**: Approval bridge via imbot for instant messaging workflows
+- **Filesystem monitoring** (likecodex-ide-fs): Real-time file change detection, git-aware operations, large file streaming, auto encoding detection
 
 ---
 
@@ -336,7 +356,7 @@ likecodex/
 │       ├── agent/                   # AgentLoop, coordinator, guards
 │       ├── tools/                   # 40+ built-in tool registry
 │       ├── context/                 # Cache-first context + compaction
-│       ├── llm/                     # LLM providers (DeepSeek/OpenAI/Claude/etc)
+│       ├── llm/                     # LLM providers (DeepSeek/Claude/Gemini/Ollama/etc)
 │       ├── permissions/             # Approval modes + policy engine
 │       ├── memory/                  # Three-tier vector memory
 │       ├── mcp/                     # MCP client + manager
