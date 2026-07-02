@@ -131,6 +131,9 @@ class AgentLoop:
         self._watchdog_event: asyncio.Event | None = None
         self._last_activity_time: float = 0.0
         self.circuit_breaker = ToolCircuitBreaker()
+        self._degradation_level: int = 0  # 0=normal, 1=no-write, 2=ask-mode, 3=text-only
+        self._model_swap_attempted: bool = False
+        self._sandbox_fallbacks: int = 0
         if hasattr(context, "set_working_dir"):
             context.set_working_dir(tools.working_dir)
         if hasattr(context, "set_compact_llm"):
@@ -302,6 +305,13 @@ class AgentLoop:
 
         self._plan_exec_window = self.plan_state.execution_window_active
         tool_schemas = [] if self.no_tools else flatten_tool_schemas(self.tools.to_openai_schema())
+        # Apply degradation: strip write tools at level 1+, reduce to read-only at level 2+
+        if self._degradation_level >= 1 and tool_schemas:
+            degraded = [s for s in tool_schemas if self.tools.is_read_only(s.get("function", {}).get("name", ""))]
+            if self._degradation_level >= 2:
+                tool_schemas = degraded  # read-only only
+            elif degraded:
+                tool_schemas = degraded  # no write tools
         stream_recoveries = 0
         last_prefix_shape: PrefixShape | None = None
         have_last_prefix_shape = False
@@ -364,11 +374,32 @@ class AgentLoop:
                     response = turn_result.response
                     break
 
+                # Escalate degradation when stream recovery exhausted
+                if self._degradation_level < 2:
+                    self._degradation_level += 1
+                    yield self._emit(
+                        LLMResponse(
+                            content=f"Degradation escalated to level {self._degradation_level} after stream recovery exhaustion.",
+                            model="system",
+                            event_type="degraded",
+                            metadata={"degradation_level": self._degradation_level},
+                        )
+                    )
                 stream_recoveries = 0
                 response = turn_result.response
                 break
 
             if response is None:
+                # API timeout: try asking user to rephrase if agent
+                if not self.is_subagent:
+                    yield self._emit(
+                        LLMResponse(
+                            content="API returned no response. Trying to continue with reduced context.",
+                            model="system",
+                            event_type="degraded",
+                            metadata={"degradation": "api_timeout"},
+                        )
+                    )
                 break
 
             response = merge_tool_calls(response)
@@ -992,11 +1023,15 @@ class AgentLoop:
                         if no_fallback:
                             return json.dumps({"error": f"Sandbox execution failed: {err}"})
                         tagged = await self.tools.execute(tool_name, arguments)
+                        self._sandbox_fallbacks += 1
+                        if self._sandbox_fallbacks >= 3 and self._degradation_level < 2:
+                            self._degradation_level += 1
                         yield self._emit(
                             LLMResponse(
                                 content=f"Sandbox unavailable, falling back to local execution: {err}",
                                 model="system",
                                 event_type="degraded",
+                                metadata={"sandbox_fallbacks": self._sandbox_fallbacks},
                             )
                         )
                         return self._tag_result(tagged, "fallback-local")
