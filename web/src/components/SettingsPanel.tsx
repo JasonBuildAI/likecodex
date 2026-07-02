@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
 import { setApprovalMode as setApprovalModeApi } from '@/lib/api';
 
@@ -178,6 +178,130 @@ export function SettingsPanel() {
           <span className={`flex items-center gap-1.5 text-xs font-medium ${apiKey ? 'text-green-600' : 'text-amber-600'}`}>
             <span className={`inline-block h-2 w-2 rounded-full ${apiKey ? 'bg-green-500' : 'bg-amber-500'}`} />
             {apiKey ? 'Configured' : 'Not set'}
+          </span>
+        </div>
+
+        {/* Cache Hit Rate */}
+        <CacheHitRatePanel sessionId={currentSessionId} />
+      </div>
+    </div>
+  );
+}
+
+// ── Cache Hit Rate Sub-Component ────────────────────────────────────────
+
+interface CacheStats {
+  hit_rate: number;
+  recent_hit_rate: number;
+  request_count: number;
+  total_hit_tokens: number;
+  total_miss_tokens: number;
+  cost_savings?: number;
+}
+
+function CacheHitRatePanel({ sessionId }: { sessionId: string | null }) {
+  const [stats, setStats] = useState<CacheStats | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchStats = async () => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (sessionId) params.set('session_id', sessionId);
+        const resp = await fetch(`/api/deepseek/cache-stats?${params.toString()}`);
+        if (!cancelled && resp.ok) {
+          const data = await resp.json();
+          // Calculate estimated cost savings from cache hits
+          const flashInputPrice = 0.10; // $ per 1M tokens
+          const flashCachePrice = 0.01; // $ per 1M cached tokens
+          const cacheSavings = (
+            data.total_hit_tokens * (flashInputPrice - flashCachePrice)
+          ) / 1_000_000;
+          setStats({ ...data, cost_savings: cacheSavings });
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    fetchStats();
+    const interval = setInterval(fetchStats, 10000); // Refresh every 10s
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [sessionId]);
+
+  if (!stats && loading) {
+    return (
+      <div>
+        <label className="block text-xs font-medium text-muted mb-1">Cache Hit Rate</label>
+        <div className="rounded-lg bg-accent/5 px-3 py-2 text-xs text-muted">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!stats) return null;
+
+  const hitRatePct = (stats.hit_rate * 100).toFixed(1);
+  const recentPct = (stats.recent_hit_rate * 100).toFixed(1);
+  const tokensSaved = (stats.total_hit_tokens / 1000).toFixed(0);
+  const totalTokens = ((stats.total_hit_tokens + stats.total_miss_tokens) / 1000).toFixed(0);
+
+  return (
+    <div>
+      <label className="block text-xs font-medium text-muted mb-1">
+        Cache Hit Rate
+        {loading && <span className="ml-1 text-[10px] text-muted/50">⟳</span>}
+      </label>
+      <div className="rounded-lg bg-accent/5 px-3 py-2 space-y-1.5">
+        {/* Hit rate bar */}
+        <div className="flex items-center gap-2">
+          <div className="flex-1 h-2 bg-accent/10 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${
+                stats.hit_rate > 0.6 ? 'bg-green-500' : stats.hit_rate > 0.3 ? 'bg-amber-500' : 'bg-red-500'
+              }`}
+              style={{ width: `${hitRatePct}%` }}
+            />
+          </div>
+          <span className="text-xs font-mono font-medium">{hitRatePct}%</span>
+        </div>
+
+        {/* Stats row */}
+        <div className="grid grid-cols-3 gap-2 text-[10px]">
+          <div>
+            <span className="text-muted block">Requests</span>
+            <span className="font-mono font-medium">{stats.request_count}</span>
+          </div>
+          <div>
+            <span className="text-muted block">Tokens Saved</span>
+            <span className="font-mono font-medium">{tokensSaved}K</span>
+          </div>
+          <div>
+            <span className="text-muted block">Total /K</span>
+            <span className="font-mono font-medium">{totalTokens}K</span>
+          </div>
+        </div>
+
+        {/* Cost savings */}
+        <div className="flex items-center justify-between pt-1 border-t border-border/50">
+          <span className="text-[10px] text-muted">Est. Savings</span>
+          <span className="text-xs font-mono font-medium text-green-600">
+            ${stats.cost_savings?.toFixed(4) || '0.0000'}
+          </span>
+        </div>
+
+        {/* Recent hit rate */}
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-muted">Recent (last 100)</span>
+          <span className={`text-xs font-mono font-medium ${
+            parseFloat(recentPct) > 60 ? 'text-green-500' : 'text-amber-500'
+          }`}>
+            {recentPct}%
           </span>
         </div>
       </div>
