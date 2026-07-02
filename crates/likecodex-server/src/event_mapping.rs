@@ -105,7 +105,9 @@ pub fn map_engine_output(task_id: &str, output: &Value) -> Event {
                 task_id: task_id.to_string(),
                 result: ToolResult {
                     call_id,
-                    success: !content.contains("\"error\""),
+                    success: serde_json::from_str::<serde_json::Value>(&content)
+                        .map(|v| v.get("error").is_none())
+                        .unwrap_or(true),
                     output: content,
                     metadata: Default::default(),
                 },
