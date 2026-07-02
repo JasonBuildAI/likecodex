@@ -137,6 +137,16 @@ class ToolRegistry:
         self.register("lsp_code_action_apply", lsp_sem.lsp_code_action_apply_schema(), lsp_sem.lsp_code_action_apply, read_only=True)
         self.register("lsp_suggest_fixes", lsp_sem.lsp_suggest_fixes_schema(), lsp_sem.lsp_suggest_fixes, read_only=True)
 
+        from likecodex_engine.tools.test_runner import TestRunner as _TestRunner
+
+        test_runner = _TestRunner(self.working_dir)
+        self.register("discover_tests", test_runner.discover_tests_schema(), test_runner.discover_tests, read_only=True)
+        self.register("run_tests", test_runner.run_tests_schema(), test_runner.run_tests, read_only=False)
+        self.register("analyze_failures", test_runner.analyze_failures_schema(), test_runner.analyze_failures, read_only=True)
+        self.register("collect_coverage", test_runner.collect_coverage_schema(), test_runner.collect_coverage, read_only=True)
+        self.register("coverage_summary", test_runner.coverage_summary_schema(), test_runner.coverage_summary, read_only=True)
+        self.register("coverage_lcov", test_runner.coverage_lcov_schema(), test_runner.coverage_lcov, read_only=False)
+
         checker = LspTools(self.working_dir)
         self._checker = checker
 

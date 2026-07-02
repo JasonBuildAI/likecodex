@@ -1,10 +1,18 @@
-"""Test discovery and execution tools for the agent."""
+"""Test discovery and execution tools for the agent.
+
+Phase 7.16: Test Coverage Visualization
+- Coverage collection (coverage.py for Python, basic for others)
+- Coverage summary per file
+- Line-by-line coverage data
+- Export to LCOV format
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -115,6 +123,253 @@ class TestRunner:
             })
         except Exception as e:
             return json.dumps({"error": f"Test run failed: {e}"})
+
+    # ── Coverage ────────────────────────────────────────────────────────
+
+    def collect_coverage_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Run test coverage analysis and return coverage data per file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_dir": {
+                        "type": "string",
+                        "description": "Source directory to measure coverage for (relative to working dir)",
+                        "default": ".",
+                    },
+                    "test_filter": {
+                        "type": "string",
+                        "description": "Optional test filter",
+                        "default": "",
+                    },
+                },
+            },
+        }
+
+    async def collect_coverage(self, source_dir: str = ".", test_filter: str = "") -> str:
+        """Collect test coverage using coverage.py (for Python projects)."""
+        src_path = (self.working_dir / source_dir).resolve()
+
+        # Try pytest-cov or coverage.py
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable or "python",
+                "-m", "coverage", "run",
+                "--source", str(src_path),
+                "-m", "pytest",
+                *(["-k", test_filter] if test_filter else []),
+                cwd=self.working_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+            exit_code = proc.returncode
+        except (TimeoutError, FileNotFoundError):
+            # Fallback: try just running pytest directly
+            return json.dumps({
+                "error": "coverage.py not available",
+                "hint": "Install coverage.py: pip install coverage",
+            })
+
+        if not (self.working_dir / ".coverage").exists():
+            return json.dumps({
+                "error": "Coverage data file not created",
+                "exit_code": exit_code,
+                "stdout": stdout.decode("utf-8", errors="replace")[:500],
+                "stderr": stderr.decode("utf-8", errors="replace")[:500],
+            })
+
+        # Get coverage report as JSON
+        try:
+            report_proc = await asyncio.create_subprocess_exec(
+                sys.executable or "python",
+                "-m", "coverage", "json",
+                cwd=self.working_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(report_proc.communicate(), timeout=30.0)
+
+            report_path = self.working_dir / "coverage.json"
+            if report_path.exists():
+                data = json.loads(report_path.read_text(encoding="utf-8"))
+                report_path.unlink(missing_ok=True)
+                return json.dumps(self._format_coverage(data, src_path))
+        except Exception as e:
+            return json.dumps({"error": f"Failed to parse coverage: {e}"})
+
+        return json.dumps({"error": "Unknown coverage error"})
+
+    def _format_coverage(self, data: dict, src_path: Path) -> dict:
+        """Convert coverage.py JSON output to a friendly format."""
+        meta = data.get("meta", {})
+        files_data = data.get("files", {})
+
+        formatted_files = []
+        total_lines = 0
+        covered_lines = 0
+
+        for file_path, file_info in files_data.items():
+            abs_path = Path(file_path)
+            try:
+                rel_path = str(abs_path.relative_to(self.working_dir))
+            except ValueError:
+                rel_path = file_path
+
+            executed = file_info.get("executed_lines", [])
+            missing = file_info.get("missing_lines", [])
+            summary = file_info.get("summary", {})
+
+            file_total = summary.get("num_lines", 0)
+            file_covered = summary.get("covered_lines", 0)
+            file_percent = summary.get("percent_covered", 0.0) if file_total > 0 else 0.0
+
+            total_lines += file_total
+            covered_lines += file_covered
+
+            # Line-by-line coverage
+            all_lines_set = set(executed) | set(missing)
+            line_details = []
+            for ln in sorted(all_lines_set):
+                line_details.append({
+                    "line": ln,
+                    "covered": ln in executed,
+                })
+
+            formatted_files.append({
+                "file": rel_path,
+                "total_lines": file_total,
+                "covered_lines": file_covered,
+                "missed_lines": len(missing),
+                "coverage_percent": round(file_percent, 1),
+                "lines": line_details,
+            })
+
+        formatted_files.sort(key=lambda f: f["file"])
+        overall_percent = round((covered_lines / total_lines * 100) if total_lines > 0 else 0.0, 1)
+
+        return {
+            "source_dir": str(src_path.relative_to(self.working_dir)),
+            "overall": {
+                "total_lines": total_lines,
+                "covered_lines": covered_lines,
+                "missed_lines": total_lines - covered_lines,
+                "coverage_percent": overall_percent,
+            },
+            "files": formatted_files,
+            "file_count": len(formatted_files),
+        }
+
+    def coverage_lcov_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Export test coverage data to LCOV format.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_dir": {
+                        "type": "string",
+                        "description": "Source directory to measure coverage for",
+                        "default": ".",
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Path to write LCOV file (relative to working dir)",
+                        "default": "coverage.lcov",
+                    },
+                },
+            },
+        }
+
+    async def coverage_lcov(self, source_dir: str = ".", output_path: str = "coverage.lcov") -> str:
+        """Export coverage data to LCOV format."""
+        # First collect coverage
+        coverage_result = await self.collect_coverage(source_dir=source_dir)
+        try:
+            data = json.loads(coverage_result)
+        except json.JSONDecodeError:
+            return json.dumps({"error": "Failed to collect coverage data first"})
+
+        if "error" in data:
+            return coverage_result
+
+        # Generate LCOV
+        lcov_lines = []
+        out_path = self.working_dir / output_path
+
+        for file_info in data.get("files", []):
+            rel_path = file_info["file"]
+            lcov_lines.append(f"SF:{rel_path}")
+            for line_info in file_info.get("lines", []):
+                ln = line_info["line"]
+                count = 1 if line_info["covered"] else 0
+                lcov_lines.append(f"DA:{ln},{count}")
+            lcov_lines.append(f"end_of_record")
+
+        lcov_content = "\n".join(lcov_lines)
+        out_path.write_text(lcov_content, encoding="utf-8")
+
+        # Clean up coverage artifacts
+        cov_db = self.working_dir / ".coverage"
+        if cov_db.exists():
+            cov_db.unlink(missing_ok=True)
+
+        return json.dumps({
+            "output_path": str(out_path.relative_to(self.working_dir)),
+            "file_count": data.get("file_count", 0),
+            "overall": data.get("overall", {}),
+            "lcov_size": len(lcov_content),
+        })
+
+    def coverage_summary_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Get a quick text summary of test coverage.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_dir": {
+                        "type": "string",
+                        "description": "Source directory to measure coverage for",
+                        "default": ".",
+                    },
+                },
+            },
+        }
+
+    async def coverage_summary(self, source_dir: str = ".") -> str:
+        """Get a quick text summary of coverage for display."""
+        result = await self.collect_coverage(source_dir=source_dir)
+        try:
+            data = json.loads(result)
+        except json.JSONDecodeError:
+            return json.dumps({"error": "Coverage collection failed"})
+
+        if "error" in data:
+            return result
+
+        overall = data.get("overall", {})
+        files = data.get("files", [])
+
+        text_lines = [
+            f"Coverage: {overall.get('coverage_percent', 0)}%",
+            f"Files: {data.get('file_count', 0)}",
+            f"Total lines: {overall.get('total_lines', 0)}",
+            f"Covered: {overall.get('covered_lines', 0)}",
+            f"Missed: {overall.get('missed_lines', 0)}",
+            "",
+            "Per file:",
+        ]
+
+        for f in files[:20]:
+            bar = "█" * int(f["coverage_percent"] / 5) + "░" * (20 - int(f["coverage_percent"] / 5))
+            text_lines.append(f"  {f['coverage_percent']:5.1f}% {bar} {f['file']}")
+
+        if len(files) > 20:
+            text_lines.append(f"  ... and {len(files) - 20} more files")
+
+        return json.dumps({
+            "summary": "\n".join(text_lines),
+            "data": data,
+        })
 
     def analyze_failures_schema(self) -> dict[str, Any]:
         return {
