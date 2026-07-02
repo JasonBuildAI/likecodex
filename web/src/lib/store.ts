@@ -119,7 +119,7 @@ export interface Conversation {
   messageCount: number;
 }
 
-export type ToolCallStatus = 'running' | 'waiting_approval' | 'completed' | 'error';
+export type ToolCallStatus = 'pending' | 'running' | 'waiting_approval' | 'completed' | 'error' | 'cancelled';
 
 export interface ToolCallStreamItem {
   id: string;
