@@ -265,3 +265,70 @@ class LspManager:
             "errors": sum(1 for d in formatted if d["severity"] == "error"),
             "warnings": sum(1 for d in formatted if d["severity"] == "warning"),
         })
+
+    # ── Code Actions ─────────────────────────────────────────────────
+
+    def code_action_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Request code actions (quick-fixes, refactors, etc.) from LSP for a file at a given line.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Relative file path"},
+                    "line": {"type": "integer", "description": "1-based line number"},
+                },
+                "required": ["file_path", "line"],
+            },
+        }
+
+    async def code_action(self, file_path: str, line: int) -> str:
+        """Get available code actions (quick fixes, refactors) for a position in a file."""
+        path = (self.root / file_path).resolve()
+        if not path.exists():
+            return json.dumps({"error": f"File not found: {file_path}"})
+
+        client = await self._get_client(self.detect_language(path))
+        if not client:
+            return json.dumps({"error": "No LSP server available for this language"})
+
+        uri = await self._ensure_open(client, path)
+        zero_line = max(0, line - 1)
+
+        try:
+            result = await client.request(
+                "textDocument/codeAction",
+                {
+                    "textDocument": {"uri": uri},
+                    "range": {
+                        "start": {"line": zero_line, "character": 0},
+                        "end": {"line": zero_line, "character": 0},
+                    },
+                    "context": {
+                        "diagnostics": [],
+                        "only": None,
+                    },
+                },
+            )
+        except Exception as e:
+            return json.dumps({"error": f"codeAction request failed: {e}"})
+
+        actions = []
+        for action in (result or []):
+            if isinstance(action, dict):
+                title = action.get("title", "")
+                kind = action.get("kind", "")
+                edit = action.get("edit")
+                command = action.get("command")
+                actions.append({
+                    "title": title,
+                    "kind": kind,
+                    "has_edit": edit is not None,
+                    "command": command.get("command") if command else None,
+                })
+
+        return json.dumps({
+            "file": file_path,
+            "line": line,
+            "actions": actions,
+            "count": len(actions),
+        })
