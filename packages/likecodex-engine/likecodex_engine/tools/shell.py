@@ -149,13 +149,29 @@ class BackgroundJob:
         self.stderr = bytearray()
         self.exit_code: int | None = None
         self.done = False
+        self.start_time: float = 0.0
+        self.end_time: float = 0.0
+        self.pid: int = 0
+        self._notify_callback: Any = None
+
+    def on_complete(self, callback: Any) -> None:
+        """Register a notification callback invoked when the job finishes."""
+        self._notify_callback = callback
 
     def status(self) -> dict[str, Any]:
+        elapsed = 0.0
+        if self.start_time > 0:
+            if self.done:
+                elapsed = self.end_time - self.start_time
+            else:
+                elapsed = asyncio.get_running_loop().time() - self.start_time
         return {
             "job_id": self.job_id,
             "command": self.command,
             "running": not self.done,
             "exit_code": self.exit_code,
+            "pid": self.pid,
+            "elapsed_seconds": round(elapsed, 1),
             "stdout": bytes(self.stdout).decode("utf-8", errors="replace"),
             "stderr": bytes(self.stderr).decode("utf-8", errors="replace"),
         }
@@ -236,17 +252,18 @@ class ShellTools:
         return {
             "description": (
                 "Manage background shell jobs. action=start launches a command, "
-                "list shows all jobs, status/output reads one, kill terminates it."
+                "list shows all jobs, status/output reads one, kill/stop terminates it."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["start", "list", "status", "kill"],
+                        "enum": ["start", "list", "status", "kill", "stop", "output"],
                     },
                     "command": {"type": "string", "description": "Command (for action=start)"},
-                    "job_id": {"type": "string", "description": "Job id (status/kill)"},
+                    "job_id": {"type": "string", "description": "Job id (status/kill/stop/output)"},
+                    "notify": {"type": "boolean", "description": "Send notification when job completes (for action=start)"},
                 },
                 "required": ["action"],
             },
@@ -264,13 +281,18 @@ class ShellTools:
         action: str,
         command: str | None = None,
         job_id: str | None = None,
+        notify: bool = False,
     ) -> str:
         if action == "start":
             if not command:
                 return json.dumps({"error": "command required for action=start"})
-            return await self._start_job(command)
+            return await self._start_job(command, notify=notify)
         if action == "list":
-            return json.dumps({"jobs": [job.status() for job in self._jobs.values()]})
+            return json.dumps({
+                "jobs": [job.status() for job in self._jobs.values()],
+                "total": len(self._jobs),
+                "running": sum(1 for job in self._jobs.values() if not job.done),
+            })
         if action in ("status", "output"):
             result = self._get_job_or_error(job_id)
             if isinstance(result, str):
@@ -283,9 +305,16 @@ class ShellTools:
             if result.proc and not result.done:
                 result.proc.kill()
             return json.dumps({"job_id": result.job_id, "killed": True})
+        if action == "stop":
+            result = self._get_job_or_error(job_id)
+            if isinstance(result, str):
+                return result
+            if result.proc and not result.done:
+                result.proc.terminate()
+            return json.dumps({"job_id": result.job_id, "stopped": True})
         return json.dumps({"error": f"unknown action: {action}"})
 
-    async def _start_job(self, command: str) -> str:
+    async def _start_job(self, command: str, notify: bool = False) -> str:
         executable, args = self._shell_command(command)
         job_id = uuid.uuid4().hex[:8]
         job = BackgroundJob(job_id, command)
@@ -300,9 +329,14 @@ class ShellTools:
         except Exception as exc:
             return json.dumps({"error": str(exc), "command": command})
         job.proc = proc
+        job.start_time = asyncio.get_running_loop().time()
+        if proc.pid:
+            job.pid = proc.pid
+        if notify:
+            job.on_complete(lambda jid=job_id: self._notify_completed(jid))
         self._jobs[job_id] = job
         asyncio.create_task(self._drain(job))
-        return json.dumps({"job_id": job_id, "command": command, "running": True})
+        return json.dumps({"job_id": job_id, "command": command, "running": True, "pid": job.pid})
 
     async def _drain(self, job: BackgroundJob) -> None:
         assert job.proc is not None
@@ -310,9 +344,29 @@ class ShellTools:
         job.stdout.extend(stdout)
         job.stderr.extend(stderr)
         job.exit_code = job.proc.returncode
+        job.end_time = asyncio.get_running_loop().time()
         job.done = True
+        # Invoke completion notification callback if registered
+        if job._notify_callback:
+            try:
+                job._notify_callback()
+            except Exception:
+                pass
         # Clean up completed job after 5 minutes to prevent memory leak
         asyncio.get_running_loop().call_later(300, self._jobs.pop, job.job_id, None)
+
+    def _notify_completed(self, job_id: str) -> None:
+        """Notification callback when a background job completes.
+
+        Logs completion and stores notification in job metadata.
+        """
+        job = self._jobs.get(job_id)
+        if job:
+            logger = logging.getLogger(__name__)
+            logger.info(
+                "Job %s completed: %s (exit_code=%s, elapsed=%.1fs)",
+                job_id, job.command, job.exit_code, job.end_time - job.start_time,
+            )
 
     def bash_output_schema(self) -> dict[str, Any]:
         return {
