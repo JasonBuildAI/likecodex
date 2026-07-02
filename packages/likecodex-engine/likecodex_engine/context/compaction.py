@@ -122,17 +122,45 @@ class CacheFirstCompactor:
         return self._consecutive_noop_compacts >= MAX_CONSECUTIVE_NOOP_COMPACTS
 
     def summarize_log(self, log: list[Message]) -> str:
-        """Rule-based fallback summary."""
-        user_msgs = [m.content[:120] for m in log if m.role == Role.USER][-3:]
-        tool_count = sum(1 for m in log if m.role == Role.TOOL)
-        assistant_count = sum(1 for m in log if m.role == Role.ASSISTANT)
-        parts = [
-            f"{SUMMARY_TAG_OPEN}",
-            "Previous conversation summarized due to context limits.",
-            f"Turns: {assistant_count} assistant, {tool_count} tool results.",
+        """Enhanced rule-based summary extracting decisions, errors, and progress."""
+        user_msgs = [m for m in log if m.role == Role.USER]
+        tool_msgs = [m for m in log if m.role == Role.TOOL]
+        assistant_msgs = [m for m in log if m.role == Role.ASSISTANT]
+
+        # Extract key decisions: user messages with decision indicators
+        decision_kw = ["改为", "使用", "采用", "选择", "use", "choose", "select", "decide", "switch"]
+        decisions = [
+            m.content[:200] for m in user_msgs
+            if any(kw in m.content.lower() for kw in decision_kw)
         ]
+
+        # Extract errors from tool results
+        errors = [
+            m.content[:150] for m in tool_msgs
+            if '"error"' in m.content.lower() or 'exit_code' in m.content.lower()
+        ]
+
+        # Extract final assistant messages (last 2)
+        final_assistant = [m.content[:300] for m in assistant_msgs if m.content][-2:]
+
+        parts = [f"{SUMMARY_TAG_OPEN}"]
+        parts.append("Previous conversation summarized due to context limits.")
+        parts.append(f"Turns: {len(assistant_msgs)} assistant, {len(tool_msgs)} tool results.")
+
+        if decisions:
+            parts.append("## Key Decisions\n- " + "\n- ".join(decisions[-3:]))
+
+        if errors:
+            parts.append("## Errors\n- " + "\n- ".join(errors[-3:]))
+
+        if final_assistant:
+            parts.append("## Last Output\n" + "\n".join(final_assistant))
+
+        # Recent user intent (last user message)
         if user_msgs:
-            parts.append("Recent user goals: " + " | ".join(user_msgs))
+            last_user = user_msgs[-1].content[:150]
+            parts.append(f"## Last User Request\n{last_user}")
+
         parts.append(SUMMARY_TAG_CLOSE)
         return "\n".join(parts)
 

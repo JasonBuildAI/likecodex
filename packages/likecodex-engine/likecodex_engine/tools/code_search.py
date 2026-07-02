@@ -255,3 +255,93 @@ class CodeSearchTools:
                 "files": graph.file_count,
             }
         )
+
+    # ── Semantic search: search code by natural language intent ────────
+
+    def semantic_search_schema(self) -> dict[str, Any]:
+        return {
+            "description": (
+                "Search code by meaning/intent using symbol-based matching. "
+                "Example queries: 'find the payment validation logic', "
+                "'where is the user authentication handler', 'database connection setup'"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language description of what to find",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "Maximum number of results",
+                    },
+                },
+                "required": ["query"],
+            },
+        }
+
+    async def semantic_search(self, query: str, max_results: int = 10) -> str:
+        """Search code by semantic intent using keyword extraction + CodeGraph."""
+        # Extract meaningful keywords from the natural language query
+        stop_words = {
+            "the", "a", "an", "is", "are", "was", "were", "be", "been",
+            "being", "have", "has", "had", "do", "does", "did", "will",
+            "would", "could", "should", "may", "might", "shall", "can",
+            "find", "search", "show", "get", "where", "how", "what",
+            "which", "this", "that", "these", "those", "i", "you", "we",
+            "they", "he", "she", "it", "my", "your", "our", "their",
+            "its", "to", "for", "of", "in", "on", "at", "by", "with",
+            "from", "as", "into", "through", "during", "before", "after",
+            "above", "below", "between", "out", "off", "over", "under",
+            "again", "further", "then", "once", "here", "there", "all",
+            "each", "every", "both", "few", "more", "most", "other", "some",
+            "such", "no", "nor", "not", "only", "own", "same", "so",
+            "than", "too", "very", "just", "because", "but", "and", "or",
+            "if", "while", "about", "up", "down", "also", "like",
+            "handle", "handler", "implementation", "logic", "function",
+            "method", "class", "component", "module", "file", "code",
+            "setup", "config", "configuration", "connection", "service",
+        }
+        words = query.lower().split()
+        keywords = [w.strip(".,;:!?\"'()[]{}") for w in words
+                     if w.strip(".,;:!?\"'()[]{}") not in stop_words
+                     and len(w.strip(".,;:!?\"'()[]{}")) > 2]
+
+        if not keywords:
+            keywords = [w for w in words if len(w) > 2][:3]
+
+        try:
+            graph = load_or_build(str(self.working_dir))
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to load codegraph: {exc}", "results": []})
+
+        scored: list[dict[str, Any]] = []
+        for sym in graph.symbols:
+            score = 0
+            sym_lower = sym.name.lower()
+            for kw in keywords:
+                if kw in sym_lower:
+                    score += 2
+                if kw in sym.path.lower():
+                    score += 1
+            if score > 0:
+                scored.append({
+                    "name": sym.name,
+                    "kind": sym.kind,
+                    "path": sym.path,
+                    "line": sym.line,
+                    "relevance_score": score,
+                })
+
+        scored.sort(key=lambda x: x["relevance_score"], reverse=True)
+        results = scored[:max_results]
+
+        return json.dumps({
+            "query": query,
+            "keywords": keywords,
+            "results": results,
+            "total_symbols": len(graph.symbols),
+            "files": graph.file_count,
+        })

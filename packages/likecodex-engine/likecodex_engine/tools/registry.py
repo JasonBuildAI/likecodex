@@ -90,6 +90,7 @@ class ToolRegistry:
         self.register("codegraph_symbols", search.codegraph_symbols_schema(), search.codegraph_symbols, read_only=True)
         self.register("codegraph_callers", search.codegraph_callers_schema(), search.codegraph_callers, read_only=True)
         self.register("codegraph_reindex", search.codegraph_reindex_schema(), search.codegraph_reindex, read_only=True)
+        self.register("semantic_search", search.semantic_search_schema(), search.semantic_search, read_only=True)
 
         code_index = CodeIndexTools(self.working_dir)
         self.register("code_index", code_index.code_index_schema(), code_index.code_index, read_only=True)
