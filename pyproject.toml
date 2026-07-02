@@ -75,19 +75,31 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "ARG", "RUF"]
 
+[tool.ruff.format]
+quote-style = "double"
+indent-width = 4
+
 [tool.pytest.ini_options]
 testpaths = ["packages/likecodex-engine/tests", "tests"]
 python_files = ["test_*.py", "*_test.py"]
 markers = [
     "integration: full-stack tests requiring engine and Rust server",
     "slow: tests that take longer than 5 seconds",
-]
-[tool.pytest.ini_options]
-testpaths = ["packages/likecodex-engine/tests", "tests"]
-python_files = ["test_*.py", "*_test.py"]
-markers = [
-    "integration: full-stack tests requiring engine and Rust server",
-    "slow: tests that take longer than 5 seconds",
+    "e2e: end-to-end tests covering full agent workflow",
+    "benchmark: performance benchmark tests",
+    "deepseek: tests requiring DeepSeek API access",
+    "sandbox: tests requiring Docker sandbox",
+    "memory: tests requiring vector memory backend",
+    "mcp: tests requiring MCP server connection",
+    "web: tests for Web UI components",
+    "permission: tests for approval and permission system",
+    "planner: tests for task planning subsystem",
+    "checkpoint: tests for checkpoint and rewind functionality",
+    "compaction: tests for context compaction",
+    "streaming: tests for SSE and LLM streaming",
+    "subagent: tests for sub-agent orchestration",
+    "encoding: tests for non-UTF-8 file encoding support",
+    "lsp: tests for LSP diagnostics and code intelligence",
 ]
 
 [tool.coverage.run]
