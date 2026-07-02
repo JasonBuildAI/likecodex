@@ -179,6 +179,12 @@ class ToolRegistry:
         self.register("profile_function", profiler.profile_function_schema(), profiler.profile_function)
         self.register("memory_profile", profiler.memory_profile_schema(), profiler.memory_profile)
 
+        db = DatabaseTools()
+        self.register("db_query", db.query_schema(), db.query, read_only=True)
+        self.register("db_schema", db.schema_schema(), db.schema, read_only=True)
+        self.register("db_explain", db.explain_schema(), db.explain, read_only=True)
+        self.register("db_list_tables", db.list_tables_schema(), db.list_tables, read_only=True)
+
         mem = AgentMemoryTools(self.working_dir)
         self.register("remember", mem.remember_schema(), mem.remember)
         self.register("forget", mem.forget_schema(), mem.forget)
