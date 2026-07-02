@@ -1,4 +1,9 @@
-"""Interactive setup wizard and diagnostics for LikeCodex."""
+"""Interactive setup wizard and diagnostics for LikeCodex.
+
+Provides:
+- interactive_setup(): Rich-based 3-step config wizard
+- run_doctor(): Health check and diagnostics
+"""
 
 from __future__ import annotations
 
@@ -13,6 +18,12 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.prompt import Confirm, Prompt
 from rich.panel import Panel
+
+__all__ = [
+    "interactive_setup",
+    "run_doctor",
+    "test_deepseek_connection",
+]
 
 console = Console()
 
