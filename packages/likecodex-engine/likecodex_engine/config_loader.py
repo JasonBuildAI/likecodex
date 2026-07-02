@@ -27,8 +27,14 @@ def _parse_toml(path: Path) -> dict[str, Any]:
 
 
 def _env_or(section: dict[str, Any], key: str, env_key: str, default: Any = "") -> Any:
-    """Return env var if set, else config section value, else default."""
-    return os.environ.get(env_key) or section.get(key, default)
+    """Return env var if set, else config section value, else default.
+    Prefers explicit env var over config value.
+    """
+    if env_key in os.environ:
+        return os.environ[env_key]
+    if key in section:
+        return section[key]
+    return default
 
 
 def project_config_paths(cwd: Path) -> list[Path]:
