@@ -4,6 +4,7 @@ mod interaction;
 mod setup;
 mod supervisor;
 mod tui;
+mod update;
 
 use std::env;
 use std::path::PathBuf;
@@ -107,6 +108,12 @@ enum Commands {
     },
     /// Show current configuration.
     Config,
+    /// Check for updates and optionally auto-upgrade.
+    Update {
+        /// Auto-install the new version via cargo install.
+        #[arg(long)]
+        install: bool,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -620,6 +627,9 @@ async fn main() -> Result<()> {
         Some(Commands::Rewind { ref id, list }) => {
             let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
             cmd_rewind(&client, &engine_url, id.clone(), list).await
+        }
+        Some(Commands::Update { install }) => {
+            update::cmd_update(&client, install).await
         }
     }
 }
