@@ -1,0 +1,45 @@
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "version": "1.0.0",
+  "description": "A simple Hello World extension demonstrating the LikeCodex plugin system",
+  "author": "LikeCodex Team",
+  "license": "MIT",
+  "enabled": true,
+  "main": "extension.js",
+  "icon": "",
+  "engineVersion": ">=0.1.0",
+  "repository": "https://github.com/likecodex/extensions/hello-world",
+  "contributes": {
+    "commands": [
+      {
+        "id": "hello-world.sayHello",
+        "label": "Hello World: Say Hello",
+        "description": "Display a friendly hello message",
+        "category": "Hello World"
+      },
+      {
+        "id": "hello-world.showTime",
+        "label": "Hello World: Show Current Time",
+        "description": "Display the current date and time",
+        "category": "Hello World"
+      },
+      {
+        "id": "hello-world.greet",
+        "label": "Hello World: Greet User",
+        "description": "Greet the user by name",
+        "category": "Hello World"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "hello-world.sayHello",
+        "keys": ["Ctrl+Alt+H"]
+      }
+    ]
+  },
+  "scripts": {
+    "install": "scripts/install.js",
+    "uninstall": "scripts/uninstall.js"
+  }
+}
