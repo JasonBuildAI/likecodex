@@ -8,6 +8,24 @@
  * - Command input with history (↑↓)
  * - AI command suggestion (Cmd+K)
  * - Error auto-diagnosis
+ *
+ * == Phase 6: xterm.js Terminal Integration Plan ==
+ * Replace the current <div>-based output display with a full-featured xterm.js
+ * terminal instance for each session:
+ *
+ * 1. Install: npm install xterm @xterm/xterm @xterm/addon-fit @xterm/addon-web-links
+ * 2. Each TerminalSession gets an xterm.Terminal instance attached in a ref
+ * 3. Terminal.fitAddon handles resize; Terminal.webLinksAddon enables clickable URLs
+ * 4. Input is captured from xterm.js key events rather than a separate <input>
+ * 5. The backend streams output lines into terminal.write() in real time
+ * 6. xterm.js search addon provides in-terminal Ctrl+F find
+ * 7. The AI bars (AICommandInput, error diagnosis) remain as overlay panels
+ *    docked below the xterm container
+ *
+ * Implementation steps:
+ * - src/ide/terminal/xterm-manager.ts — createTerminal(), resizeHandler(), disposeTerminal()
+ * - src/ide/terminal/TerminalPanel.tsx — embed <div ref={terminalRef}> instead of raw <div> lines
+ * - src/ide/terminal/terminalStore.ts — store Terminal instance references, wire fitAddon
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
