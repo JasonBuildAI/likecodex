@@ -7,7 +7,6 @@ requires-python = ">=3.11"
 
 dependencies = [
     "likecodex-engine",
-    "rich>=13.0",
 ]
 
 [project.scripts]
