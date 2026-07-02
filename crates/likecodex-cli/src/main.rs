@@ -580,12 +580,12 @@ async fn main() -> Result<()> {
             info!(engine_url = %engine_url, "starting TUI session");
             tui::run_tui(client, engine_url).await
         }
-        Some(Commands::Run { prompt: cmd_prompt }) => {
+        Some(Commands::Run { prompt: ref cmd_prompt }) => {
             let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
             run_prompt(&client, &engine_url, &cmd_prompt).await?;
             Ok(())
         }
-        Some(Commands::Chat { prompt }) => {
+        Some(Commands::Chat { ref prompt }) => {
             let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
             if let Some(p) = prompt {
                 chat_stream(&client, &engine_url, &p, true).await?;
@@ -613,11 +613,11 @@ async fn main() -> Result<()> {
             let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
             cmd_stats(&client, &engine_url).await
         }
-        Some(Commands::Sessions { action }) => {
+        Some(Commands::Sessions { ref action }) => {
             let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
             cmd_sessions(&client, &engine_url, action).await
         }
-        Some(Commands::Rewind { id, list }) => {
+        Some(Commands::Rewind { ref id, list }) => {
             let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
             cmd_rewind(&client, &engine_url, id, list).await
         }
