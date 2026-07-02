@@ -88,7 +88,7 @@ class ProfilerTools:
         top_n: int = 20,
     ) -> str:
         try:
-            import cProfile  # noqa: F811
+            import cProfile
         except ImportError:
             return json.dumps({"error": "cProfile not available"})
 
