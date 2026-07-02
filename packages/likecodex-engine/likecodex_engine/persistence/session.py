@@ -199,3 +199,32 @@ class SessionStore:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+    def update_session_summary(self, session_id: str, summary: str) -> None:
+        """Update the summary for a session."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE sessions SET summary = ?, updated_at = ? WHERE id = ?",
+                (summary, datetime.now(UTC).isoformat(), session_id),
+            )
+
+    def get_session_stats(self, session_id: str) -> dict[str, Any]:
+        """Get statistics for a session."""
+        events = self.list_events(session_id)
+        event_types: dict[str, int] = {}
+        message_count = 0
+        tool_count = 0
+        for event in events:
+            et = event.get("event_type", "")
+            event_types[et] = event_types.get(et, 0) + 1
+            if et == "assistant":
+                message_count += 1
+            if et == "tool_result":
+                tool_count += 1
+        return {
+            "session_id": session_id,
+            "event_count": len(events),
+            "message_count": message_count,
+            "tool_call_count": tool_count,
+            "event_types": event_types,
+        }
