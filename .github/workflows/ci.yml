@@ -6,12 +6,21 @@ on:
   pull_request:
     branches: [main, master]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # ------------------------------------------------------------------
+  # Rust: lint, build, test
+  # ------------------------------------------------------------------
   rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Check formatting
         run: cargo fmt -- --check
@@ -22,6 +31,9 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace
 
+  # ------------------------------------------------------------------
+  # Python: lint, type-check, test
+  # ------------------------------------------------------------------
   python:
     runs-on: ubuntu-latest
     steps:
@@ -35,9 +47,14 @@ jobs:
         run: uv run ruff check packages/likecodex-engine tests
       - name: Format check
         run: uv run ruff format --check packages/likecodex-engine tests
+      - name: Type check with mypy
+        run: uv run mypy packages/likecodex-engine --ignore-missing-imports || echo "mypy found issues (non-blocking)"
       - name: Run Python tests
-        run: uv run pytest packages/likecodex-engine/tests tests -v
+        run: uv run pytest packages/likecodex-engine/tests tests -v -x --timeout=60
 
+  # ------------------------------------------------------------------
+  # Cache benchmark
+  # ------------------------------------------------------------------
   cache-benchmark:
     runs-on: ubuntu-latest
     steps:
@@ -48,6 +65,9 @@ jobs:
       - name: Cache hit rate benchmark
         run: uv run python benchmarks/cache/run.py --turns 10 --simulate-cache
 
+  # ------------------------------------------------------------------
+  # Agent parity & benchmark
+  # ------------------------------------------------------------------
   agent-parity:
     runs-on: ubuntu-latest
     steps:
@@ -56,12 +76,36 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --all-packages --extra dev
       - name: Agent parity tests
-        run: uv run pytest tests/test_agent_guards.py tests/test_plan_mode.py tests/test_plan_state.py tests/test_compact_loop.py tests/test_complete_step.py tests/test_task_tool.py tests/test_parallel_tasks.py tests/test_permissions.py tests/test_evidence.py tests/test_readiness.py tests/test_repeat_guard.py tests/test_prune.py tests/test_harness_integration.py tests/test_coordinator.py tests/test_subagent_store.py tests/test_handoff_guard.py tests/test_entrypoint_parity.py -v
+        run: >
+          uv run pytest
+          tests/test_agent_guards.py
+          tests/test_plan_mode.py
+          tests/test_plan_state.py
+          tests/test_compact_loop.py
+          tests/test_complete_step.py
+          tests/test_task_tool.py
+          tests/test_parallel_tasks.py
+          tests/test_permissions.py
+          tests/test_evidence.py
+          tests/test_readiness.py
+          tests/test_repeat_guard.py
+          tests/test_prune.py
+          tests/test_harness_integration.py
+          tests/test_coordinator.py
+          tests/test_subagent_store.py
+          tests/test_handoff_guard.py
+          tests/test_entrypoint_parity.py
+          -v -x
       - name: Agent task benchmark
         run: uv run python benchmarks/agent/run.py
       - name: Agent benchmark regression gate
         run: uv run python benchmarks/agent/run.py --check
+      - name: SWE-bench subset benchmark
+        run: uv run python benchmarks/agent/run.py --swe-bench --output benchmarks/agent/swe-baseline.json
 
+  # ------------------------------------------------------------------
+  # Web frontend
+  # ------------------------------------------------------------------
   web:
     runs-on: ubuntu-latest
     steps:
@@ -85,13 +129,21 @@ jobs:
         working-directory: web
         run: npm run build
 
+  # ------------------------------------------------------------------
+  # Docker sandbox image build
+  # ------------------------------------------------------------------
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build sandbox image
         run: docker build -t likecodex/sandbox:latest docker/sandbox
+      - name: Verify image
+        run: docker run --rm likecodex/sandbox:latest sh -c "python --version && git --version && node --version && cargo --version"
 
+  # ------------------------------------------------------------------
+  # Full-stack smoke test
+  # ------------------------------------------------------------------
   smoke:
     runs-on: ubuntu-latest
     needs: [python, rust]
@@ -107,6 +159,9 @@ jobs:
       - name: Full-stack smoke (engine + server + SSE)
         run: uv run python scripts/smoke_test.py
 
+  # ------------------------------------------------------------------
+  # E2E full-stack test
+  # ------------------------------------------------------------------
   e2e-fullstack:
     runs-on: ubuntu-latest
     needs: [python, rust]
@@ -120,8 +175,11 @@ jobs:
       - name: Build server
         run: cargo build -p likecodex-server
       - name: Engine-server bridge E2E
-        run: uv run pytest tests/e2e/test_full_stack.py -v -m integration
+        run: uv run pytest tests/e2e/test_full_stack.py -v -m integration --timeout=120
 
+  # ------------------------------------------------------------------
+  # Sandbox runtime E2E (requires Docker)
+  # ------------------------------------------------------------------
   sandbox-runtime:
     runs-on: ubuntu-latest
     needs: [docker]
@@ -137,4 +195,4 @@ jobs:
       - name: Sandbox execute E2E
         env:
           LIKECODEX_RUN_SANDBOX_TESTS: "1"
-        run: uv run pytest tests/e2e/test_full_stack.py::test_sandbox_execute_endpoint -v
+        run: uv run pytest tests/e2e/test_full_stack.py::test_sandbox_execute_endpoint -v --timeout=120
