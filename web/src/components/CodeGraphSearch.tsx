@@ -1,5 +1,12 @@
 'use client';
 
+// ── Phase 7.2: Symbol Navigation Tree ─────────────────────────────────
+// Future: Render symbols in a tree view (package → file → class → method)
+// with expand/collapse, breadcrumb navigation, and click-to-scroll.
+// See also: crates/likecodex-indexer/src/lib.rs (CodeGraph struct)
+//           packages/likecodex-engine/likecodex_engine/tools/codegraph.py
+// ─────────────────────────────────────────────────────────────────────────
+
 import { useState } from 'react';
 import { searchCodeGraph, searchIndex } from '@/lib/api';
 import { useAppStore, type SearchResult } from '@/lib/store';
