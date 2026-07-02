@@ -174,6 +174,11 @@ class ToolRegistry:
         self.register("github_list_prs", gh.list_prs_schema(), gh.list_prs, read_only=True)
         self.register("github_list_issues", gh.list_issues_schema(), gh.list_issues, read_only=True)
 
+        profiler = ProfilerTools()
+        self.register("profile_python", profiler.profile_python_schema(), profiler.profile_python)
+        self.register("profile_function", profiler.profile_function_schema(), profiler.profile_function)
+        self.register("memory_profile", profiler.memory_profile_schema(), profiler.memory_profile)
+
         mem = AgentMemoryTools(self.working_dir)
         self.register("remember", mem.remember_schema(), mem.remember)
         self.register("forget", mem.forget_schema(), mem.forget)
