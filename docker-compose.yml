@@ -1,4 +1,44 @@
 services:
+  # ── Python Engine (always required) ──
+  engine:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: uv run python -m likecodex_engine.server
+    environment:
+      LIKECODEX_ENGINE_HOST: 0.0.0.0
+      LIKECODEX_ENGINE_PORT: 9090
+      LIKECODEX_WORKING_DIR: /app
+    ports:
+      - "9090:9090"
+
+  # ── Rust API Server (optional - comment out for Python-only mode) ──
+  # server:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/server/Dockerfile
+  #   depends_on:
+  #     - engine
+  #   environment:
+  #     LIKECODEX_ENGINE_URL: http://engine:9090
+  #   ports:
+  #     - "8080:8080"
+
+  # ── Web UI via Next.js (optional - comment out for Python-only mode) ──
+  # web:
+  #   image: node:20
+  #   working_dir: /app/web
+  #   volumes:
+  #     - ./web:/app/web
+  #   command: npm run dev
+  #   environment:
+  #     NEXT_PUBLIC_API_BASE: http://127.0.0.1:8080
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - server
+services:
   engine:
     image: python:3.11-slim
     working_dir: /app

@@ -335,6 +335,8 @@ export function GitPanel() {
                       : undefined
                   }
                   isExpanded={expandedChanges.has(c.path)}
+                  hunks={selectedPath === c.path ? hunks?.hunks : undefined}
+                  onStageHunk={(idx) => stageHunkAction(c.path, idx)}
                 />
               ))}
             </div>
@@ -493,6 +495,8 @@ function ChangeItem({
   onAction,
   onDiscard,
   isExpanded,
+  hunks,
+  onStageHunk,
 }: {
   change: { path: string; changeType: string; staged: boolean };
   selected: boolean;
@@ -502,11 +506,22 @@ function ChangeItem({
   onAction: () => void;
   onDiscard?: () => void;
   isExpanded?: boolean;
+  hunks?: { header: string; content: string }[] | null;
+  onStageHunk?: (index: number) => void;
 }) {
   const changeTypeLabel: Record<string, string> = {
     modified: '修改', added: '新增', deleted: '删除',
     untracked: '未跟踪', renamed: '重命名', 'both-added': '冲突',
   };
+
+  const [hunkLoading, setHunkLoading] = useState<number | null>(null);
+
+  const handleStageHunk = useCallback(async (index: number) => {
+    if (!onStageHunk) return;
+    setHunkLoading(index);
+    await onStageHunk(index);
+    setHunkLoading(null);
+  }, [onStageHunk]);
 
   return (
     <>
@@ -561,6 +576,46 @@ function ChangeItem({
           </button>
         </div>
       </div>
+
+      {/* Hunks display when expanded */}
+      {isExpanded && hunks && hunks.length > 0 && (
+        <div className="bg-gray-900/50 border-b border-gray-800">
+          <div className="text-[9px] text-gray-500 px-4 py-1 uppercase tracking-wider">
+            逐块暂存 ({hunks.length} 个区块)
+          </div>
+          {hunks.map((hunk, i) => (
+            <div key={i} className="px-4 py-1 border-t border-gray-800/50 flex items-start gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="text-[9px] text-gray-500 font-mono truncate">
+                  {hunk.header}
+                </div>
+                <pre className="text-[10px] text-gray-400 font-mono mt-0.5 overflow-x-auto max-h-[80px]">
+                  {hunk.content.split('\n').slice(0, 8).map((l, j) => (
+                    <div key={j} className={
+                      l.startsWith('+') ? 'text-green-400' :
+                      l.startsWith('-') ? 'text-red-400' :
+                      l.startsWith('@@') ? 'text-yellow-400' :
+                      'text-gray-500'
+                    }>{l}</div>
+                  ))}
+                  {hunk.content.split('\n').length > 8 && (
+                    <div className="text-gray-600">... {hunk.content.split('\n').length - 8} 行更多</div>
+                  )}
+                </pre>
+              </div>
+              {onStageHunk && !change.staged && (
+                <button
+                  onClick={() => handleStageHunk(i)}
+                  disabled={hunkLoading === i}
+                  className="shrink-0 px-1.5 py-0.5 bg-green-700/50 text-green-300 text-[9px] rounded hover:bg-green-700 disabled:opacity-40 mt-1"
+                >
+                  {hunkLoading === i ? '...' : '暂存此块'}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </>
   );
 }
