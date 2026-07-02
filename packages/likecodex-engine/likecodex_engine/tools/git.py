@@ -202,6 +202,149 @@ class GitTools:
         result = await self._run(f'commit -m "{escaped_message}"')
         return json.dumps(result)
 
+    def stash_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Manage git stash (push, pop, list, drop, apply).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["push", "pop", "list", "drop", "apply"],
+                        "description": "Stash action to perform",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Stash message (for push action)",
+                    },
+                    "stash_ref": {
+                        "type": "string",
+                        "description": "Stash reference like stash@{0} (for pop/drop/apply)",
+                    },
+                },
+                "required": ["action"],
+            },
+        }
+
+    async def git_stash(self, action: str = "list", message: str = "", stash_ref: str = "") -> str:
+        """Manage git stash (push, pop, list, drop, apply)."""
+        if action == "push":
+            if message:
+                result = await self._run(f'stash push -m "{message.replace(chr(34), chr(92)+chr(34))}"')
+            else:
+                result = await self._run("stash push")
+        elif action == "pop":
+            result = await self._run(f"stash pop {stash_ref}" if stash_ref else "stash pop")
+        elif action == "apply":
+            result = await self._run(f"stash apply {stash_ref}" if stash_ref else "stash apply")
+        elif action == "drop":
+            result = await self._run(f"stash drop {stash_ref}" if stash_ref else "stash drop")
+        else:
+            result = await self._run("stash list")
+        return json.dumps(result)
+
+    def rebase_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Perform git rebase operations (interactive, abort, continue).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Target branch/ref to rebase onto (default: main)",
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": ["start", "continue", "abort", "skip"],
+                        "description": "Rebase action",
+                    },
+                    "interactive": {
+                        "type": "boolean",
+                        "description": "Use interactive rebase",
+                    },
+                },
+                "required": [],
+            },
+        }
+
+    async def git_rebase(self, target: str = "main", action: str = "start", interactive: bool = False) -> str:
+        """Perform git rebase operations."""
+        if action == "continue":
+            result = await self._run("rebase --continue")
+        elif action == "abort":
+            result = await self._run("rebase --abort")
+        elif action == "skip":
+            result = await self._run("rebase --skip")
+        else:
+            # Auto-detect default branch
+            resolved_target = target
+            if target == "main":
+                branch_check = await self._run("rev-parse --verify main")
+                if branch_check.get("exit_code") != 0:
+                    resolved_target = "master"
+
+            if interactive:
+                result = await self._run(f"rebase -i {resolved_target}")
+            else:
+                result = await self._run(f"rebase {resolved_target}")
+        return json.dumps(result)
+
+    def resolve_conflict_schema(self) -> dict[str, Any]:
+        return {
+            "description": "List conflicted files and help resolve merge/rebase conflicts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "status", "ours", "theirs", "both"],
+                        "description": "Action to perform on conflicts",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "File path to resolve (required for ours/theirs/both)",
+                    },
+                },
+                "required": [],
+            },
+        }
+
+    async def git_resolve_conflict(self, action: str = "list", file_path: str = "") -> str:
+        """List conflicted files and help resolve merge/rebase conflicts."""
+        if action == "list" or action == "status":
+            # Show conflicted files
+            result = await self._run("diff --name-only --diff-filter=U")
+            if result.get("exit_code") == 0 and result.get("stdout", "").strip():
+                conflict_files = [f for f in result["stdout"].strip().split("\n") if f.strip()]
+                # Also check merge conflicts via status
+                status_result = await self._run("status --porcelain")
+                merge_conflicts = []
+                if status_result.get("stdout"):
+                    for line in status_result["stdout"].strip().split("\n"):
+                        if line.startswith("UU") or line.startswith("AA") or line.startswith("DD"):
+                            merge_conflicts.append(line[3:].strip())
+                return json.dumps({
+                    "conflicted_files": list(set(conflict_files + merge_conflicts)),
+                    "has_conflicts": len(conflict_files) + len(merge_conflicts) > 0,
+                })
+            return json.dumps({"conflicted_files": [], "has_conflicts": False})
+
+        if not file_path:
+            return json.dumps({"error": "file_path is required for resolution actions"})
+
+        if action == "ours":
+            result = await self._run(f"checkout --ours {file_path}")
+            if result.get("exit_code") == 0:
+                await self._run(f"add {file_path}")
+            return json.dumps({**result, "resolution": f"Kept our version of {file_path}", "file": file_path})
+        elif action == "theirs":
+            result = await self._run(f"checkout --theirs {file_path}")
+            if result.get("exit_code") == 0:
+                await self._run(f"add {file_path}")
+            return json.dumps({**result, "resolution": f"Kept their version of {file_path}", "file": file_path})
+
+        return json.dumps({"error": f"Unknown action: {action}"})
+
     def compare_schema(self) -> dict[str, Any]:
         return {
             "description": "Compare two git refs (branches, tags, commits). Shows ahead/behind info and diff stats.",
