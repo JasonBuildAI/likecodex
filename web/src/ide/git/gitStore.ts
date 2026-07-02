@@ -56,6 +56,12 @@ interface GitState {
   checkoutBranch: (name: string) => Promise<void>;
   createBranch: (name: string) => Promise<void>;
   search: (query: string) => Promise<void>;
+  pull: () => Promise<{ success: boolean; output?: string; error?: string }>;
+  push: () => Promise<{ success: boolean; output?: string; error?: string }>;
+  fetch: () => Promise<{ success: boolean; output?: string; error?: string }>;
+  stashPush: (message?: string) => Promise<{ success: boolean; output?: string; error?: string }>;
+  stashPop: () => Promise<{ success: boolean; output?: string; error?: string }>;
+  stashList: () => Promise<{ success: boolean; output?: string; error?: string }>;
 }
 
 export const useGitStore = create<GitState>((set, get) => ({
@@ -174,5 +180,58 @@ export const useGitStore = create<GitState>((set, get) => ({
     } catch {
       set({ isSearching: false, searchResults: [] });
     }
+  },
+
+  pull: async () => {
+    const result = await gitPull();
+    if (result.success) {
+      await get().refreshStatus();
+      await get().refreshLog();
+    } else {
+      set({ error: result.error || 'Pull failed' });
+    }
+    return result;
+  },
+
+  push: async () => {
+    const result = await gitPush();
+    if (!result.success) {
+      set({ error: result.error || 'Push failed' });
+    }
+    return result;
+  },
+
+  fetch: async () => {
+    const result = await gitFetch();
+    if (result.success) {
+      await get().refreshBranches();
+    } else {
+      set({ error: result.error || 'Fetch failed' });
+    }
+    return result;
+  },
+
+  stashPush: async (message) => {
+    const result = await gitStash('push', message);
+    if (result.success) {
+      await get().refreshStatus();
+    } else {
+      set({ error: result.error || 'Stash failed' });
+    }
+    return result;
+  },
+
+  stashPop: async () => {
+    const result = await gitStash('pop');
+    if (result.success) {
+      await get().refreshStatus();
+    } else {
+      set({ error: result.error || 'Stash pop failed' });
+    }
+    return result;
+  },
+
+  stashList: async () => {
+    return await gitStash('list');
   },
 }));

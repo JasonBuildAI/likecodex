@@ -59,6 +59,11 @@ export function GitPanel() {
     discardChanges,
     checkoutBranch,
     search,
+    pull,
+    push: gitPushAction,
+    fetch: gitFetchAction,
+    stashPush,
+    stashPop,
   } = useGitStore();
 
   const [commitMessage, setCommitMessage] = useState('');
@@ -67,6 +72,8 @@ export function GitPanel() {
   const [showNewBranch, setShowNewBranch] = useState(false);
   const [filterText, setFilterText] = useState('');
   const [expandedChanges, setExpandedChanges] = useState<Set<string>>(new Set());
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState<string | null>(null);
 
   // Auto-refresh on mount
   useEffect(() => {
@@ -116,6 +123,27 @@ export function GitPanel() {
     await stageAll();
   }, [stageAll]);
 
+  const handleQuickAction = useCallback(async (action: string) => {
+    let result: { success: boolean; output?: string; error?: string } = { success: false };
+    switch (action) {
+      case 'pull': result = await pull(); break;
+      case 'push': result = await gitPushAction(); break;
+      case 'fetch': result = await gitFetchAction(); break;
+      case 'stash': result = await stashPush('Auto-stash from dashboard'); break;
+      case 'stash-pop': result = await stashPop(); break;
+    }
+    setActionFeedback(result.success ? `${action} 成功` : `${action} 失败: ${result.error || ''}`);
+    setTimeout(() => setActionFeedback(null), 3000);
+  }, [pull, gitPushAction, gitFetchAction, stashPush, stashPop]);
+
+  // Discard with confirmation
+  const handleDiscard = useCallback(async (path: string) => {
+    await discardChanges(path);
+    setConfirmDiscard(null);
+    setActionFeedback(`已丢弃 ${path} 的变更`);
+    setTimeout(() => setActionFeedback(null), 3000);
+  }, [discardChanges]);
+
   if (!isRepo) {
     return (
       <div className="p-4 text-center text-sm text-gray-500">
@@ -131,11 +159,42 @@ export function GitPanel() {
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-white">Git</span>
-          <span className="text-[10px] text-blue-400 bg-blue-900/30 px-1.5 py-0.5 rounded">
+          <span className="text-[10px] text-blue-400 bg-blue-900/30 px-1.5 py-0.5 rounded flex items-center gap-1">
+            <span className={`h-1.5 w-1.5 rounded-full ${currentBranch ? 'bg-green-400' : 'bg-red-400'}`} />
             {currentBranch || 'unknown'}
           </span>
         </div>
         <div className="flex gap-0.5">
+          {/* Quick action buttons */}
+          <button
+            onClick={() => handleQuickAction('fetch')}
+            className="px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+            title="获取远程更新 (Fetch)"
+          >
+            ↓ Fetch
+          </button>
+          <button
+            onClick={() => handleQuickAction('pull')}
+            className="px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+            title="拉取远程更新 (Pull)"
+          >
+            ↩ Pull
+          </button>
+          <button
+            onClick={() => handleQuickAction('push')}
+            className="px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+            title="推送提交 (Push)"
+          >
+            ↪ Push
+          </button>
+          <button
+            onClick={() => handleQuickAction('stash')}
+            className="px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+            title="暂存变更 (Stash)"
+          >
+            ⊞ Stash
+          </button>
+          <div className="w-px h-3 bg-gray-600 mx-0.5 self-center" />
           {(['changes', 'history', 'branches'] as const).map((v) => (
             <button
               key={v}
@@ -158,6 +217,36 @@ export function GitPanel() {
       {error && (
         <div className="px-3 py-1 text-[10px] text-red-400 bg-red-900/20 border-b border-red-800/30">
           {error}
+        </div>
+      )}
+
+      {/* Action feedback */}
+      {actionFeedback && (
+        <div className="px-3 py-1 text-[10px] text-green-400 bg-green-900/20 border-b border-green-800/30 animate-pulse">
+          {actionFeedback}
+        </div>
+      )}
+
+      {/* Discard confirmation dialog */}
+      {confirmDiscard && (
+        <div className="px-3 py-2 bg-red-900/20 border-b border-red-800/30">
+          <div className="text-[10px] text-red-300 mb-1">
+            确定要丢弃 {confirmDiscard} 的变更吗？此操作不可撤销。
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleDiscard(confirmDiscard)}
+              className="px-2 py-0.5 bg-red-600 text-white text-[10px] rounded hover:bg-red-700"
+            >
+              确认丢弃
+            </button>
+            <button
+              onClick={() => setConfirmDiscard(null)}
+              className="px-2 py-0.5 bg-gray-700 text-gray-300 text-[10px] rounded hover:bg-gray-600"
+            >
+              取消
+            </button>
+          </div>
         </div>
       )}
 
@@ -237,7 +326,7 @@ export function GitPanel() {
                   onAction={() => stageFile(c.path)}
                   onDiscard={
                     c.changeType !== 'untracked'
-                      ? () => discardChanges(c.path)
+                      ? () => setConfirmDiscard(c.path)
                       : undefined
                   }
                   isExpanded={expandedChanges.has(c.path)}

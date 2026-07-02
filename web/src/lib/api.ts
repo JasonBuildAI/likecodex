@@ -76,6 +76,8 @@ export {
   fetchCacheMetrics,
   searchCodeGraph,
   searchIndex,
+  searchCodeGraphCallers,
+  searchCodeGraphViz,
   executeCommand,
   parseToolCalls,
 } from './services/skillService';
