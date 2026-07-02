@@ -32,7 +32,50 @@ jobs:
         run: cargo test --workspace
 
   # ------------------------------------------------------------------
-  # Python: lint, type-check, test
+  # Python-Only (fast): lint, type-check, unit tests — no Rust compilation
+  # ------------------------------------------------------------------
+  python-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-suffix: "python-only"
+      - name: Install Python dependencies
+        run: uv sync --all-packages --extra dev
+      - name: Lint with ruff
+        run: uv run ruff check packages/likecodex-engine tests
+      - name: Format check
+        run: uv run ruff format --check packages/likecodex-engine tests
+      - name: Type check with mypy
+        run: uv run mypy packages/likecodex-engine --ignore-missing-imports || echo "mypy found issues (non-blocking)"
+      - name: Run Python tests (fast path, no Rust)
+        run: >
+          uv run pytest
+          packages/likecodex-engine/tests
+          tests/test_agent_guards.py
+          tests/test_plan_mode.py
+          tests/test_plan_state.py
+          tests/test_compact_loop.py
+          tests/test_complete_step.py
+          tests/test_task_tool.py
+          tests/test_parallel_tasks.py
+          tests/test_permissions.py
+          tests/test_evidence.py
+          tests/test_readiness.py
+          tests/test_repeat_guard.py
+          tests/test_prune.py
+          tests/test_memory.py
+          tests/test_subagent_store.py
+          tests/test_handoff_guard.py
+          tests/test_entrypoint_parity.py
+          -v -x
+          --timeout=60
+
+  # ------------------------------------------------------------------
+  # Python Full (with Rust): lint, type-check, test (including integration)
   # ------------------------------------------------------------------
   python:
     runs-on: ubuntu-latest
@@ -41,6 +84,8 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           version: "latest"
+          enable-cache: true
+          cache-suffix: "python-full"
       - name: Install Python dependencies
         run: uv sync --all-packages --extra dev
       - name: Lint with ruff
