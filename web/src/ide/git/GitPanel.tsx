@@ -1,15 +1,16 @@
 'use client';
 
 /**
- * GitPanel — Version control panel with changes list, diff preview, commit area.
+ * GitPanel — Enhanced version control panel with interactive staging,
+ * Git history visualization, and branch management.
  *
  * Features:
- * - Staged/unstaged changes list
- * - Stage/unstage/discard individual files
- * - Diff preview with Monaco DiffEditor
+ * - Staged/unstaged changes list with interactive hunk staging
+ * - Inline diff preview with Monaco DiffEditor
  * - Commit message input + AI generation button
- * - Branch switcher
- * - Commit history timeline
+ * - Visual Git history graph with commit detail panel
+ * - Branch management with create/switch/delete
+ * - Quick actions: pull, push, fetch, stash
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -200,6 +201,13 @@ export function GitPanel() {
           >
             ⊞ Stash
           </button>
+          <button
+            onClick={() => handleQuickAction('stash-pop')}
+            className="px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+            title="恢复暂存 (Stash Pop)"
+          >
+            ⊟ Pop
+          </button>
           <div className="w-px h-3 bg-gray-600 mx-0.5 self-center" />
           {(['changes', 'history', 'branches'] as const).map((v) => (
             <button
@@ -345,7 +353,7 @@ export function GitPanel() {
 
           {/* Diff preview */}
           {selectedDiff && (
-            <div className="h-[200px] border-t border-gray-700 shrink-0">
+            <div className="h-[220px] border-t border-gray-700 shrink-0">
               <DiffViewer
                 oldText={selectedDiff.originalContent}
                 newText={selectedDiff.modifiedContent}
@@ -458,14 +466,44 @@ export function GitPanel() {
                 <span className={`text-xs flex-1 truncate ${b.current ? 'text-blue-300' : 'text-gray-300'}`}>
                   {b.name}
                 </span>
-                {!b.current && !b.remote && (
-                  <button
-                    onClick={() => checkoutBranch(b.name)}
-                    className="text-[10px] text-gray-500 hover:text-white"
-                  >
-                    切换
-                  </button>
-                )}
+                <div className="flex items-center gap-1">
+                  {b.remote && (
+                    <span className="text-[9px] text-purple-400 bg-purple-900/30 px-1 rounded">
+                      remote
+                    </span>
+                  )}
+                  {!b.current && !b.remote && (
+                    <>
+                      <button
+                        onClick={() => checkoutBranch(b.name)}
+                        className="text-[10px] text-gray-500 hover:text-white px-1"
+                      >
+                        切换
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (confirm(`删除分支 "${b.name}"？`)) {
+                            try {
+                              await fetch('/api/ide/git/branch/delete', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ name: b.name }),
+                              });
+                              refreshBranches();
+                              setActionFeedback(`分支 ${b.name} 已删除`);
+                              setTimeout(() => setActionFeedback(null), 3000);
+                            } catch {
+                              // Best-effort
+                            }
+                          }
+                        }}
+                        className="text-[10px] text-red-500 hover:text-red-400 px-1"
+                      >
+                        删除
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
               {b.lastCommit && (
                 <div className="text-[10px] text-gray-600 truncate mt-0.5">{b.lastCommit}</div>
@@ -571,7 +609,7 @@ function ChangeItem({
         </div>
       </div>
 
-      {/* Hunks display when expanded */}
+      {/* Hunks display when expanded - interactive staging */}
       {isExpanded && hunks && hunks.length > 0 && (
         <div className="bg-gray-900/50 border-b border-gray-800">
           <div className="text-[9px] text-gray-500 px-4 py-1 uppercase tracking-wider">
@@ -583,8 +621,8 @@ function ChangeItem({
                 <div className="text-[9px] text-gray-500 font-mono truncate">
                   {hunk.header}
                 </div>
-                <pre className="text-[10px] text-gray-400 font-mono mt-0.5 overflow-x-auto max-h-[80px]">
-                  {hunk.content.split('\n').slice(0, 8).map((l, j) => (
+                <pre className="text-[10px] text-gray-400 font-mono mt-0.5 overflow-x-auto max-h-[100px]">
+                  {hunk.content.split('\n').slice(0, 12).map((l, j) => (
                     <div key={j} className={
                       l.startsWith('+') ? 'text-green-400' :
                       l.startsWith('-') ? 'text-red-400' :
@@ -592,8 +630,8 @@ function ChangeItem({
                       'text-gray-500'
                     }>{l}</div>
                   ))}
-                  {hunk.content.split('\n').length > 8 && (
-                    <div className="text-gray-600">... {hunk.content.split('\n').length - 8} 行更多</div>
+                  {hunk.content.split('\n').length > 12 && (
+                    <div className="text-gray-600">... {hunk.content.split('\n').length - 12} 行更多</div>
                   )}
                 </pre>
               </div>
