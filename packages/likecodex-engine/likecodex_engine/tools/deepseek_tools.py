@@ -8,6 +8,7 @@ prompt optimization, model switching, and cost estimation.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from likecodex_engine.llm.base import Message, Role
@@ -103,11 +104,12 @@ async def deepseek_cache_analyze(
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
-@tool(
+tool(
     name="deepseek_reasoning",
     description=(
         "Perform deep reasoning using DeepSeek V4 Pro model with chain-of-thought. "
-        "Use for complex logic, mathematics, architecture design, and debugging."
+        "Use for complex logic, mathematics, architecture design, and debugging. "
+        "Returns structured reasoning with step-by-step analysis."
     ),
     read_only=True,
     parameters={
@@ -120,6 +122,15 @@ async def deepseek_cache_analyze(
                 "enum": ["low", "medium", "high"],
                 "description": "Level of detail in reasoning",
             },
+            "reasoning_steps": {
+                "type": "integer",
+                "description": "Number of structured reasoning steps (1-8)",
+            },
+            "output_format": {
+                "type": "string",
+                "enum": ["structured", "freeform"],
+                "description": "Whether to enforce step-by-step structured output",
+            },
         },
         "required": ["question"],
     },
@@ -128,8 +139,16 @@ async def deepseek_reasoning(
     question: str,
     context: str = "",
     detail_level: str = "high",
+    reasoning_steps: int = 4,
+    output_format: str = "structured",
 ) -> str:
-    """Invoke DeepSeek V4 Pro with thinking mode for complex reasoning."""
+    """Invoke DeepSeek V4 Pro with thinking mode for complex reasoning.
+
+    Enhanced with structured step-by-step reasoning, configurable detail levels,
+    and explicit reasoning trace for complex problem-solving.
+    """
+    start_time = time.time()
+
     pro_llm = create_provider(
         provider="deepseek",
         model="deepseek-v4-pro",
@@ -137,8 +156,17 @@ async def deepseek_reasoning(
         reasoning_effort=detail_level,
     )
 
-    messages = [{"role": "user", "content": question}]
-    if context:
+    # Build structured reasoning prompt
+    reasoning_prompt = _build_reasoning_prompt(
+        question=question,
+        context=context,
+        detail_level=detail_level,
+        reasoning_steps=min(max(reasoning_steps, 1), 8),
+        output_format=output_format,
+    )
+
+    messages = [{"role": "user", "content": reasoning_prompt}]
+    if context and output_format == "freeform":
         messages.insert(
             0,
             {
@@ -152,13 +180,173 @@ async def deepseek_reasoning(
         max_tokens=16384,
     )
 
-    result = {
+    elapsed = time.time() - start_time
+
+    # Extract reasoning steps from thinking content if available
+    reasoning_steps_list: list[dict[str, str]] = []
+    if response.reasoning_content and output_format == "structured":
+        reasoning_steps_list = _extract_reasoning_steps(
+            response.reasoning_content
+        )
+
+    result: dict[str, Any] = {
         "reasoning_process": response.reasoning_content or "",
         "answer": response.content,
         "model": response.model,
         "usage": response.usage,
+        "timing": {
+            "elapsed_seconds": round(elapsed, 2),
+            "detail_level": detail_level,
+        },
     }
+
+    if reasoning_steps_list:
+        result["structured_steps"] = reasoning_steps_list
+
+    if output_format == "structured" and not reasoning_steps_list:
+        # Parse steps from answer content if thinking content not available
+        result["structured_steps"] = _extract_steps_from_answer(
+            response.content or ""
+        )
+
+    result["reasoning_metadata"] = {
+        "steps_requested": reasoning_steps,
+        "steps_extracted": len(result.get("structured_steps", [])),
+        "thinking_mode": bool(response.reasoning_content),
+        "output_format": output_format,
+    }
+
     return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Reasoning helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_reasoning_prompt(
+    question: str,
+    context: str,
+    detail_level: str,
+    reasoning_steps: int,
+    output_format: str,
+) -> str:
+    """Build a structured reasoning prompt for DeepSeek V4 Pro."""
+    if output_format == "freeform":
+        base = f"Please reason about the following: {question}"
+        if context:
+            base = f"Context: {context}\n\n{base}"
+        return base
+
+    steps_guide = "\n".join(
+        f"Step {i+1}: {_get_step_description(i, reasoning_steps)}"
+        for i in range(reasoning_steps)
+    )
+
+    detail_guide = {
+        "low": "Keep each step concise (1-2 sentences).",
+        "medium": "Provide moderate detail in each step (2-4 sentences).",
+        "high": "Be thorough. Explain assumptions, alternatives, and reasoning in each step.",
+    }
+
+    prompt = (
+        "You are an expert reasoning system. Analyze the following question "
+        f"step by step using exactly {reasoning_steps} reasoning steps.\n\n"
+        f"## Question\n{question}\n\n"
+    )
+
+    if context:
+        prompt += f"## Context\n{context}\n\n"
+
+    prompt += (
+        "## Reasoning Steps\n"
+        f"Follow these {reasoning_steps} steps:\n{steps_guide}\n\n"
+        f"## Style\n{detail_guide.get(detail_level, detail_guide['medium'])}\n\n"
+        "## Output Format\n"
+        "Return your answer in this exact format:\n"
+        "```\n"
+        "**Step 1: [title]**\n[content]\n\n"
+        "**Step 2: [title]**\n[content]\n\n"
+        "...\n\n"
+        "**Conclusion**\n[final answer]\n```"
+    )
+
+    return prompt
+
+
+def _get_step_description(step_index: int, total_steps: int) -> str:
+    """Get a description for each reasoning step."""
+    step_templates = [
+        "Problem restatement and goal clarification",
+        "Identify key constraints, assumptions, and known facts",
+        "Explore possible approaches and relevant knowledge",
+        "Develop a step-by-step solution or analysis",
+        "Evaluate the solution for correctness and edge cases",
+        "Consider alternatives and trade-offs",
+        "Synthesize findings into a coherent answer",
+        "Final verification and summary",
+    ]
+    return step_templates[step_index] if step_index < len(step_templates) else f"Reasoning step {step_index + 1}"
+
+
+def _extract_reasoning_steps(reasoning_content: str) -> list[dict[str, str]]:
+    """Extract structured reasoning steps from thinking content."""
+    steps: list[dict[str, str]] = []
+    lines = reasoning_content.split("\n")
+    current_step: dict[str, str] = {}
+
+    for line in lines:
+        stripped = line.strip()
+        # Match "Step N:" or "**Step N:**" patterns
+        if stripped.lower().startswith("step") and ":" in stripped[:15]:
+            if current_step and "content" in current_step:
+                steps.append(current_step)
+            title = stripped.split(":", 1)[-1].strip().strip("*").strip()
+            current_step = {"title": title or f"Step {len(steps) + 1}", "content": ""}
+        elif current_step:
+            if current_step["content"]:
+                current_step["content"] += "\n" + stripped
+            else:
+                current_step["content"] = stripped
+
+    if current_step and "content" in current_step:
+        steps.append(current_step)
+
+    return steps
+
+
+def _extract_steps_from_answer(answer: str) -> list[dict[str, str]]:
+    """Extract reasoning steps from answer content."""
+    steps: list[dict[str, str]] = []
+    import re
+
+    # Try to match markdown-style step headers
+    pattern = r"\*\*Step\s+(\d+):?\s*([^*]+)\*\*"
+    matches = list(re.finditer(pattern, answer))
+
+    if matches:
+        for i, match in enumerate(matches):
+            step_num = match.group(1)
+            title = match.group(2).strip()
+            # Get content between this step header and the next
+            start = match.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(answer)
+            content = answer[start:end].strip()
+            steps.append({
+                "title": f"Step {step_num}: {title}",
+                "content": content,
+            })
+    else:
+        # Fallback: split by numbered lists
+        parts = re.split(r"\n(?=\d+\.\s+|Step\s+\d+[\s:]+)", answer)
+        for part in parts:
+            if part.strip():
+                steps.append({
+                    "title": f"Step {len(steps) + 1}",
+                    "content": part.strip(),
+                })
+
+    return steps
 
 
 @tool(
