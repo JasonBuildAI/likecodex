@@ -158,3 +158,36 @@ class CheckpointManager:
             if isinstance(value, str) and value:
                 paths.append(value)
         return paths
+
+    def session_snapshot(self, session_id: str, session_events: list[dict]) -> str:
+        """Snapshot the session state alongside file checkpoints.
+
+        Saves session metadata to a JSON file in the checkpoints directory.
+        Returns the snapshot ID.
+        """
+        self._ensure()
+        snap_id = f"sess_{uuid.uuid4().hex[:12]}"
+        snap_path = self.root / "blobs" / f"{snap_id}_session.json"
+        data = {
+            "snapshot_id": snap_id,
+            "session_id": session_id,
+            "created_at": time.time(),
+            "event_count": len(session_events),
+            "events": session_events[-50:],  # keep last 50 events
+        }
+        snap_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return snap_id
+
+    def list_session_snapshots(self) -> list[dict]:
+        """List all session snapshots stored in checkpoints."""
+        blob_dir = self.root / "blobs"
+        if not blob_dir.exists():
+            return []
+        snapshots: list[dict] = []
+        for f in sorted(blob_dir.glob("*_session.json")):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                snapshots.append(data)
+            except (json.JSONDecodeError, OSError):
+                pass
+        return snapshots

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -199,6 +201,66 @@ class SessionStore:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+    def snapshot(self, session_id: str, label: str = "") -> str:
+        """Create a snapshot of the session at its current state.
+
+        Returns the snapshot session ID (snapshot_<original_id>_<ts>).
+        """
+        events = self.get_events(session_id)
+        metadata = self.get_session_metadata(session_id)
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        snap_id = f"snapshot_{session_id}_{ts}"
+
+        # Create snapshot session with original metadata + snapshot info
+        snap_metadata = {
+            **metadata,
+            "original_session": session_id,
+            "snapshot_label": label,
+            "snapshot_ts": ts,
+        }
+        self.create_session(snap_id, snap_metadata)
+
+        # Replicate all events
+        for event in events:
+            self.append_event(
+                snap_id,
+                SessionEvent(
+                    event_type=event.event_type,
+                    content=event.content,
+                    metadata=event.metadata,
+                ),
+            )
+        return snap_id
+
+    def fork_session(self, source_session_id: str, fork_metadata: dict[str, Any] | None = None) -> str:
+        """Fork a new session from an existing session's current state.
+
+        The new session copies all events from the source and can be
+        independently modified. Returns the new session ID.
+        """
+        events = self.get_events(source_session_id)
+        source_metadata = self.get_session_metadata(source_session_id)
+        fork_id = f"fork_{source_session_id}_{uuid.uuid4().hex[:8]}"
+
+        fork_meta = {
+            **source_metadata,
+            "forked_from": source_session_id,
+            "forked_at": datetime.now(UTC).isoformat(),
+            **(fork_metadata or {}),
+        }
+        self.create_session(fork_id, fork_meta)
+
+        for event in events:
+            self.append_event(
+                fork_id,
+                SessionEvent(
+                    event_type=event.event_type,
+                    content=event.content,
+                    metadata=event.metadata,
+                ),
+            )
+        return fork_id
 
     def update_session_summary(self, session_id: str, summary: str) -> None:
         """Update the summary for a session."""
