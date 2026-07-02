@@ -1,12 +1,16 @@
 /**
- * GhostTextManager — manages Monaco Editor inline completion (ghost text).
+ * GhostTextManager — manages Monaco Editor inline completion (ghost text)
+ * with Composer pending change preview (Phase 3.13).
  *
  * Features:
  * - Debounced completion requests after user stops typing
  * - Ghost text rendering via Monaco decorations (after.content)
  * - Tab to accept, Esc/click/continue-typing to cancel
+ * - Composer pending change preview at cursor position
  * - AbortController for request cancellation
  */
+
+import { useComposerStore } from '@/ide/composer/composerStore';
 
 type MonacoEditor = any;
 type MonacoNS = any;
@@ -16,6 +20,8 @@ interface GhostTextState {
   lineNumber: number;
   column: number;
   decorationIds: string[];
+  /** 'completion' for AI completion, 'preview' for composer change preview */
+  source: 'completion' | 'preview';
 }
 
 export class GhostTextManager {
@@ -28,10 +34,13 @@ export class GhostTextManager {
   private disposables: { dispose(): void }[] = [];
 
   private readonly DEBOUNCE_MS = 200;
-  private readonly TRIGGER_CHARS = /[a-zA-Z0-9_.)\]>}\s]/;
+  private readonly TRIGGER_CHARS = /[a-zA-Z0-9_.)\]}>\s]/;
   private readonly MAX_PREFIX_CHARS = 2000;
   private readonly MAX_SUFFIX_CHARS = 500;
   private requestSerial = 0;
+
+  // Composer preview state
+  private _pendingChanges: Map<string, string> = new Map();
 
   constructor(editor: MonacoEditor, monaco: MonacoNS) {
     this.editor = editor;
@@ -55,6 +64,15 @@ export class GhostTextManager {
       // Escape to cancel
       if (e.keyCode === this.monaco.KeyCode.Escape && this.currentGhost) {
         this.clearGhostText();
+      }
+      // Ctrl+Shift+Space to manually trigger composer preview
+      if (
+        e.keyCode === this.monaco.KeyCode.Space &&
+        e.ctrlKey &&
+        e.shiftKey
+      ) {
+        e.preventDefault();
+        this.showComposerPreview();
       }
     });
 
@@ -129,7 +147,7 @@ export class GhostTextManager {
           currentPos.lineNumber === position.lineNumber &&
           currentPos.column === position.column
         ) {
-          this.showGhostText(data.text, position);
+          this.showGhostText(data.text, position, 'completion');
         }
       }
     } catch (err) {
@@ -137,6 +155,129 @@ export class GhostTextManager {
       // Silent fail - don't disrupt user editing
     }
   }
+
+  // ============================================================
+  // Phase 3.13: Composer Pending Change Preview
+  // ============================================================
+
+  /**
+   * Load pending composer changes for the current file.
+   * Called when composer changes are updated.
+   */
+  loadComposerChanges(changes: Array<{ filePath: string; modifiedContent: string }>) {
+    this._pendingChanges.clear();
+    for (const c of changes) {
+      this._pendingChanges.set(c.filePath, c.modifiedContent);
+    }
+  }
+
+  /**
+   * Show preview of pending composer changes at cursor position.
+   * Shows a dimmed preview of the modified content for the current file.
+   */
+  showComposerPreview() {
+    const model = this.editor.getModel();
+    if (!model) return;
+
+    const filePath = model.uri?.path || model.uri?.toString() || '';
+    const pendingContent = this._pendingChanges.get(filePath);
+    if (!pendingContent) return;
+
+    const position = this.editor.getPosition();
+    if (!position) return;
+
+    // Get the current content
+    const currentContent = model.getValue();
+
+    // Find what's different from current content
+    if (currentContent === pendingContent) return;
+
+    const currentLines = currentContent.split('\n');
+    const pendingLines = pendingContent.split('\n');
+
+    // Get context around cursor for preview
+    const cursorLine = position.lineNumber;
+    const previewStart = Math.max(0, cursorLine - 3);
+    const previewEnd = Math.min(pendingLines.length, cursorLine + 5);
+
+    // Build preview text showing what will change
+    const previewLines: string[] = [];
+    let hasChange = false;
+
+    for (let i = previewStart; i < previewEnd; i++) {
+      const curLine = i < currentLines.length ? currentLines[i] : '';
+      const newLine = i < pendingLines.length ? pendingLines[i] : '';
+      if (curLine !== newLine) {
+        hasChange = true;
+        if (i < currentLines.length) {
+          previewLines.push(`- ${curLine}`);
+        }
+        previewLines.push(`+ ${newLine}`);
+      } else {
+        previewLines.push(`  ${newLine}`);
+      }
+    }
+
+    if (!hasChange) {
+      // Show the full line at cursor from pending content
+      const line = cursorLine <= pendingLines.length
+        ? pendingLines[cursorLine - 1]
+        : '';
+      if (line && line !== currentLines[cursorLine - 1]) {
+        this.showGhostText(`\n→ ${line}`, position, 'preview');
+      }
+      return;
+    }
+
+    this.showGhostText('\n' + previewLines.join('\n'), position, 'preview');
+  }
+
+  /**
+   * Check if there's a pending composer change for the current file.
+   */
+  hasPendingChange(): boolean {
+    const model = this.editor.getModel();
+    if (!model) return false;
+    const filePath = model.uri?.path || model.uri?.toString() || '';
+    return this._pendingChanges.has(filePath);
+  }
+
+  /**
+   * Get the pending change content for the current file.
+   */
+  getPendingContent(): string | undefined {
+    const model = this.editor.getModel();
+    if (!model) return undefined;
+    const filePath = model.uri?.path || model.uri?.toString() || '';
+    return this._pendingChanges.get(filePath);
+  }
+
+  /**
+   * Accept the pending composer change for the current file.
+   */
+  acceptPendingChange() {
+    const model = this.editor.getModel();
+    if (!model) return;
+
+    const filePath = model.uri?.path || model.uri?.toString() || '';
+    const pendingContent = this._pendingChanges.get(filePath);
+    if (!pendingContent) return;
+
+    // Replace entire file content with pending change
+    this.editor.executeEdits('composer-preview-accept', [
+      {
+        range: model.getFullModelRange(),
+        text: pendingContent,
+        forceMoveMarkers: true,
+      },
+    ]);
+
+    this.clearGhostText();
+  }
+
+  // ============================================================
+  // Core Ghost Text Methods
+  // ============================================================
 
   private collectContext(model: any, position: any) {
     const lineCount = model.getLineCount();
@@ -180,7 +321,7 @@ export class GhostTextManager {
     };
   }
 
-  private showGhostText(text: string, position: any) {
+  private showGhostText(text: string, position: any, source: 'completion' | 'preview' = 'completion') {
     this.clearGhostText();
 
     const range = new this.monaco.Range(
@@ -190,6 +331,9 @@ export class GhostTextManager {
       position.column
     );
 
+    // Use different styling for composer preview vs AI completion
+    const inlineClassName = source === 'preview' ? 'ghost-text-preview' : 'ghost-text';
+
     // Use inline decoration with `after` to show ghost text
     const decorations = this.editor.deltaDecorations([], [
       {
@@ -197,7 +341,7 @@ export class GhostTextManager {
         options: {
           after: {
             content: text,
-            inlineClassName: 'ghost-text',
+            inlineClassName,
             inlineClassNameAffectsLetterSpacing: true,
           },
         },
@@ -209,13 +353,21 @@ export class GhostTextManager {
       lineNumber: position.lineNumber,
       column: position.column,
       decorationIds: decorations,
+      source,
     };
   }
 
   private acceptGhostText() {
     if (!this.currentGhost) return;
 
-    const { text, lineNumber, column } = this.currentGhost;
+    const { text, lineNumber, column, source } = this.currentGhost;
+
+    // If it's a composer preview, accept the full pending change
+    if (source === 'preview') {
+      this.acceptPendingChange();
+      return;
+    }
+
     const model = this.editor.getModel();
     if (!model) return;
 
