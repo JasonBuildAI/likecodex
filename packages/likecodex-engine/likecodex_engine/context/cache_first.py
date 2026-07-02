@@ -47,8 +47,27 @@ class ImmutablePrefix:
             parts.append(f"## Project Memory\n{self.project_memories}")
         return "\n\n".join(parts)
 
+    @property
+    def static_content(self) -> str:
+        """Stable static prefix: system content only, no dynamic skills/memories."""
+        return self.system_content
+
+    @property
+    def dynamic_content(self) -> str:
+        """Dynamic parts that can change without invalidating the cache prefix."""
+        parts: list[str] = []
+        if self.skills_content:
+            parts.append(f"## Skills\n{self.skills_content}")
+        if self.project_memories:
+            parts.append(f"## Project Memory\n{self.project_memories}")
+        return "\n\n".join(parts)
+
     def hash(self) -> str:
         return hashlib.sha256(self.combined.encode("utf-8")).hexdigest()
+
+    def stable_hash(self) -> str:
+        """Hash only the static part for stable cache prefix identification."""
+        return hashlib.sha256(self.static_content.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -113,8 +132,22 @@ class CacheFirstContext:
     def prefix_hash(self) -> str:
         return self.prefix.hash()
 
-    def capture_prefix_shape(self, tool_schemas: list[dict[str, Any]]) -> PrefixShape:
-        return capture_prefix_shape(self.prefix.combined, tool_schemas, self.rewrite_version)
+    def stable_cache_prefix(self) -> str:
+        """Return only the static prefix content for stable cache key computation.
+
+        Dynamic parts (skills, project memories) are excluded so that
+        the cache prefix remains stable across context updates.
+        """
+        return self.prefix.static_content
+
+    def stable_prefix_hash(self) -> str:
+        """Hash of the stable (static-only) prefix for cache tracking."""
+        return self.prefix.stable_hash()
+
+    def capture_prefix_shape(self, tool_schemas: list[dict[str, Any]], stable: bool = False) -> PrefixShape:
+        """Capture prefix shape, optionally using only stable static content."""
+        content = self.prefix.static_content if stable else self.prefix.combined
+        return capture_prefix_shape(content, tool_schemas, self.rewrite_version)
 
     def set_skills_content(self, content: str) -> None:
         self.prefix.skills_content = content
