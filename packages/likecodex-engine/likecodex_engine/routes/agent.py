@@ -70,8 +70,43 @@ logger = logging.getLogger(__name__)
 
 
 async def health(request: web.Request) -> web.Response:
+    """Comprehensive health check endpoint.
+
+    Returns engine status, configuration summary, and cache metrics.
+    """
     metrics = global_cache_metrics().to_dict()
-    return web.json_response({"status": "ok", "provider": "deepseek", "cache": metrics})
+    config = request.app.get(APP_CONFIG, {})
+    return web.json_response({
+        "status": "ok",
+        "version": __import__("likecodex_engine").__version__,
+        "provider": config.get("provider", "deepseek"),
+        "model": config.get("model", "deepseek-v4-flash"),
+        "python": sys.version,
+        "uptime": time.time() - _START_TIME,
+        "cache": metrics,
+        "active_sessions": len(_ACTIVE_LOOPS),
+        "active_coordinators": len(_ACTIVE_COORDINATORS),
+    })
+
+
+async def liveness(request: web.Request) -> web.Response:
+    """Lightweight liveness probe for orchestration systems."""
+    return web.json_response({"status": "alive"})
+
+
+async def readiness(request: web.Request) -> web.Response:
+    """Readiness probe - indicates if the engine is ready to accept requests."""
+    config = request.app.get(APP_CONFIG, {})
+    api_key = config.get("api_key") or os.environ.get("LIKECODEX_LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
+    ready = bool(api_key)
+    return web.json_response({
+        "status": "ready" if ready else "not_ready",
+        "api_key_configured": bool(api_key),
+        "model": config.get("model", "unknown"),
+    })
+
+
+_ENGINE_START_TIME = time.time()
 
 
 async def metrics(request: web.Request) -> web.Response:
