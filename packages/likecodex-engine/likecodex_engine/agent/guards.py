@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -208,22 +210,77 @@ MAX_EMPTY_FINAL_BLOCKS = 3
 MAX_EXECUTOR_HANDOFF_NUDGES = 1
 
 
-@dataclass
 class ToolCircuitBreaker:
     """Sliding-window circuit breaker: disables a tool temporarily when failure rate exceeds threshold.
 
     Uses a sliding window of the last N calls to each tool. If the failure rate
     within that window exceeds the threshold, the tool is tripped and stays
     disabled for ``cooldown`` iterations before being allowed again.
+    State is persisted to SQLite for cross-session durability.
     """
 
-    window_size: int = 10
-    failure_threshold: float = 0.6  # 60 %
-    cooldown: int = 5
+    def __init__(
+        self,
+        window_size: int = 15,
+        failure_threshold: float = 0.5,
+        cooldown: int = 8,
+        db_path: str | None = None,
+    ) -> None:
+        self.window_size = window_size
+        self.failure_threshold = failure_threshold
+        self.cooldown = cooldown
+        self.db_path = db_path or os.path.join(
+            os.environ.get("LIKECODEX_HOME", os.path.expanduser("~/.likecodex")),
+            "circuit_breaker.db",
+        )
+        self._history: dict[str, list[bool]] = {}
+        self._disabled_until: dict[str, int] = {}
+        self._global_iteration: int = 0
+        self._load_from_db()
 
-    _history: dict[str, list[bool]] = field(default_factory=dict)
-    _disabled_until: dict[str, int] = field(default_factory=dict)
-    _global_iteration: int = 0
+    def _get_connection(self) -> sqlite3.Connection:
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS circuit_breaker ("
+            "   tool_name TEXT PRIMARY KEY,"
+            "   history TEXT NOT NULL,"
+            "   disabled_until INTEGER NOT NULL DEFAULT 0"
+            ")"
+        )
+        conn.commit()
+        return conn
+
+    def _load_from_db(self) -> None:
+        try:
+            conn = self._get_connection()
+            cursor = conn.execute("SELECT tool_name, history, disabled_until FROM circuit_breaker")
+            for row in cursor:
+                name, hist_str, disabled = row
+                self._history[name] = [
+                    bool(b) for b in json.loads(hist_str)
+                ] if hist_str else []
+                if disabled:
+                    self._disabled_until[name] = disabled
+            conn.close()
+        except Exception:
+            self._history = {}
+            self._disabled_until = {}
+
+    def _save_to_db(self, tool_name: str) -> None:
+        try:
+            conn = self._get_connection()
+            hist_json = json.dumps([bool(s) for s in self._history.get(tool_name, [])])
+            disabled = self._disabled_until.get(tool_name, 0)
+            conn.execute(
+                "INSERT OR REPLACE INTO circuit_breaker (tool_name, history, disabled_until)"
+                " VALUES (?, ?, ?)",
+                (tool_name, hist_json, disabled),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
     def record(self, tool_name: str, success: bool) -> None:
         """Record a tool execution result."""
@@ -232,25 +289,26 @@ class ToolCircuitBreaker:
         self._history[tool_name].append(success)
         if len(self._history[tool_name]) > self.window_size:
             self._history[tool_name].pop(0)
+        self._save_to_db(tool_name)
 
     def is_tripped(self, tool_name: str) -> bool:
         """Check if a tool is currently tripped (disabled by circuit breaker)."""
-        # Check cooldown
         if tool_name in self._disabled_until:
             if self._global_iteration < self._disabled_until[tool_name]:
                 return True
             else:
                 del self._disabled_until[tool_name]
-        
-        # Check failure rate within window
+                self._save_to_db(tool_name)
+
         history = self._history.get(tool_name, [])
         if len(history) < self.window_size // 2:
-            return False  # Not enough data to trip
-        
+            return False
+
         failures = sum(1 for s in history if not s)
         rate = failures / len(history)
         if rate >= self.failure_threshold:
             self._disabled_until[tool_name] = self._global_iteration + self.cooldown
+            self._save_to_db(tool_name)
             return True
         return False
 
@@ -263,6 +321,19 @@ class ToolCircuitBreaker:
 
     def next_iteration(self) -> None:
         self._global_iteration += 1
+
+    def clear_all(self) -> None:
+        """Reset all circuit breaker state."""
+        self._history.clear()
+        self._disabled_until.clear()
+        self._global_iteration = 0
+        try:
+            conn = self._get_connection()
+            conn.execute("DELETE FROM circuit_breaker")
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
 
 def has_visible_final_answer(text: str) -> bool:
