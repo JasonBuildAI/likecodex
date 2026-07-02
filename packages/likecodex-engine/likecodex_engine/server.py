@@ -876,6 +876,36 @@ async def toggle_plan_mode(request: web.Request) -> web.Response:
     return web.json_response({"error": "Plan mode not supported"}, status=400)
 
 
+async def set_agent_mode(request: web.Request) -> web.Response:
+    """Set agent mode and emit mode_changed SSE event."""
+    data = await request.json()
+    session_id = data.get("session_id", "")
+    mode = data.get("mode", "agent")
+    if mode not in ("agent", "ask", "manual", "plan"):
+        return web.json_response({"error": f"Invalid mode: {mode}"}, status=400)
+    loop = _resolve_loop(session_id)
+    if loop is None:
+        return web.json_response({"error": "Session not found"}, status=404)
+    old_mode = getattr(loop, "agent_mode", "")
+    loop.agent_mode = mode
+    # Emit mode_changed event to SSE clients
+    store = _session_store()
+    store.append_event(
+        session_id,
+        SessionEvent(
+            event_type="mode_changed",
+            content=json.dumps({"from": old_mode, "to": mode}),
+            metadata={"agent_mode": mode, "from_mode": old_mode, "to_mode": mode},
+        ),
+    )
+    return web.json_response({
+        "ok": True,
+        "session_id": session_id,
+        "mode": mode,
+        "from_mode": old_mode,
+    })
+
+
 async def compact_context(request: web.Request) -> web.Response:
     """Trigger context compaction for a session."""
     data = await request.json()
