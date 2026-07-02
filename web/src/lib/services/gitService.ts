@@ -87,3 +87,27 @@ export async function gitSearch(query: string): Promise<GitSearchResult[]> {
   const data = await resp.json();
   return data.results || [];
 }
+
+export async function gitPull(): Promise<{ success: boolean; output?: string; error?: string }> {
+  const resp = await fetchWithRetry('/api/ide/git/pull', { method: 'POST', headers: buildHeaders() }, 1, 30000);
+  if (!resp.ok) return { success: false, error: `HTTP ${resp.status}` };
+  return resp.json();
+}
+
+export async function gitPush(): Promise<{ success: boolean; output?: string; error?: string }> {
+  const resp = await fetchWithRetry('/api/ide/git/push', { method: 'POST', headers: buildHeaders() }, 1, 30000);
+  if (!resp.ok) return { success: false, error: `HTTP ${resp.status}` };
+  return resp.json();
+}
+
+export async function gitFetch(): Promise<{ success: boolean; output?: string; error?: string }> {
+  const resp = await fetchWithRetry('/api/ide/git/fetch', { method: 'POST', headers: buildHeaders() }, 1, 30000);
+  if (!resp.ok) return { success: false, error: `HTTP ${resp.status}` };
+  return resp.json();
+}
+
+export async function gitStash(action: string, message: string = ''): Promise<{ success: boolean; output?: string; error?: string }> {
+  const resp = await fetchWithRetry('/api/ide/git/stash', { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ action, message }) }, 1, 15000);
+  if (!resp.ok) return { success: false, error: `HTTP ${resp.status}` };
+  return resp.json();
+}

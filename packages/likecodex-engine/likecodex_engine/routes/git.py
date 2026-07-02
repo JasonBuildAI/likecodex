@@ -114,6 +114,38 @@ async def ide_git_search(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+async def ide_git_pull(request: web.Request) -> web.Response:
+    _, wd = _cfg_wd(request)
+    result = await _get_git_service(wd).git_pull()
+    return web.json_response(result)
+
+
+async def ide_git_push(request: web.Request) -> web.Response:
+    _, wd = _cfg_wd(request)
+    result = await _get_git_service(wd).git_push()
+    return web.json_response(result)
+
+
+async def ide_git_fetch(request: web.Request) -> web.Response:
+    _, wd = _cfg_wd(request)
+    result = await _get_git_service(wd).git_fetch()
+    return web.json_response(result)
+
+
+async def ide_git_stash(request: web.Request) -> web.Response:
+    _, wd = _cfg_wd(request)
+    data = await request.json()
+    action = data.get("action", "list")
+    message = data.get("message", "")
+    if action == "push":
+        result = await _get_git_service(wd).git_stash_push(message=message)
+    elif action == "pop":
+        result = await _get_git_service(wd).git_stash_pop()
+    else:
+        result = await _get_git_service(wd).git_stash_list()
+    return web.json_response(result)
+
+
 def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_get("/api/ide/git/status", ide_git_status)
     app.router.add_post("/api/ide/git/diff", ide_git_diff)
@@ -127,3 +159,7 @@ def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_post("/api/ide/git/create-branch", ide_git_create_branch)
     app.router.add_post("/api/ide/git/discard", ide_git_discard)
     app.router.add_get("/api/ide/git/search", ide_git_search)
+    app.router.add_post("/api/ide/git/pull", ide_git_pull)
+    app.router.add_post("/api/ide/git/push", ide_git_push)
+    app.router.add_post("/api/ide/git/fetch", ide_git_fetch)
+    app.router.add_post("/api/ide/git/stash", ide_git_stash)

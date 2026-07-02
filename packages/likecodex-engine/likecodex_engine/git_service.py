@@ -271,6 +271,39 @@ class GitService:
         code, _, err = await self._run_git("checkout", "--", path)
         return {"success": code == 0, "error": err if code != 0 else ""}
 
+    async def git_pull(self) -> dict[str, Any]:
+        """Pull latest changes from remote."""
+        code, out, err = await self._run_git("pull", "--ff-only")
+        return {"success": code == 0, "output": out, "error": err if code != 0 else ""}
+
+    async def git_push(self) -> dict[str, Any]:
+        """Push commits to remote."""
+        code, out, err = await self._run_git("push")
+        return {"success": code == 0, "output": out, "error": err if code != 0 else ""}
+
+    async def git_fetch(self) -> dict[str, Any]:
+        """Fetch latest from remote."""
+        code, out, err = await self._run_git("fetch", "--all")
+        return {"success": code == 0, "output": out, "error": err if code != 0 else ""}
+
+    async def git_stash_push(self, message: str = "") -> dict[str, Any]:
+        """Stash changes."""
+        args = ["stash", "push"]
+        if message:
+            args.extend(["-m", message])
+        code, out, err = await self._run_git(*args)
+        return {"success": code == 0, "output": out, "error": err if code != 0 else ""}
+
+    async def git_stash_pop(self) -> dict[str, Any]:
+        """Pop stashed changes."""
+        code, out, err = await self._run_git("stash", "pop")
+        return {"success": code == 0, "output": out, "error": err if code != 0 else ""}
+
+    async def git_stash_list(self) -> dict[str, Any]:
+        """List stashes."""
+        code, out, err = await self._run_git("stash", "list")
+        return {"success": code == 0, "output": out, "error": err if code != 0 else ""}
+
     async def search_files(self, query: str, file_pattern: str = "") -> dict[str, Any]:
         """Search file contents using grep (ripgrep fallback)."""
         args = ["grep", "-n", "-i", "--line-number"]

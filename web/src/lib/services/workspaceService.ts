@@ -49,6 +49,20 @@ export interface ContextMentionResult {
   token_estimate: number; relevance_score: number;
 }
 
+// ── File Symbols API (CodeGraph) ────────────────────────────────────────
+export interface FileSymbol {
+  name: string;
+  kind: string;
+  line: number;
+}
+
+export async function fetchFileSymbols(filePath: string): Promise<FileSymbol[]> {
+  const resp = await fetchWithRetry(`/api/ide/codegraph/symbols?path=${encodeURIComponent(filePath)}`);
+  if (!resp.ok) return [];
+  const data = await resp.json();
+  return (data.symbols || []) as FileSymbol[];
+}
+
 export async function fetchContextMentions(query: string): Promise<ContextMentionResult[]> {
   const resp = await fetchWithRetry(`/api/ide/context/search?q=${encodeURIComponent(query)}`, {}, 1, 5000);
   if (!resp.ok) return [];

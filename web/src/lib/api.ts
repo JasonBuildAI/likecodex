@@ -40,6 +40,10 @@ export {
   gitCreateBranch,
   gitDiscardChanges,
   gitSearch,
+  gitPull,
+  gitPush,
+  gitFetch,
+  gitStash,
   type GitChangeData,
   type GitStatusData,
   type GitCommitData,
@@ -92,4 +96,6 @@ export {
   type ContextMentionResult,
   type LSPDefinition,
   type LSPHover,
+  fetchFileSymbols,
+  type FileSymbol,
 } from './services/workspaceService';

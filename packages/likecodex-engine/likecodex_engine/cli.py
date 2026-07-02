@@ -1,4 +1,15 @@
-"""LikeCodex Python CLI - main entry point."""
+"""LikeCodex Python CLI - main entry point.
+
+Usage:
+    likecodex                              # Interactive chat mode (default)
+    likecodex "prompt text"                # One-shot task execution
+    likecodex --chat                       # Interactive chat mode
+    likecodex --web                        # Start engine and open Web UI
+    likecodex --mode agent "task"          # Agent mode
+    likecodex --model pro "complex task"   # Use pro model
+    echo "hello" | likecodex               # Stdin pipe support
+    likecodex "task" --json               # JSON output
+"""
 
 from __future__ import annotations
 
@@ -19,16 +30,25 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="likecodex",
         description="LikeCodex - DeepSeek V4 native AI coding assistant",
+        epilog=(
+            "Examples:\n"
+            "  likecodex                           Start interactive chat\n"
+            "  likecodex 'fix this bug'            One-shot task\n"
+            "  likecodex --mode agent 'refactor'   Agent mode\n"
+            "  echo 'hello' | likecodex           Stdin pipe\n"
+            "  likecodex --json 'task'             JSON output format"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "prompt",
         nargs="?",
-        help="Execute a one-shot task and exit",
+        help="Execute a one-shot task and exit (or pipe input via stdin)",
     )
     parser.add_argument(
         "--chat",
         action="store_true",
-        help="Start interactive chat mode",
+        help="Start interactive chat mode (default when no prompt given)",
     )
     parser.add_argument(
         "--web",
@@ -39,7 +59,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--port",
         type=int,
         default=int(os.environ.get("LIKECODEX_ENGINE_PORT", "9090")),
-        help="Engine HTTP port (default: 9090)",
+        help="Engine HTTP port (default: 9090, env: LIKECODEX_ENGINE_PORT)",
     )
     parser.add_argument(
         "--direct",
@@ -61,6 +81,30 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Show version and exit",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["ask", "agent", "manual"],
+        default=None,
+        help="Working mode: ask (prompt before actions), agent (autonomous), manual (step-by-step)",
+    )
+    parser.add_argument(
+        "--model",
+        choices=["flash", "pro"],
+        default=None,
+        help="Model selection: flash (fast/economical) or pro (more capable)",
+    )
+    parser.add_argument(
+        "--json",
+        dest="output_json",
+        action="store_true",
+        help="Output results in JSON format",
+    )
+    parser.add_argument(
+        "--plain",
+        dest="output_plain",
+        action="store_true",
+        help="Output results in plain text (no Rich formatting)",
+    )
     return parser.parse_args(argv)
 
 
@@ -73,30 +117,61 @@ def _check_engine_running(port: int) -> bool:
         return False
 
 
+def _read_stdin() -> str | None:
+    """Read prompt from stdin if piped (non-interactive)."""
+    if not sys.stdin.isatty():
+        try:
+            return sys.stdin.read().strip()
+        except Exception:
+            return None
+    return None
+
+
 def main() -> None:
     """Main CLI entry point (installed via pyproject.toml [project.scripts])."""
     args = _parse_args()
 
+    # ── Version ──
     if args.version:
         from likecodex_engine import __version__
 
         print(f"LikeCodex v{__version__}")
         sys.exit(0)
 
+    # ── Setup wizard ──
     if args.setup:
         from likecodex_engine.setup import interactive_setup
 
         asyncio.run(interactive_setup())
         return
 
+    # ── Doctor / diagnostics ──
     if args.doctor:
         from likecodex_engine.setup import run_doctor
 
         asyncio.run(run_doctor())
         return
 
-    if args.prompt:
-        _run_one_shot(args.prompt, args.port)
+    # ── Resolve prompt (from arg or stdin pipe) ──
+    prompt = args.prompt
+    if not prompt:
+        stdin_prompt = _read_stdin()
+        if stdin_prompt:
+            prompt = stdin_prompt
+
+    # ── Build runtime config with mode/model overrides ──
+    runtime_config = {}
+    if args.mode:
+        runtime_config["approval_mode"] = {
+            "ask": "ask",
+            "agent": "auto",
+            "manual": "manual",
+        }.get(args.mode, "auto")
+    if args.model:
+        runtime_config["model"] = f"deepseek-v4-{args.model}"
+
+    if prompt:
+        _run_one_shot(prompt, args.port, runtime_config, args.output_json, args.output_plain)
         return
 
     if args.web:
@@ -104,31 +179,107 @@ def main() -> None:
         return
 
     # Default: interactive chat
-    _run_chat(args.port)
+    _run_chat(args.port, args.output_plain)
 
 
-def _run_one_shot(prompt: str, port: int) -> None:
+def _run_one_shot(
+    prompt: str,
+    port: int,
+    config_override: dict | None = None,
+    output_json: bool = False,
+    output_plain: bool = False,
+) -> None:
     """Run a single prompt via the engine API and print the result."""
     import httpx
 
     if not _check_engine_running(port):
         _start_engine_in_background(port)
 
+    payload: dict = {"prompt": prompt, "session_id": "one-shot"}
+    if config_override:
+        payload.update(config_override)
+
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=None) as client:
-            response = client.post(
-                "/run",
-                json={"prompt": prompt, "session_id": "one-shot"},
-            )
+            response = client.post("/run", json=payload)
             result = response.json()
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+            if output_json:
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            else:
+                content = result.get("content", result.get("response", str(result)))
+                print(content)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
 
-def _run_chat(port: int) -> None:
+def _run_chat(port: int, output_plain: bool = False) -> None:
     """Interactive chat mode using the engine API."""
+    if output_plain:
+        _run_chat_plain(port)
+    else:
+        _run_chat_rich(port)
+
+
+def _run_chat_plain(port: int) -> None:
+    """Simple text-based interactive chat."""
+    if not _check_engine_running(port):
+        print("Engine not running. Starting...")
+        _start_engine_in_background(port)
+
+    session_id = _generate_session_id()
+    print("LikeCodex - DeepSeek V4 coding assistant")
+    print("Type 'exit' or 'quit' to end session.\n")
+
+    import httpx
+
+    with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=None) as client:
+        while True:
+            try:
+                user_input = input("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+
+            if not user_input:
+                continue
+            if user_input.lower() in ("exit", "quit"):
+                break
+
+            try:
+                with client.stream(
+                    "POST",
+                    "/chat",
+                    json={
+                        "prompt": user_input,
+                        "session_id": session_id,
+                        "stream": True,
+                    },
+                ) as response:
+                    for line in response.iter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            if data.get("type") == "delta" and data.get("content"):
+                                print(data["content"], end="", flush=True)
+                            elif data.get("type") == "message":
+                                print()
+                                print(data.get("content", ""))
+                        except json.JSONDecodeError:
+                            pass
+                    print()
+            except Exception as e:
+                print(f"Error: {e}", file=sys.stderr)
+                break
+
+
+def _run_chat_rich(port: int) -> None:
+    """Rich-formatted interactive chat using the engine API."""
     from rich.console import Console
     from rich.markdown import Markdown
 
@@ -159,7 +310,6 @@ def _run_chat(port: int) -> None:
             if user_input.lower() in ("exit", "quit"):
                 break
 
-            # Stream the response
             try:
                 with client.stream(
                     "POST",
@@ -211,7 +361,6 @@ def _run_web(port: int) -> None:
     console.print(f"[green]Opening Web UI at {url}[/green]")
     webbrowser.open(url)
 
-    # Keep running
     console.print("Press Ctrl+C to stop.")
     try:
         while True:
@@ -220,7 +369,7 @@ def _run_web(port: int) -> None:
         console.print("\nShutting down...")
 
 
-def _start_engine_in_background(port: int) -> None:
+def _start_engine_in_background(port: int) -> subprocess.Popen | None:
     """Start the Python engine as a subprocess."""
     engine_root = _find_engine_root()
     env = os.environ.copy()
@@ -245,7 +394,6 @@ def _start_engine_in_background(port: int) -> None:
 
 def _find_engine_root() -> str:
     """Find the project root directory (where pyproject.toml lives)."""
-    # Check env-based candidates first
     for candidate in (
         os.environ.get("LIKECODEX_ENGINE_ROOT"),
         os.environ.get("LIKECODEX_HOME"),
@@ -254,7 +402,6 @@ def _find_engine_root() -> str:
         if candidate and Path(candidate).joinpath("pyproject.toml").exists():
             return candidate
 
-    # Walk up from cwd
     cwd = Path.cwd()
     for parent in (cwd, *cwd.parents):
         if parent.joinpath("pyproject.toml").exists():
