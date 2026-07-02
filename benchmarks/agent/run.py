@@ -162,10 +162,133 @@ async def run_plan_window_scenario() -> dict:
         }
 
 
+# ---------------------------------------------------------------------------
+# SWE-bench inspired scenario definitions
+# ---------------------------------------------------------------------------
+SWE_BENCH_TASKS: list[tuple[str, list[LLMResponse]]] = [
+    (
+        "swe_parse_error",
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id="1", name="read_file", arguments={"path": "parser.py", "offset": 1, "limit": 50}),
+                ],
+            ),
+            LLMResponse(content="Found the parse error at line 42."),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="2",
+                        name="edit_file",
+                        arguments={"path": "parser.py", "old_string": "except:", "new_string": "except ValueError as e:"},
+                    ),
+                ],
+            ),
+            LLMResponse(content="Fixed the bare except clause."),
+        ],
+    ),
+    (
+        "swe_import_order",
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id="1", name="grep_files", arguments={"pattern": "^import", "include": "*.py", "max_results": 10}),
+                ],
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id="2", name="read_file", arguments={"path": "main.py", "offset": 1, "limit": 30}),
+                ],
+            ),
+            LLMResponse(content="Reordered imports per PEP8."),
+        ],
+    ),
+    (
+        "swe_type_error",
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id="1", name="read_file", arguments={"path": "utils.py", "offset": 1, "limit": 100}),
+                ],
+            ),
+            LLMResponse(content="Found Optional[str] vs str mismatch."),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="2",
+                        name="edit_file",
+                        arguments={"path": "utils.py", "old_string": "def get_name() -> str:", "new_string": "def get_name() -> Optional[str]:"},
+                    ),
+                ],
+            ),
+            LLMResponse(content="Fixed the type annotation."),
+        ],
+    ),
+    (
+        "swe_missing_import",
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id="1", name="grep_files", arguments={"pattern": "Path\\(", "include": "*.py", "max_results": 5}),
+                ],
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="2",
+                        name="edit_file",
+                        arguments={"path": "utils.py", "old_string": "from pathlib", "new_string": "from pathlib import Path"},
+                    ),
+                ],
+            ),
+            LLMResponse(content="Added missing import."),
+        ],
+    ),
+    (
+        "swe_logic_negation",
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id="1", name="read_file", arguments={"path": "validator.py", "offset": 1, "limit": 80}),
+                ],
+            ),
+            LLMResponse(content="Found inverted condition at line 55."),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="2",
+                        name="edit_file",
+                        arguments={"path": "validator.py", "old_string": "if not enabled and user.is_admin():", "new_string": "if enabled and user.is_admin():"},
+                    ),
+                ],
+            ),
+            LLMResponse(content="Fixed the logic negation bug."),
+        ],
+    ),
+]
+
+
+async def run_swe_scenario(name: str, responses: list[LLMResponse]) -> dict:
+    """Run a SWE-bench inspired scenario with the full agent loop."""
+    return await run_scenario(name, responses)
+
+
 async def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="LikeCodex agent performance benchmark (SWE-bench subset)")
     parser.add_argument("--output", default=str(DEFAULT_BASELINE))
     parser.add_argument("--check", action="store_true", help="Fail when results regress vs baseline")
+    parser.add_argument("--swe-bench", action="store_true", help="Include SWE-bench inspired scenarios")
+    parser.add_argument("--report", type=str, help="Path to write JSON benchmark report")
     args = parser.parse_args()
 
     scenarios = [
@@ -209,11 +332,36 @@ async def main() -> None:
     results = []
     for name, responses in scenarios:
         results.append(await run_scenario(name, responses, handoff=name == "handoff_guard"))
+
+    if args.swe_bench:
+        for name, responses in SWE_BENCH_TASKS:
+            results.append(await run_swe_scenario(name, responses))
+
     results.append(await run_compaction_scenario())
     results.append(await run_goal_scenario())
     results.append(await run_plan_window_scenario())
 
-    payload = {"results": results}
+    payload = {
+        "benchmark_version": "1.0",
+        "total_scenarios": len(results),
+        "results": results,
+    }
+
+    # Write JSON report if requested
+    if args.report:
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report = {
+            "metadata": {
+                "benchmark": "LikeCodex Agent Performance",
+                "version": "8.6",
+                "args": vars(args),
+            },
+            "scenarios": results,
+        }
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(f"Report written to {report_path}")
+
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
 

@@ -77,32 +77,33 @@ impl DockerExecutor {
         Ok(!output.stdout.is_empty())
     }
 
+    /// Build resource-limit and security-hardening Docker arguments.
     fn build_resource_args(&self) -> Vec<String> {
         let mut args = Vec::new();
 
-        // Memory limit
+        // Memory limit + disable swap
         if let Some(mem) = self.policy.memory_mb {
             args.push("--memory".to_string());
             args.push(format!("{mem}m"));
             args.push("--memory-swap".to_string());
-            args.push(format!("{mem}m")); // no swap
+            args.push(format!("{mem}m"));
         }
 
-        // CPU limit
+        // CPU cores limit
         if let Some(cpus) = self.policy.max_cpus {
             args.push("--cpus".to_string());
             args.push(cpus.to_string());
         }
 
-        // Process limit (prevents fork bombs)
+        // Process-limit (fork-bomb protection)
         args.push("--pids-limit".to_string());
         args.push("100".to_string());
 
-        // File descriptor limit
+        // File-descriptor limit
         args.push("--ulimit".to_string());
         args.push("nofile=1024:2048".to_string());
 
-        // Security: drop all capabilities
+        // Security hardening
         args.push("--security-opt".to_string());
         args.push("no-new-privileges:true".to_string());
         args.push("--cap-drop".to_string());
@@ -112,8 +113,10 @@ impl DockerExecutor {
         args.push("--cap-add".to_string());
         args.push("CHOWN".to_string());
 
-        // Read-only root filesystem
+        // Read-only root filesystem (tmpfs for /tmp)
         args.push("--read-only".to_string());
+        args.push("--tmpfs".to_string());
+        args.push("/tmp:noexec,nosuid,size=64m".to_string());
 
         args
     }
@@ -144,9 +147,8 @@ impl DockerExecutor {
         // Apply resource limits and security hardening
         docker_args.append(&mut self.build_resource_args());
 
-        // Mount the project directory. By default read-write for the workspace.
+        // Mount the project directory (read-write for workspace)
         let mount_path = working_dir.to_string_lossy().to_string();
-        // Use bind mount with correct quoting for path spaces
         let mount = format!("{}:/workspace", mount_path);
         docker_args.push("-v".to_string());
         docker_args.push(mount);
