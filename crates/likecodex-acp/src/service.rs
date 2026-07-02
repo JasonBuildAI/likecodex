@@ -396,7 +396,7 @@ impl AcpService {
             },
             auth_methods: None,
         })
-        .map_err(|e| RpcErrorBox::new(ERR_INTERNAL, e.to_string())))
+        .map_err(|e| RpcErrorBox::new(ERR_INTERNAL, e.to_string()))?)
     }
 
     pub async fn handle_authenticate(&self, _params: Value) -> Result<Value, RpcErrorBox> {
