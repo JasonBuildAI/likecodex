@@ -109,7 +109,7 @@ enum Commands {
     Config,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 enum SessionAction {
     List,
     Events { id: String },
