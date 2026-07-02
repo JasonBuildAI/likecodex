@@ -1,25 +1,15 @@
 'use client';
 
 /**
- * ComposerPanel — Multi-file AI editing panel.
+ * ComposerPanel — Multi-file AI editing panel with session management.
  *
- * Layout:
- * - Header with status indicator
- * - Message history (user + assistant messages)
- * - File change tabs + Diff preview (Phase 3.4: 变更预览区)
- * - Accept/Reject buttons
+ * Features:
+ * - Multi-session tabs for managing multiple conversations
+ * - Context file picker for selecting files to include
+ * - Message history with user/assistant messages
+ * - File change tabs + Diff preview
+ * - Accept/Reject buttons for file changes
  * - Input area with @ mention support
- *
- * ## 变更预览架构 (Phase 3.4)
- *
- * 文件变更以 tabs 形式展示，每个 tab 显示一个文件的 Diff.
- * 预览区自上而下分为三层:
- *   1. File Tabs       — 横向文件切换栏 (+/-/~ 图标标识变更类型)
- *   2. Diff Viewer     — 280px 的 inline diff 对比区
- *   3. Action Bar      — 接受/拒绝按钮 + 进度统计
- *
- * 变更状态机: null(待审) → true(已接受) / false(已拒绝)
- * 全部接受/拒绝通过 batches 提交到后端 write API.
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
@@ -28,6 +18,26 @@ import { useComposerStore, type FileChange } from './composerStore';
 import type { ContextMention } from '@/ide/context/types';
 import { MentionPicker } from '@/ide/context/MentionPicker';
 import { fetchContextMentions } from '@/lib/api';
+
+interface ComposerSession {
+  id: string;
+  label: string;
+  messages: ComposerMessage[];
+  timestamp: number;
+}
+
+interface ComposerMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  fileChanges?: string[];
+}
+
+interface ContextFile {
+  path: string;
+  selected: boolean;
+}
 
 export function ComposerPanel() {
   const {
@@ -56,6 +66,87 @@ export function ComposerPanel() {
   const [mentions, setMentions] = useState<ContextMention[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // ── Session management ────────────────────────────────────────────────
+  const [sessions, setSessions] = useState<ComposerSession[]>([
+    { id: 'default', label: 'Session 1', messages: [], timestamp: Date.now() },
+  ]);
+  const [activeSessionId, setActiveSessionId] = useState('default');
+  const [showNewSessionInput, setShowNewSessionInput] = useState(false);
+  const [newSessionLabel, setNewSessionLabel] = useState('');
+
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  const createSession = useCallback(() => {
+    const label = newSessionLabel.trim() || `Session ${sessions.length + 1}`;
+    const newSession: ComposerSession = {
+      id: `session-${Date.now()}`,
+      label,
+      messages: [],
+      timestamp: Date.now(),
+    };
+    setSessions((prev) => [...prev, newSession]);
+    setActiveSessionId(newSession.id);
+    setNewSessionLabel('');
+    setShowNewSessionInput(false);
+    clearComposer();
+  }, [newSessionLabel, sessions.length, clearComposer]);
+
+  const switchSession = useCallback((sessionId: string) => {
+    setActiveSessionId(sessionId);
+    clearComposer();
+  }, [clearComposer]);
+
+  const deleteSession = useCallback((sessionId: string) => {
+    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    if (activeSessionId === sessionId) {
+      const remaining = sessions.filter((s) => s.id !== sessionId);
+      if (remaining.length > 0) {
+        setActiveSessionId(remaining[0].id);
+      }
+    }
+  }, [activeSessionId, sessions]);
+
+  // ── Context file picker ───────────────────────────────────────────────
+  const [contextFiles, setContextFiles] = useState<ContextFile[]>([]);
+  const [showFilePicker, setShowFilePicker] = useState(false);
+  const [filePickerQuery, setFilePickerQuery] = useState('');
+
+  const loadContextFiles = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/workspace/tree?depth=2');
+      if (resp.ok) {
+        const data = await resp.json();
+        const files: ContextFile[] = [];
+        const collectFiles = (nodes: any[]) => {
+          for (const node of nodes) {
+            if (node.type === 'file') {
+              files.push({ path: node.path, selected: false });
+            }
+            if (node.children) collectFiles(node.children);
+          }
+        };
+        if (data.children) collectFiles(data.children);
+        setContextFiles(files);
+      }
+    } catch {
+      // Best-effort
+    }
+  }, []);
+
+  useEffect(() => {
+    if (showFilePicker && contextFiles.length === 0) {
+      loadContextFiles();
+    }
+  }, [showFilePicker, contextFiles.length, loadContextFiles]);
+
+  const toggleContextFile = useCallback((path: string) => {
+    setContextFiles((prev) =>
+      prev.map((f) => (f.path === path ? { ...f, selected: !f.selected } : f))
+    );
+  }, []);
+
+  const selectedContextFiles = contextFiles.filter((f) => f.selected);
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -95,7 +186,6 @@ export function ComposerPanel() {
           setShowMentions(true);
           setMentionQuery(query);
 
-          // Calculate position
           const textarea = e.target;
           const rect = textarea.getBoundingClientRect();
           setMentionPos({
@@ -136,7 +226,6 @@ export function ComposerPanel() {
   const handleSubmit = useCallback(() => {
     if (!input.trim() || status === 'planning' || status === 'executing') return;
 
-    // Parse @ mentions from input
     const mentionRegex = /@\[([^\]]+)\]\(([^)]+)\)/g;
     const parsedMentions: ContextMention[] = [];
     let match;
@@ -152,12 +241,26 @@ export function ComposerPanel() {
       });
     }
 
-    // Strip @ mention tags for display
+    // Add selected context files as mentions
+    for (const ctxFile of selectedContextFiles) {
+      if (!parsedMentions.find((m) => m.id === ctxFile.path)) {
+        parsedMentions.push({
+          id: ctxFile.path,
+          type: 'file',
+          label: ctxFile.path.split('/').pop() || ctxFile.path,
+          icon: '',
+          content: '',
+          tokenEstimate: 0,
+          relevanceScore: 0,
+        });
+      }
+    }
+
     const cleanInput = input.replace(/@\[([^\]]+)\]\(([^)]+)\)/g, '@$1');
 
     sendMessage(cleanInput, parsedMentions);
     setInput('');
-  }, [input, status, sendMessage]);
+  }, [input, status, sendMessage, selectedContextFiles]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -190,29 +293,99 @@ export function ComposerPanel() {
 
   return (
     <div className="w-[560px] h-full bg-[#1a1a2e] border-l border-gray-700 flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-700 shrink-0">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-white">Composer</h2>
-          <span className={`text-xs ${statusColor}`}>{statusText}</span>
+      {/* Header with session tabs */}
+      <div className="border-b border-gray-700 shrink-0">
+        {/* Session tabs */}
+        <div className="flex items-center overflow-x-auto bg-gray-800/30">
+          {sessions.map((session) => (
+            <div
+              key={session.id}
+              className={`flex items-center gap-1 px-2 py-1 cursor-pointer border-r border-gray-700 text-[11px] transition-colors ${
+                activeSessionId === session.id
+                  ? 'bg-gray-700 text-white border-t-2 border-t-blue-500'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+              }`}
+              onClick={() => switchSession(session.id)}
+            >
+              <span className="truncate max-w-[80px]">{session.label}</span>
+              {sessions.length > 1 && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteSession(session.id); }}
+                  className="text-gray-600 hover:text-red-400 ml-0.5"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+          <button
+            onClick={() => setShowNewSessionInput(!showNewSessionInput)}
+            className="px-2 py-1 text-gray-500 hover:text-white text-xs"
+            title="New Session"
+          >
+            +
+          </button>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={clearComposer}
-            className="text-xs text-gray-400 hover:text-white px-2 py-0.5 rounded hover:bg-gray-700"
-            title="清除对话"
-          >
-            Clear
-          </button>
-          <button
-            onClick={toggleComposer}
-            className="text-gray-400 hover:text-white text-lg leading-none px-1"
-            title="关闭 (Cmd+I)"
-          >
-            ×
-          </button>
+        {showNewSessionInput && (
+          <div className="px-2 py-1 bg-gray-800/50 border-b border-gray-700 flex gap-1">
+            <input
+              type="text"
+              value={newSessionLabel}
+              onChange={(e) => setNewSessionLabel(e.target.value)}
+              placeholder="Session name..."
+              className="flex-1 bg-gray-700 text-gray-200 text-[10px] border border-gray-600 rounded px-1.5 py-0.5 focus:outline-none focus:border-blue-500"
+              autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter') createSession(); }}
+            />
+            <button onClick={createSession} className="px-1.5 py-0.5 bg-blue-600 text-white text-[10px] rounded">OK</button>
+          </div>
+        )}
+
+        {/* Main header row */}
+        <div className="flex items-center justify-between px-4 py-2">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-white">Composer</h2>
+            <span className={`text-xs ${statusColor}`}>{statusText}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={clearComposer}
+              className="text-xs text-gray-400 hover:text-white px-2 py-0.5 rounded hover:bg-gray-700"
+              title="清除对话"
+            >
+              Clear
+            </button>
+            <button
+              onClick={toggleComposer}
+              className="text-gray-400 hover:text-white text-lg leading-none px-1"
+              title="关闭 (Cmd+I)"
+            >
+              ×
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Context file bar */}
+      {selectedContextFiles.length > 0 && (
+        <div className="px-3 py-1 border-b border-gray-700 bg-gray-800/30 flex items-center gap-1 flex-wrap">
+          <span className="text-[9px] text-gray-500 mr-1">Context:</span>
+          {selectedContextFiles.map((f) => (
+            <span
+              key={f.path}
+              className="text-[9px] px-1.5 py-0.5 bg-blue-900/30 text-blue-300 rounded-full flex items-center gap-1"
+            >
+              {f.path.split('/').pop()}
+              <button
+                onClick={() => toggleContextFile(f.path)}
+                className="text-blue-400 hover:text-blue-200"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Message History */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
@@ -264,18 +437,8 @@ export function ComposerPanel() {
           </div>
         )}
 
-        {/* ============================================================
-       * Phase 3.4: Composer 变更预览区
-       *
-       * 三层结构:
-       *   1. File Tabs: 水平文件标签栏, 以 ~/ +/- 图标区分变更类型
-       *      点击切换 activeChangePath, 带绿色/红色边框标记接受/拒绝状态
-       *   2. Diff Viewer: 280px 横向分割 diff 视图
-       *      通过 DiffViewer 组件展示 originalContent vs modifiedContent
-       *      每个 diff 带独立 Accept/Reject 按钮
-       *   3. Action Bar: 全部接受/全部拒绝 + 进度统计 (accepted/total)
-       * ============================================================ */
-      {changesArray.length > 0 && (
+        {/* Diff preview for file changes */}
+        {changesArray.length > 0 && (
           <div className="border border-gray-700 rounded-lg overflow-hidden mt-3">
             {/* File tabs */}
             <div className="flex border-b border-gray-700 overflow-x-auto bg-gray-800/50">
@@ -302,7 +465,7 @@ export function ComposerPanel() {
             </div>
 
             {/* Diff content */}
-            <div className="h-[280px] bg-[#1e1e2e]">
+            <div className="h-[320px] bg-[#1e1e2e]">
               {activeChange && (
                 <DiffViewer
                   oldText={activeChange.originalContent}
@@ -353,6 +516,55 @@ export function ComposerPanel() {
 
       {/* Input Area */}
       <div className="border-t border-gray-700 p-3 shrink-0 relative">
+        {/* Context file picker button */}
+        <div className="flex items-center gap-2 mb-2">
+          <button
+            onClick={() => setShowFilePicker(!showFilePicker)}
+            className={`text-[10px] px-2 py-0.5 rounded transition-colors ${
+              showFilePicker || selectedContextFiles.length > 0
+                ? 'bg-blue-600/30 text-blue-300 border border-blue-600/50'
+                : 'bg-gray-700 text-gray-400 border border-gray-600 hover:bg-gray-600'
+            }`}
+          >
+            📎 Context ({selectedContextFiles.length})
+          </button>
+        </div>
+
+        {/* File picker dropdown */}
+        {showFilePicker && (
+          <div className="absolute bottom-full left-0 right-0 mx-3 mb-2 max-h-[200px] bg-gray-800 border border-gray-700 rounded-lg overflow-hidden shadow-xl z-10">
+            <div className="px-2 py-1 border-b border-gray-700">
+              <input
+                type="text"
+                value={filePickerQuery}
+                onChange={(e) => setFilePickerQuery(e.target.value)}
+                placeholder="Filter files..."
+                className="w-full bg-gray-700 text-gray-200 text-[10px] border border-gray-600 rounded px-1.5 py-0.5 focus:outline-none focus:border-blue-500"
+                autoFocus
+              />
+            </div>
+            <div className="overflow-y-auto max-h-[160px]">
+              {contextFiles
+                .filter((f) => !filePickerQuery || f.path.toLowerCase().includes(filePickerQuery.toLowerCase()))
+                .slice(0, 50)
+                .map((f) => (
+                  <label
+                    key={f.path}
+                    className="flex items-center gap-2 px-2 py-1 hover:bg-gray-700/50 cursor-pointer text-[10px]"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={f.selected}
+                      onChange={() => toggleContextFile(f.path)}
+                      className="accent-blue-500"
+                    />
+                    <span className="text-gray-300 truncate">{f.path}</span>
+                  </label>
+                ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex gap-2">
           <textarea
             ref={textareaRef}
