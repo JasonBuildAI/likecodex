@@ -8,15 +8,16 @@ use likecodex_acp::server::Conn;
 use likecodex_acp::service::{AcpService, SessionStore};
 use likecodex_core::config::Config;
 use likecodex_core::events::EventBus;
+use std::io::stdout;
 use std::sync::Arc;
-use tokio::io::{stdin, stdout};
+use tokio::io::stdin;
 use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().with_env_filter(
-        tracing_subscriber::EnvFilter::from_default_env(),
-    ).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
 
     let config = Config::load().unwrap_or_else(|e| {
         warn!(error = %e, "failed to load config, using defaults");
@@ -36,13 +37,9 @@ async fn main() -> anyhow::Result<()> {
     let store = SessionStore::new(&SessionStore::default_path())
         .map_err(|e| anyhow::anyhow!("failed to open session store: {e}"))?;
 
-    let service = Arc::new(AcpService::new(
-        engine_url.clone(),
-        config,
-        event_bus.clone(),
-        Some(store),
-    )
-    .await);
+    let service = Arc::new(
+        AcpService::new(engine_url.clone(), config, event_bus.clone(), Some(store)).await,
+    );
 
     // Health check
     if let Err(e) = service.factory().health_check().await {
@@ -60,10 +57,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "initialize",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_initialize(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_initialize(params).await }
+                })
+            }),
         )
         .await;
     }
@@ -73,10 +72,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "authenticate",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_authenticate(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_authenticate(params).await }
+                })
+            }),
         )
         .await;
     }
@@ -86,10 +87,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "session/new",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_session_new(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_session_new(params).await }
+                })
+            }),
         )
         .await;
     }
@@ -99,10 +102,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "session/load",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_session_load(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_session_load(params).await }
+                })
+            }),
         )
         .await;
     }
@@ -112,10 +117,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "session/resume",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_session_resume(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_session_resume(params).await }
+                })
+            }),
         )
         .await;
     }
@@ -125,10 +132,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "session/prompt",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_session_prompt(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_session_prompt(params).await }
+                })
+            }),
         )
         .await;
     }
@@ -138,10 +147,14 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle_notify(
             "session/cancel",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { let _ = svc.handle_session_cancel(params).await; }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move {
+                        let _ = svc.handle_session_cancel(params).await;
+                    }
+                })
+            }),
         )
         .await;
     }
@@ -151,10 +164,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "session/set_config_option",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_session_set_config_option(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_session_set_config_option(params).await }
+                })
+            }),
         )
         .await;
     }
@@ -164,10 +179,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "session/set_model",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_session_set_model(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_session_set_model(params).await }
+                })
+            }),
         )
         .await;
     }
@@ -177,10 +194,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "session/list",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_session_list(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_session_list(params).await }
+                })
+            }),
         )
         .await;
     }
@@ -190,10 +209,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "session/close",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_session_close(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_session_close(params).await }
+                })
+            }),
         )
         .await;
     }
@@ -203,10 +224,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "session/delete",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_session_delete(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_session_delete(params).await }
+                })
+            }),
         )
         .await;
     }
@@ -216,10 +239,12 @@ async fn main() -> anyhow::Result<()> {
         let svc = service.clone();
         conn.handle(
             "session/request_permission",
-            Arc::new(move |params| Box::pin({
-                let svc = svc.clone();
-                async move { svc.handle_request_permission(params).await }
-            })),
+            Arc::new(move |params| {
+                Box::pin({
+                    let svc = svc.clone();
+                    async move { svc.handle_request_permission(params).await }
+                })
+            }),
         )
         .await;
     }

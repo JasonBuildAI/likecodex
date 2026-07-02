@@ -52,6 +52,7 @@ from likecodex_engine.routes._shared import (
     _SESSION_STORE,
     _DEEPSEEK_TOOLS_REGISTERED,
     _VISION_TOOLS_REGISTERED,
+    _VISION_TOOLS_REGISTERED,
     _RESOLVED_CONFIG_CACHE,
     _RESOLVED_CONFIG_KEYS,
     _make_sse_response,
@@ -953,5 +954,6 @@ def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_post("/resume", resume_session)
     app.router.add_post("/sessions/delete", delete_session)
     app.router.add_post("/agent/mode", set_agent_mode)
+
 
 
