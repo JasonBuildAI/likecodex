@@ -4,6 +4,18 @@ import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore, type Toast } from '@/lib/store';
 
+// ── Unified Notification System ──────────────────────────────────────
+// Phase 5.15: All user-facing notifications flow through this single system.
+//
+// Current: ToastContainer handles in-app toasts (top-right corner).
+// TODO: Add notification center panel with history (view all past notifications)
+// TODO: Add sound/vibration for critical notifications (errors, approvals)
+// TODO: Add desktop/browser notification support (Notification API)
+// TODO: Add notification grouping (batch multiple toasts into one group)
+// TODO: Add persistent notifications that require user action (not auto-dismiss)
+// TODO: Add notification categories with per-type auto-dismiss durations
+// TODO: Add notification action buttons (e.g., "Undo" on file change)
+
 function ToastItem({
   toast,
   onRemove,
