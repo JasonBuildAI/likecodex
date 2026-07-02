@@ -90,7 +90,7 @@ export const EmbeddedAgentView = memo(function EmbeddedAgentView() {
     [handleSend]
   );
 
-  const isCompact = viewMode === 'compact';
+  const isCompact = viewMode === 'chat';
 
   return (
     <div
@@ -124,11 +124,11 @@ export const EmbeddedAgentView = memo(function EmbeddedAgentView() {
 
         {/* View mode toggle */}
         <button
-          onClick={() => setViewMode(viewMode === 'full' ? 'embedded' : 'full')}
-          title={`Switch to ${viewMode === 'full' ? 'embedded' : 'full'} view`}
+          onClick={() => setViewMode(viewMode === 'agent' ? 'chat' : 'agent')}
+          title={`Switch to ${viewMode === 'agent' ? 'chat' : 'agent'} view`}
           className="text-[9px] text-muted hover:text-foreground px-1.5 py-0.5 rounded hover:bg-accent/10 transition-colors"
         >
-          {viewMode === 'full' ? '◧' : '◨'}
+          {viewMode === 'agent' ? '◧' : '◨'}
         </button>
       </div>
 
