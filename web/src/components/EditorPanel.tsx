@@ -160,6 +160,20 @@ export function EditorPanel() {
 
   // Keyboard shortcut: Ctrl+S to save
   // Stable handler: reads latest values via refs to avoid unbind/rebind cycle
+  //
+  // ── Shortcut conflict resolution notes ──
+  // 1. Ctrl+K registered via Monaco editor.addAction() — only fires when editor is focused
+  // 2. Ctrl+K also used by CommandPalette in page.tsx — guarded by isInput check
+  // 3. Ctrl+Shift+K for quick edit — no overlap with other shortcuts
+  // 4. Escape closes inline edit before panel — checks inlineEditVisibleRef
+  // 5. Ctrl+Enter for send — only in textarea (handled by page.tsx handleKeyDown)
+  // 6. Ctrl+B for sidebar — global, gated by isInput check
+  // 7. Ctrl+N for new session — global, gated by !isInput
+  // 8. Ctrl+S for save — overrides browser save dialog, only when editor file modified
+  // 9. Ctrl+P — CommandPalette in page.tsx only captures Ctrl+P, not Ctrl+K
+  // 10. Ctrl+Shift+P opens IDE settings — no conflict
+  // Potential remaining conflict: Ctrl+K when textarea is focused opens command palette (page.tsx)
+  // vs Ctrl+K in editor triggers inline edit — this is correct since they're different contexts.
   const handleKeyDown = useCallback(
     async (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
