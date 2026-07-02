@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { motion, HTMLMotionProps } from 'framer-motion';
+import { cn } from '@/lib/utils';
 
 interface InputProps extends Omit<HTMLMotionProps<'input'>, 'size'> {
   size?: 'sm' | 'md' | 'lg';
@@ -25,10 +26,14 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     className = '',
     ...props 
   }, ref) => {
-    const baseStyles = 'w-full bg-surface border transition-all duration-fast focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed';
-    const normalBorder = 'border-border focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20';
-    const errorBorder = 'border-red-500 focus:border-red-500 focus:ring-2 focus:ring-red-500/20';
-    const combinedStyles = `${baseStyles} ${error ? errorBorder : normalBorder} ${sizeStyles[size]} ${className}`;
+    const combinedStyles = cn(
+      'w-full bg-surface border transition-all duration-fast focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed',
+      error
+        ? 'border-red-500 focus:border-red-500 focus:ring-2 focus:ring-red-500/20'
+        : 'border-border focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20',
+      sizeStyles[size],
+      className
+    );
 
     return (
       <div className="relative">

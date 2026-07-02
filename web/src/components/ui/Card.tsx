@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { motion, HTMLMotionProps } from 'framer-motion';
+import { cn } from '@/lib/utils';
 
 interface CardProps extends HTMLMotionProps<'div'> {
   variant?: 'default' | 'elevated' | 'outlined';
@@ -31,9 +32,13 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
     className = '',
     ...props 
   }, ref) => {
-    const baseStyles = 'rounded-xl transition-all duration-fast';
-    const hoverStyles = hoverable ? 'hover:shadow-xl hover:border-primary-500/50 hover:-translate-y-1' : '';
-    const combinedStyles = `${baseStyles} ${variantStyles[variant]} ${paddingStyles[padding]} ${hoverStyles} ${className}`;
+    const combinedStyles = cn(
+      'rounded-xl transition-all duration-fast',
+      variantStyles[variant],
+      paddingStyles[padding],
+      hoverable && 'hover:shadow-xl hover:border-primary-500/50 hover:-translate-y-1',
+      className
+    );
 
     return (
       <motion.div
@@ -55,7 +60,7 @@ export const CardHeader = React.forwardRef<HTMLDivElement, HTMLMotionProps<'div'
   ({ children, className = '', ...props }, ref) => (
     <motion.div
       ref={ref}
-      className={`mb-4 ${className}`}
+      className={cn('mb-4', className)}
       {...props}
     >
       {children}
@@ -69,7 +74,7 @@ export const CardTitle = React.forwardRef<HTMLHeadingElement, HTMLMotionProps<'h
   ({ children, className = '', ...props }, ref) => (
     <motion.h3
       ref={ref}
-      className={`text-base font-semibold text-foreground ${className}`}
+      className={cn('text-base font-semibold text-foreground', className)}
       {...props}
     >
       {children}
@@ -83,7 +88,7 @@ export const CardDescription = React.forwardRef<HTMLParagraphElement, HTMLMotion
   ({ children, className = '', ...props }, ref) => (
     <motion.p
       ref={ref}
-      className={`text-sm text-muted mt-1 ${className}`}
+      className={cn('text-sm text-muted mt-1', className)}
       {...props}
     >
       {children}
@@ -97,7 +102,7 @@ export const CardContent = React.forwardRef<HTMLDivElement, HTMLMotionProps<'div
   ({ children, className = '', ...props }, ref) => (
     <motion.div
       ref={ref}
-      className={`${className}`}
+      className={cn(className)}
       {...props}
     >
       {children}
@@ -111,7 +116,7 @@ export const CardFooter = React.forwardRef<HTMLDivElement, HTMLMotionProps<'div'
   ({ children, className = '', ...props }, ref) => (
     <motion.div
       ref={ref}
-      className={`mt-4 pt-4 border-t border-border ${className}`}
+      className={cn('mt-4 pt-4 border-t border-border', className)}
       {...props}
     >
       {children}

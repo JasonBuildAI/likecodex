@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { motion, HTMLMotionProps } from 'framer-motion';
+import { cn } from '@/lib/utils';
 
 type BadgeVariant = 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger' | 'outline';
 type BadgeSize = 'sm' | 'md' | 'lg';
@@ -37,8 +38,12 @@ export const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(
     className = '',
     ...props 
   }, ref) => {
-    const baseStyles = 'inline-flex items-center gap-1.5 font-medium transition-all duration-fast';
-    const combinedStyles = `${baseStyles} ${variantStyles[variant]} ${sizeStyles[size]} ${className}`;
+    const combinedStyles = cn(
+      'inline-flex items-center gap-1.5 font-medium transition-all duration-fast',
+      variantStyles[variant],
+      sizeStyles[size],
+      className
+    );
 
     return (
       <motion.span
