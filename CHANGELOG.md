@@ -9,6 +9,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 🏗️ Architecture Simplification (Phase 0)
+- Restructured crates from monolith to focused modules (core, cli, server, executor, sandbox, indexer, acp)
+- Separated Rust control plane from Python agent engine
+- Introduced workspace-level dependency management in Cargo.toml
+- Simplified build pipeline with unified `cargo build --workspace`
+
+#### 🤖 Multi-Model Support (Phase 1A)
+- **Anthropic Claude**: Full integration with Claude 3 Opus/Sonnet/Haiku support
+- **Google Gemini**: Native Gemini 1.5 Pro/Flash provider with thinking mode
+- **Ollama Local Models**: Support for locally-hosted models via Ollama API
+- **Unified LLM interface**: Abstract `LLMProvider` with factory pattern for provider selection
+- **Dynamic model switching**: Switch provider/model mid-session without restart
+- **Per-provider rate limiting & retry logic** with configurable backoff
+- **Model fallback chain**: Automatic fallback to backup providers on failure
+
+#### 📝 Agent Definition System (Phase 1B)
+- `AGENTS.md` — declarative agent specification with name, model, instructions, tools, env
+- `.likecodex/rules/` — per-agent rule files loaded into system prompt
+- **Agent routing**: Route tasks to specialized agents based on intent matching
+- **Agent inheritance**: `extends` keyword for composing agent configs
+- **Runtime agent switching**: Switch active agent mid-conversation
+
+#### ⚡ Agent Loop Optimization (Phase 1D)
+- **Parallel tool dispatch**: Optimized read-only tools execute concurrently in batches
+- **Early exit on definitive output**: Stop loop when sufficient evidence gathered
+- **Smart retry with exponential backoff**: Automatic retry for transient LLM failures
+- **Tool result deduplication**: Cache identical tool results across turns
+- **Reduced overhead**: Optimized context window management and token counting
+- **Streaming-first loop**: LLM streaming integrated into agent loop for lower latency
+
+#### 🛠️ Advanced Tools (Phase 1E)
+- **GitHub Integration**: `github_create_pr`, `github_review_pr`, `github_add_pr_comment`, `github_create_issue`, `github_list_prs`, `github_list_issues`
+- **Database Tools**: `db_query`, `db_schema`, `db_explain`, `db_list_tables` with MySQL/PostgreSQL/SQLite support
+- **Network Diagnostics**: `net_ping`, `net_dns_lookup`, `net_traceroute`, `net_port_scan`
+- **Performance Profiling**: `profile_cpu`, `profile_memory`, `profile_io`
+- **Log Analysis**: `log_analyze`, `log_tail`, `log_grep`, `log_error_summary`
+- **API Testing**: `api_http_request`, `api_websocket_test` with response validation
+
+#### 💬 Session Management (Phase 1F)
+- **Session sharing**: Export/import sessions as portable JSON files
+- **Session branching**: Fork from any checkpoint mid-session
+- **Session metadata**: Title, tags, description, model info persisted per session
+- **Session search**: Full-text search across all saved sessions
+- **Session comparison**: Side-by-side diff viewer for comparing sessions
+- **Auto-context recovery**: Rebuild working context from session on reconnection
+
+#### 🎨 Frontend Refactoring (Phase 2)
+- **Modular component architecture**: Restructured into atomic component tree
+- **Drag-and-drop panel system**: Customizable workspace layout
+- **Enhanced keyboard shortcuts**: Comprehensive shortcut system with cheat sheet
+- **Notification center**: Unified notification system for events and alerts
+- **Dark/Light theme overhaul**: Complete theme system with CSS variables
+- **Streaming UI optimizations**: Real-time streaming rendering for tool calls
+- **Responsive design**: Full mobile/tablet responsive layout
+- **Accessibility (a11y)**: WCAG 2.1 AA compliance, screen reader support
+
+#### 📁 IDE-FS Crate (Phase 3A)
+- `likecodex-ide-fs` — New Rust crate for filesystem abstraction
+- **Virtual filesystem overlay**: Project file snapshot with virtual representation
+- **File watcher**: Real-time file change monitoring via `notify` crate
+- **Git-aware operations**: Respects `.gitignore` and git-tracked status
+- **Large file handling**: Streaming reads for files >10MB with truncation
+- **Encoding detection**: Automatic UTF-8/UTF-16/GBK/GB18030 detection
+
+#### 🔧 Server Refactoring (Phase 3B)
+- **Modular route organization**: Axum router with grouped endpoint modules
+- **Middleware pipeline**: Standardized auth, logging, rate-limiting middleware
+- **WebSocket support**: Real-time bidirectional communication alongside SSE
+- **Health check endpoints**: `/health`, `/ready`, `/live` probes for k8s
+- **Graceful shutdown**: SIGTERM/SIGINT handling with in-flight request drain
+- **Metrics overhaul**: Prometheus metrics for request latency, error rates, LLM usage
+
+#### 🖥️ Desktop Enhancement (Phase 3D)
+- **System tray integration**: Minimize to tray with quick actions menu
+- **Multi-window support**: Detach chat panels into separate windows
+- **Auto-update**: Tauri updater integration with release channel selection
+- **Native notifications**: OS-native notification on task completion
+- **Custom titlebar**: Frameless window with custom titlebar and native feel
+- **Touch bar support**: macOS Touch Bar shortcuts for common actions
+
+#### 🚀 ACP/CLI Enhancements
+- **ACP v1.1 protocol**: Extended Agent Client Protocol with streaming tool calls
+- **ACP over WebSocket**: Bidirectional streaming ACP transport
+- **CLI output formats**: JSON, JSONL, NDJSON output modes for scripting
+- **CLI pipeline mode**: `likecodex --pipe` for Unix pipe integration
+- **CLI session attach**: `likecodex attach <session-id>` to join running sessions
+- **ACP editor integrations**: VS Code extension manifest, Zed extension stub
+
+---
+
+### Added
+
 - **Reasonix parity — core coding-agent capabilities** (DeepSeek V4 only):
   - New built-in tools: `ls`, `glob`, `move_file`, `multi_edit`, `delete_range`, `delete_symbol`, `web_fetch` (SSRF-protected), `todo_write`, `notebook_edit`, and background jobs (`bgjobs`)
   - **Non-UTF-8 encoding support**: read/edit/write detect and preserve UTF-8/UTF-16/GBK/GB18030 (CJK Windows round-trip safe)
