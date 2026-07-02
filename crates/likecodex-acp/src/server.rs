@@ -3,7 +3,6 @@
 //! Handles stdin/stdout connection management, request/response
 //! pairing, and notification dispatch for the ACP protocol.
 
-use crate::protocol::RpcResponse;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -53,7 +52,7 @@ pub struct Conn {
 impl Conn {
     /// Create a new connection from reader/writer pair.
     pub fn new(
-        reader: Box<dyn std::io::Read + Send>,
+        _reader: Box<dyn std::io::Read + Send>,
         writer: Box<dyn Write + Send>,
     ) -> Self {
         Self {
