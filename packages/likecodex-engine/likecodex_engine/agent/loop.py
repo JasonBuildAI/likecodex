@@ -676,6 +676,24 @@ class AgentLoop:
             )
             return
 
+        # Manual mode: emit suggested_command for each tool call
+        if self.agent_mode == "manual" and tool_call.name not in ("ask", "complete_step", "todo_write"):
+            yield self._emit(
+                LLMResponse(
+                    content=json.dumps({
+                        "tool_name": tool_call.name,
+                        "arguments": tool_call.arguments,
+                        "mode": "manual",
+                    }),
+                    model="system",
+                    event_type="suggested_command",
+                    metadata={
+                        "tool_name": tool_call.name,
+                        "arguments": stable_json_dumps(tool_call.arguments),
+                    },
+                )
+            )
+
         if tool_call.name == "ask":
             async for resp in self._handle_ask_tool(tool_call):
                 yield resp
