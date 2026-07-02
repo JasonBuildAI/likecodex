@@ -6,10 +6,136 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import sys
 import uuid
 from pathlib import Path
 from typing import Any
+
+
+# ── Rust executor fallback detection ──────────────────────────
+
+
+def _find_rust_executor() -> str | None:
+    """Detect if the Rust CLI executor (likecodex-server) is available.
+
+    Checks:
+    1. likecodex in PATH (Rust binary)
+    2. likecodex-server.exe in common locations
+    3. cargo-built binary in workspace target directory
+
+    Returns:
+        Path to the Rust executor binary, or None if not found.
+    """
+    # Check PATH
+    rust_binary = shutil.which("likecodex")
+    if rust_binary:
+        return rust_binary
+
+    # Check common install locations
+    home = Path.home()
+    candidates = [
+        home / ".cargo" / "bin" / "likecodex.exe",
+        home / ".cargo" / "bin" / "likecodex",
+        home / ".likecodex" / "install" / "target" / "debug" / "likecodex-server.exe",
+        home / ".likecodex" / "install" / "target" / "release" / "likecodex-server.exe",
+    ]
+    if sys.platform != "win32":
+        candidates = [p.with_suffix("") for p in candidates]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    # Check workspace target directory
+    try:
+        cwd = Path.cwd()
+        for parent in (cwd, *cwd.parents):
+            target_dir = parent / "target"
+            if target_dir.exists():
+                for sub in ("debug", "release"):
+                    binary = target_dir / sub / "likecodex-server"
+                    if sys.platform == "win32":
+                        binary = binary.with_suffix(".exe")
+                    if binary.exists():
+                        return str(binary)
+    except Exception:
+        pass
+
+    return None
+
+
+def rust_executor_available() -> bool:
+    """Check if the Rust executor is available for shell operations.
+
+    Returns True if the Rust CLI binary is found, False otherwise.
+    """
+    return _find_rust_executor() is not None
+
+
+def execute_shell_with_rust(command: str, working_dir: str, timeout: int = 120) -> dict:
+    """Execute a shell command using the Rust executor binary.
+
+    Falls back to Python subprocess if the Rust executor is not found.
+    """
+    executor = _find_rust_executor()
+    if executor is None:
+        return execute_shell_with_python(command, working_dir, timeout)
+
+    try:
+        result = subprocess.run(
+            [executor, "exec", "--", command],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return {
+            "command": command,
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "command": command,
+            "exit_code": None,
+            "stdout": "",
+            "stderr": "Command timed out",
+            "timed_out": True,
+        }
+    except Exception as e:
+        # Fallback to Python on any error
+        return execute_shell_with_python(command, working_dir, timeout)
+
+
+def execute_shell_with_python(command: str, working_dir: str, timeout: int = 120) -> dict:
+    """Execute a shell command using Python subprocess (pure Python fallback)."""
+    try:
+        result = subprocess.run(
+            command,
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=True,
+        )
+        return {
+            "command": command,
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "command": command,
+            "exit_code": None,
+            "stdout": "",
+            "stderr": "Command timed out",
+            "timed_out": True,
+        }
+    except Exception as e:
+        return {"command": command, "error": str(e)}
 
 
 class BackgroundJob:
