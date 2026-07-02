@@ -13,6 +13,23 @@ class McpManager:
     def __init__(self) -> None:
         self._clients: dict[str, McpClient] = {}
         self._configs: dict[str, dict[str, Any]] = {}
+        self._tool_schemas: dict[str, list[dict[str, Any]]] = {}
+
+    def get_all_tool_schemas(self) -> list[dict[str, Any]]:
+        """Get all MCP tools as OpenAI-compatible schemas for tool registry."""
+        all_tools = []
+        for server_name, tools in self._tool_schemas.items():
+            for tool in tools:
+                prefixed_name = f"mcp__{server_name}__{tool.get('name', 'unknown')}"
+                all_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": prefixed_name,
+                        "description": tool.get("description", ""),
+                        "parameters": tool.get("inputSchema", {"type": "object", "properties": {}}),
+                    },
+                })
+        return all_tools
 
     def configure(self, servers: dict[str, dict[str, Any]]) -> None:
         self._configs = dict(servers)
