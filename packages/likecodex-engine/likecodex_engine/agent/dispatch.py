@@ -1,4 +1,9 @@
-"""Parallel dispatch for read-only tool batches."""
+"""Parallel dispatch for read-only tool batches.
+
+Enhanced dedup:
+- Read-only dedup cache: 5-second TTL
+- Write tool merge: detect and skip duplicate write calls
+"""
 
 from __future__ import annotations
 
@@ -49,13 +54,41 @@ class _ToolCircuitBreaker:
 
 _tool_breaker = _ToolCircuitBreaker()
 
-# Dedup cache: avoid re-executing identical read-only calls within the same batch
+# Dedup cache: avoid re-executing identical read-only calls within 5s window
 _dedup_cache: dict[str, tuple[float, str]] = {}  # key -> (timestamp, result)
-_DEDUP_TTL = 1.0  # seconds
+_DEDUP_TTL = 5.0  # seconds (extended from 1.0 for better dedup)
+
+# Write tool dedup: track identical write calls to merge/skip
+# Key -> (timestamp, tool_name, arguments)
+_write_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
+_WRITE_DEDUP_TTL = 2.0  # seconds
 
 
 def is_read_only_tool(name: str) -> bool:
     return name in READ_TOOLS or name.startswith("mcp__") or name.startswith("mcp_")
+
+
+def _make_dedup_key(tool_name: str, arguments: dict[str, Any]) -> str:
+    from likecodex_engine.context.utils import stable_json_dumps
+    return f"{tool_name}:{stable_json_dumps(arguments)}"
+
+
+def _merge_duplicate_calls(tool_calls: list[Any]) -> list[Any]:
+    """Pre-merge identical tool calls within the same batch.
+    
+    For read-only tools: keep only the first occurrence.
+    For write tools: keep only the first occurrence (they would produce same result).
+    Returns deduplicated list while preserving order.
+    """
+    seen: set[str] = set()
+    unique: list[Any] = []
+    for tc in tool_calls:
+        key = _make_dedup_key(tc.name, tc.arguments)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(tc)
+    return unique
 
 
 async def execute_tool_calls_parallel(
@@ -64,14 +97,23 @@ async def execute_tool_calls_parallel(
 ) -> list[tuple[Any, str]]:
     """Execute read-only tools in parallel; others sequentially in order."""
 
+    # Pre-merge duplicate calls within this batch
+    tool_calls = _merge_duplicate_calls(tool_calls)
+
     async def run_one(tc: Any) -> tuple[Any, str]:
-        # Dedup check: identical read-only calls within 1s window
+        dedup_key = _make_dedup_key(tc.name, tc.arguments)
+
+        # Dedup check: identical read-only calls within 5s window
         if is_read_only_tool(tc.name):
-            from likecodex_engine.context.utils import stable_json_dumps
-            dedup_key = f"{tc.name}:{stable_json_dumps(tc.arguments)}"
             cached_dedup = _dedup_cache.get(dedup_key)
             if cached_dedup and (time.time() - cached_dedup[0]) < _DEDUP_TTL:
                 return tc, cached_dedup[1]
+
+        # Write tool merge: skip if identical write was just executed
+        if not is_read_only_tool(tc.name):
+            cached_write = _write_cache.get(dedup_key)
+            if cached_write and (time.time() - cached_write[0]) < _WRITE_DEDUP_TTL:
+                return tc, json.dumps({"merged": True, "previous_result": cached_write[1][:500]})
 
         # Circuit breaker check
         if _tool_breaker.is_open(tc.name):
@@ -107,10 +149,10 @@ async def execute_tool_calls_parallel(
         # Cache read-only tool results
         if is_read_only_tool(tc.name):
             tool_cache.set(tc.name, tc.arguments, result)
-            # Also update dedup cache
-            from likecodex_engine.context.utils import stable_json_dumps
-            dedup_key = f"{tc.name}:{stable_json_dumps(tc.arguments)}"
             _dedup_cache[dedup_key] = (time.time(), result)
+        else:
+            # Track write tools for merge detection
+            _write_cache[dedup_key] = (time.time(), result, tc.arguments)
 
         return tc, result
 
