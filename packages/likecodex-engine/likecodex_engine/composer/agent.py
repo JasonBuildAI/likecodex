@@ -10,7 +10,7 @@ import asyncio
 import difflib
 import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
 
@@ -224,6 +224,14 @@ class ComposerAgent:
                                 "modifiedContent": change.modified_content,
                                 "language": change.language,
                                 "diff": diff_text,
+                            }
+
+                            # 3.2: Independent composer_diff event for diff-only display
+                            yield {
+                                "type": "composer_diff",
+                                "filePath": change.file_path,
+                                "diff": diff_text,
+                                "language": change.language,
                             }
 
             # 3.1: composer_done event
