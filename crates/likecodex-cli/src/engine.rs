@@ -67,7 +67,7 @@ fn parse_host_port(url: &str) -> (String, String) {
         }
         Some(host) => (host.to_string(), "9090".to_string()),
         None => ("127.0.0.1".to_string(), "9090".to_string()),
-    )
+    }
 }
 
 fn spawn_engine(project_root: &Path, host_port: &(String, String)) -> Result<Child> {
