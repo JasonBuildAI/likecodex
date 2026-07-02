@@ -146,6 +146,20 @@ async def ide_git_stash(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+async def ide_git_hunks(request: web.Request) -> web.Response:
+    _, wd = _cfg_wd(request)
+    data = await request.json()
+    result = await _get_git_service(wd).get_hunks(path=data.get("path", ""), staged=data.get("staged", False))
+    return web.json_response(result)
+
+
+async def ide_git_stage_hunk(request: web.Request) -> web.Response:
+    _, wd = _cfg_wd(request)
+    data = await request.json()
+    result = await _get_git_service(wd).stage_hunk(path=data.get("path", ""), hunk_index=data.get("hunkIndex", 0))
+    return web.json_response(result)
+
+
 def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_get("/api/ide/git/status", ide_git_status)
     app.router.add_post("/api/ide/git/diff", ide_git_diff)
@@ -163,3 +177,5 @@ def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_post("/api/ide/git/push", ide_git_push)
     app.router.add_post("/api/ide/git/fetch", ide_git_fetch)
     app.router.add_post("/api/ide/git/stash", ide_git_stash)
+    app.router.add_post("/api/ide/git/hunks", ide_git_hunks)
+    app.router.add_post("/api/ide/git/stage-hunk", ide_git_stage_hunk)

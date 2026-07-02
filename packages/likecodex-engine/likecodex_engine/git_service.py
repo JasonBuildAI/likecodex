@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+import re
 
 
 @dataclass
@@ -303,6 +304,71 @@ class GitService:
         """List stashes."""
         code, out, err = await self._run_git("stash", "list")
         return {"success": code == 0, "output": out, "error": err if code != 0 else ""}
+
+    async def get_hunks(self, path: str, staged: bool = False) -> dict[str, Any]:
+        """Get individual hunks for a file for interactive staging."""
+        args = ["diff"]
+        if staged:
+            args.append("--cached")
+        args.extend(["-U3", "--", path])
+        code, out, err = await self._run_git(*args)
+        if code != 0:
+            return {"hunks": [], "error": err}
+
+        # Parse hunks from unified diff output
+        hunks = []
+        current_hunk = []
+        hunk_header = None
+        for line in out.split("\n"):
+            if line.startswith("@@"):
+                if current_hunk and hunk_header:
+                    hunks.append({"header": hunk_header, "content": "\n".join(current_hunk)})
+                hunk_header = line
+                current_hunk = [line]
+            elif current_hunk is not None:
+                current_hunk.append(line)
+        if current_hunk and hunk_header:
+            hunks.append({"header": hunk_header, "content": "\n".join(current_hunk)})
+
+        return {"hunks": hunks, "path": path, "staged": staged}
+
+    async def stage_hunk(self, path: str, hunk_index: int) -> dict[str, Any]:
+        """Stage a specific hunk using a temp patch file."""
+        hunks_result = await self.get_hunks(path)
+        if "error" in hunks_result:
+            return {"success": False, "error": hunks_result["error"]}
+        hunks = hunks_result.get("hunks", [])
+        if hunk_index < 0 or hunk_index >= len(hunks):
+            return {"success": False, "error": f"Invalid hunk index: {hunk_index}"}
+
+        hunk = hunks[hunk_index]
+        # Build a complete patch file header + hunk content
+        # Get file mode info for patch header
+        mode_result = await self._run_git("ls-files", "--stage", "--", path)
+        file_info = mode_result.get("stdout", "").strip()
+        a_path = f"a/{path}"
+        b_path = f"b/{path}"
+        patch_lines = [
+            f"diff --git {a_path} {b_path}",
+            f"--- {a_path}",
+            f"+++ {b_path}",
+            hunk["content"],
+        ]
+        patch_content = "\n".join(patch_lines)
+
+        # Write to temp file and apply
+        import tempfile
+        import os
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False, encoding="utf-8")
+        try:
+            tmp.write(patch_content)
+            tmp.close()
+            code, _, err = await self._run_git("apply", "--cached", tmp.name)
+            if code == 0:
+                return {"success": True, "path": path, "hunk_index": hunk_index}
+            return {"success": False, "error": err, "fallback": "Use stage_file to stage entire file"}
+        finally:
+            os.unlink(tmp.name)
 
     async def search_files(self, query: str, file_pattern: str = "") -> dict[str, Any]:
         """Search file contents using grep (ripgrep fallback)."""

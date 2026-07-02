@@ -94,6 +94,7 @@ READ_TOOLS = {
     "codegraph_search",
     "codegraph_symbols",
     "codegraph_callers",
+    "codegraph_viz",
     "git_status",
     "git_diff",
     "git_log",

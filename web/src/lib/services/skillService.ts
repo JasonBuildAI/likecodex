@@ -164,6 +164,26 @@ export async function searchIndex(pattern: string): Promise<{ pattern: string; r
   return resp.json();
 }
 
+export async function searchCodeGraphCallers(name: string): Promise<{ symbol: string; callers: Array<{ path: string; line: number }>; count: number }> {
+  const resp = await fetchWithRetry(`${API_BASE}/codegraph/callers?name=${encodeURIComponent(name)}`);
+  if (!resp.ok) return { symbol: name, callers: [], count: 0 };
+  return resp.json();
+}
+
+export interface CodeGraphVizResult {
+  symbol: string;
+  nodes: Array<{ name: string; kind: string; path: string; line: number; depth: number }>;
+  edges: Array<{ source: string; target: string; type: string }>;
+  total_nodes: number;
+  total_edges: number;
+}
+
+export async function searchCodeGraphViz(name: string, max_depth: number = 2): Promise<CodeGraphVizResult> {
+  const resp = await fetchWithRetry(`${API_BASE}/codegraph/viz?name=${encodeURIComponent(name)}&max_depth=${max_depth}`);
+  if (!resp.ok) return { symbol: name, nodes: [], edges: [], total_nodes: 0, total_edges: 0 };
+  return resp.json();
+}
+
 // ── Execute ────────────────────────────────────────────────────────────
 export async function executeCommand(command: string, workingDir?: string): Promise<{ command: string; stdout: string; stderr: string; exit_code: number; timed_out: boolean; duration_ms: number }> {
   const resp = await fetchWithRetry(`${API_BASE}/execute`, {

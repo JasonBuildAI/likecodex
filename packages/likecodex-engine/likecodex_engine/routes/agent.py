@@ -624,6 +624,52 @@ async def codegraph_search(request: web.Request) -> web.Response:
     return web.json_response({"pattern": pattern, "results": results, "files": graph.file_count})
 
 
+async def codegraph_symbols(request: web.Request) -> web.Response:
+    path = request.query.get("path", "")
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    from likecodex_engine.tools.codegraph import load_or_build
+
+    graph = load_or_build(working_dir)
+    norm = path.replace("\\", "/")
+    symbols = [
+        {"name": s.name, "kind": s.kind, "line": s.line}
+        for s in graph.symbols
+        if s.path.replace("\\", "/") == norm
+    ]
+    symbols.sort(key=lambda s: s["line"])
+    return web.json_response({"path": path, "symbols": symbols, "count": len(symbols)})
+
+
+async def codegraph_callers(request: web.Request) -> web.Response:
+    name = request.query.get("name", "")
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    from likecodex_engine.tools.codegraph import load_or_build
+
+    graph = load_or_build(working_dir)
+    callers = [
+        {
+            "path": site.rpartition(":")[0],
+            "line": int(site.rpartition(":")[2]) if site.rpartition(":")[2].isdigit() else 0,
+        }
+        for site in graph.references.get(name, [])[:50]
+    ]
+    return web.json_response({"symbol": name, "callers": callers, "count": len(callers)})
+
+
+async def codegraph_viz(request: web.Request) -> web.Response:
+    name = request.query.get("name", "")
+    max_depth = int(request.query.get("max_depth", "2"))
+    cfg = _resolve_config(request.app[APP_CONFIG])
+    working_dir = cfg.get("working_dir", ".")
+    from likecodex_engine.tools.code_search import CodeSearchTools
+
+    search = CodeSearchTools(working_dir)
+    result = await search.codegraph_viz(name, max_depth=max_depth)
+    return web.json_response(json.loads(result))
+
+
 async def rewind_checkpoint(request: web.Request) -> web.Response:
     data = await request.json()
     checkpoint_id = data.get("checkpoint_id")
@@ -823,6 +869,9 @@ def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_get("/checkpoints", list_checkpoints)
     app.router.add_post("/checkpoints/rewind", rewind_checkpoint)
     app.router.add_get("/codegraph/search", codegraph_search)
+    app.router.add_get("/codegraph/symbols", codegraph_symbols)
+    app.router.add_get("/codegraph/callers", codegraph_callers)
+    app.router.add_get("/codegraph/viz", codegraph_viz)
     app.router.add_post("/plan/toggle", toggle_plan_mode)
     app.router.add_post("/compact", compact_context)
     app.router.add_post("/new", new_session)

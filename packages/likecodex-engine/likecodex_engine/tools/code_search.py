@@ -276,6 +276,133 @@ class CodeSearchTools:
         ]
         return json.dumps({"symbol": name, "callers": callers, "count": len(callers)})
 
+    def codegraph_viz_schema(self) -> dict[str, Any]:
+        return {
+            "description": (
+                "Build a call graph visualization for a symbol, returning edges "
+                "(caller -> callee) for frontend graph rendering. Depth limits the "
+                "number of levels to traverse."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Symbol name to visualize"},
+                    "max_depth": {"type": "integer", "default": 2, "description": "Maximum traversal depth"},
+                    "max_nodes": {"type": "integer", "default": 30, "description": "Maximum nodes in result"},
+                },
+                "required": ["name"],
+            },
+        }
+
+    async def codegraph_viz(self, name: str, max_depth: int = 2, max_nodes: int = 30) -> str:
+        """Return edges and nodes for call graph visualization.
+
+        Uses the existing references dict (callee_name -> [call_sites]) to
+        build caller->callee edges. For each known symbol, if it references
+        'name' at a line, that's an edge: symbol -> name.
+        """
+        graph = load_or_build(self.working_dir)
+        target = name.lower()
+
+        # Build a name->definition lookup
+        defn_map: dict[str, Symbol] = {s.name: s for s in graph.symbols}
+
+        # BFS to build the graph
+        visited: set[str] = set()
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        queue: list[tuple[str, int]] = [(name, 0)]
+
+        while queue and len(nodes) < max_nodes:
+            current, depth = queue.pop(0)
+            key = current.lower()
+            if key in visited:
+                continue
+            visited.add(key)
+
+            defn = defn_map.get(current)
+            nodes.append({
+                "name": current,
+                "kind": defn.kind if defn else "unknown",
+                "path": defn.path if defn else "",
+                "line": defn.line if defn else 0,
+                "depth": depth,
+            })
+
+            if depth >= max_depth:
+                continue
+
+            # Find callers of 'current': any symbol whose file/line
+            # references contain 'current'
+            refs = graph.references.get(current, [])
+            if refs:
+                # Build a set of (path, line) tuples where 'current' is called
+                call_sites = set()
+                for ref in refs:
+                    parts = ref.rpartition(":")
+                    call_sites.add((parts[0], int(parts[2]) if parts[2].isdigit() else 0))
+
+                # For each call site, see if it falls inside another known symbol
+                for other_sym in graph.symbols:
+                    if other_sym.name.lower() in visited or other_sym.name == current:
+                        continue
+                    if other_sym.path and any(
+                        cs[0] == other_sym.path and cs[1] >= other_sym.line
+                        for cs in call_sites
+                    ):
+                        # This symbol calls 'current'
+                        if other_sym.name.lower() not in visited:
+                            visited.add(other_sym.name.lower())
+                            defn2 = defn_map.get(other_sym.name)
+                            nodes.append({
+                                "name": other_sym.name,
+                                "kind": defn2.kind if defn2 else "unknown",
+                                "path": defn2.path if defn2 else "",
+                                "line": defn2.line if defn2 else 0,
+                                "depth": depth + 1,
+                            })
+                            queue.append((other_sym.name, depth + 1))
+                        edges.append({"source": other_sym.name, "target": current, "type": "call"})
+
+            # Find callees: symbols that 'current' references
+            # Look at references that are in the same file as 'current'
+            if defn:
+                current_path = defn.path
+                # Find all references that point to locations in current_path
+                # near current's definition
+                for callee_name, refs_list in graph.references.items():
+                    if callee_name == current or callee_name.lower() in visited:
+                        continue
+                    for ref in refs_list:
+                        ref_path = ref.rpartition(":")[0]
+                        if ref_path == current_path:
+                            # 'callee_name' is referenced in the same file as 'current'
+                            ref_line = int(ref.rpartition(":")[2]) if ref.rpartition(":")[2].isdigit() else 0
+                            # Check if this reference is after 'current's definition start
+                            # (within reasonable range)
+                            if ref_line > 0 and abs(ref_line - defn.line) < 200:
+                                if callee_name.lower() not in visited and len(nodes) < max_nodes:
+                                    visited.add(callee_name.lower())
+                                    defn3 = defn_map.get(callee_name)
+                                    nodes.append({
+                                        "name": callee_name,
+                                        "kind": defn3.kind if defn3 else "unknown",
+                                        "path": defn3.path if defn3 else "",
+                                        "line": defn3.line if defn3 else 0,
+                                        "depth": depth + 1,
+                                    })
+                                    queue.append((callee_name, depth + 1))
+                                edges.append({"source": current, "target": callee_name, "type": "call"})
+                                break  # Only add one edge per callee
+
+        return json.dumps({
+            "symbol": name,
+            "nodes": nodes[:max_nodes],
+            "edges": edges,
+            "total_nodes": len(nodes),
+            "total_edges": len(edges),
+        })
+
     def codegraph_reindex_schema(self) -> dict[str, Any]:
         return {
             "description": "Rebuild the code graph index for the workspace (use after large refactors).",
