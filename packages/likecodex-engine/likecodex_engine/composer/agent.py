@@ -394,6 +394,22 @@ Important: Make all file changes using write_file or edit_file tools. Do not use
     # Agent & change capture
     # ============================================================
 
+    # ============================================================
+    # Phase 3.8: 批量文件创建向导
+    #
+    # 当 change_type == 'create' 时, AI 自动发现需要创建的新文件。
+    # 批量文件创建流程:
+    #   1. AI 分析需求 → 列出待创建文件清单 (composer_plan event)
+    #   2. 用户确认文件清单 (可选择排除不需要的文件)
+    #   3. AI 逐文件生成内容 → 以 composer_file_change 事件推送
+    #   4. 用户逐文件预览/编辑 → 点击 acceptAll 批量写入
+    #
+    # 当前实现:
+    # - _capture_change 通过 original 是否为空判定 'create' vs 'modify'
+    # - 暂不支持用户在确认步骤中选择排除文件 (后续可通过 event 添加)
+    # - 暂不支持中间编辑 (后续可加入 ContentEditable diff)
+    # ============================================================
+
     def _create_agent_loop(self, session_id: str) -> Any:
         """Create an AgentLoop for Composer execution."""
         from likecodex_engine.server import _make_agent

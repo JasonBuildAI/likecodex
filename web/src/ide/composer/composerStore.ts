@@ -6,6 +6,25 @@
  * - File changes (Map of path → FileChange)
  * - Status (idle/planning/executing/done/error)
  * - Accept/reject individual or all changes
+ *
+ * ## 批量文件创建向导 (Phase 3.8)
+ *
+ * 工作流:
+ *   sendMessage() → SSE连接 → 接收 file_change events → Map 存储
+ *   用户逐文件预览 (DiffViewer) → acceptChange() 单个写入
+ *   或 acceptAll() 批量写入 /workspace/write
+ *
+ * 关键设计:
+ * - fileChanges 使用 Map 保证 O(1) 路径查找与去重
+ * - accepted 三态: null(待审) / true(已接受) / false(已拒绝)
+ * - acceptChange 即时写盘 (best-effort), acceptAll 串行写入
+ * - 前端状态与后端文件系统最终一致
+ *
+ * ## 变更预览状态机 (Phase 3.4)
+ *     idle → planning → (streaming) → executing → done
+ *                      \--→ awaiting_approval → executing
+ *     any → error
+ *     any → idle (clearComposer / start new)
  */
 
 import { create } from 'zustand';
