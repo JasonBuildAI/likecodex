@@ -22,8 +22,11 @@ from likecodex_engine.skills.manager import (
     update_skill as _update_skill,
     delete_skill as _delete_skill,
     install_skill_from_url as _install_skill,
+    install_skill_from_marketplace as _install_marketplace,
     export_skill as _export_skill,
     import_skill as _import_skill,
+    fetch_remote_index,
+    search_remote_skills,
 )
 
 from likecodex_engine.routes._shared import (
@@ -267,6 +270,53 @@ async def ide_skills_import(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "imported": names, "count": len(names)})
 
 
+async def ide_skills_marketplace(request: web.Request) -> web.Response:
+    """Browse/search the skills marketplace."""
+    q = request.query.get("q", "")
+    try:
+        if q:
+            skills = await search_remote_skills(q)
+        else:
+            index = await fetch_remote_index()
+            skills = index.get("skills", [])
+        return web.json_response({"skills": skills})
+    except Exception as e:
+        return web.json_response({"skills": [], "error": str(e)})
+
+
+async def ide_skills_marketplace_install(request: web.Request) -> web.Response:
+    """Install a skill from the marketplace."""
+    cfg, _ = _cfg_wd(request)
+    working_dir = cfg.get("working_dir", ".")
+    data = await request.json()
+    name = data.get("name", "").strip()
+    download_url = data.get("download_url", "").strip()
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    try:
+        if download_url:
+            if download_url.endswith(".git"):
+                path = _install_skill(working_dir, download_url)
+            else:
+                # Download zip
+                import httpx
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.get(download_url)
+                    resp.raise_for_status()
+                from likecodex_engine.skills.manager import _install_skill_from_zip_data
+                path = _install_skill_from_zip_data(working_dir, name, resp.content)
+        else:
+            path = await _install_marketplace(working_dir, name)
+    except FileExistsError as e:
+        return web.json_response({"error": str(e)}, status=409)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    from likecodex_engine.skills.loader import discover_skills
+    skills = discover_skills(working_dir)
+    skill = next((s for s in skills if s.name == name), None)
+    return web.json_response({"ok": True, "path": str(path), "skill": skill.to_dict() if skill else None})
+
+
 def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_get("/skills", list_skills)
     app.router.add_get("/api/ide/skills/list", ide_skills_list)
@@ -280,3 +330,5 @@ def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_post("/api/ide/skills/install", ide_skills_install)
     app.router.add_get("/api/ide/skills/export", ide_skills_export)
     app.router.add_post("/api/ide/skills/import", ide_skills_import)
+    app.router.add_get("/api/ide/skills/marketplace", ide_skills_marketplace)
+    app.router.add_post("/api/ide/skills/marketplace/install", ide_skills_marketplace_install)
