@@ -333,6 +333,234 @@ export const progressBar: Variants = {
   })
 };
 
+// ── List Animations ────────────────────────────────────────────────────
+export const listContainer: Variants = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.05,
+      delayChildren: 0.05,
+    }
+  },
+  exit: {
+    opacity: 0,
+    transition: {
+      staggerChildren: 0.03,
+      staggerDirection: -1,
+    }
+  }
+};
+
+export const listItem: Variants = {
+  hidden: {
+    opacity: 0,
+    x: -20,
+    scale: 0.95,
+  },
+  visible: {
+    opacity: 1,
+    x: 0,
+    scale: 1,
+    transition: {
+      type: 'spring',
+      stiffness: 200,
+      damping: 20,
+    }
+  },
+  exit: {
+    opacity: 0,
+    x: 20,
+    scale: 0.95,
+    transition: { duration: 0.15 }
+  }
+};
+
+export const listItemFade: Variants = {
+  hidden: { opacity: 0, y: 10 },
+  visible: (i: number) => ({
+    opacity: 1,
+    y: 0,
+    transition: {
+      delay: i * 0.03,
+      duration: 0.2,
+      ease: 'easeOut',
+    }
+  }),
+  exit: {
+    opacity: 0,
+    y: -10,
+    transition: { duration: 0.15 }
+  }
+};
+
+// ── Page Switch Animations ─────────────────────────────────────────────
+export const pageSlideLeft: Variants = {
+  initial: {
+    opacity: 0,
+    x: 50,
+  },
+  animate: {
+    opacity: 1,
+    x: 0,
+    transition: {
+      duration: 0.35,
+      ease: 'easeOut',
+    }
+  },
+  exit: {
+    opacity: 0,
+    x: -50,
+    transition: { duration: 0.2 }
+  }
+};
+
+export const pageSlideRight: Variants = {
+  initial: {
+    opacity: 0,
+    x: -50,
+  },
+  animate: {
+    opacity: 1,
+    x: 0,
+    transition: {
+      duration: 0.35,
+      ease: 'easeOut',
+    }
+  },
+  exit: {
+    opacity: 0,
+    x: 50,
+    transition: { duration: 0.2 }
+  }
+};
+
+export const pageSlideUp: Variants = {
+  initial: {
+    opacity: 0,
+    y: 30,
+  },
+  animate: {
+    opacity: 1,
+    y: 0,
+    transition: {
+      duration: 0.35,
+      ease: 'easeOut',
+    }
+  },
+  exit: {
+    opacity: 0,
+    y: -30,
+    transition: { duration: 0.2 }
+  }
+};
+
+// ── Transition Helpers ─────────────────────────────────────────────────-
+export const expandCollapse: Variants = {
+  collapsed: {
+    height: 0,
+    opacity: 0,
+    overflow: 'hidden',
+    transition: { duration: 0.2, ease: 'easeInOut' }
+  },
+  expanded: {
+    height: 'auto',
+    opacity: 1,
+    overflow: 'hidden',
+    transition: { duration: 0.3, ease: 'easeInOut' }
+  }
+};
+
+export const scaleFadeIn: Variants = {
+  hidden: {
+    opacity: 0,
+    scale: 0.92,
+    transformOrigin: 'center',
+  },
+  visible: {
+    opacity: 1,
+    scale: 1,
+    transition: {
+      type: 'spring',
+      stiffness: 260,
+      damping: 22,
+    }
+  },
+  exit: {
+    opacity: 0,
+    scale: 0.92,
+    transition: { duration: 0.15 }
+  }
+};
+
+// ── Notification / Toast Animations ────────────────────────────────────
+export const toastSlide: Variants = {
+  initial: {
+    opacity: 0,
+    y: -20,
+    x: 20,
+    scale: 0.95,
+  },
+  animate: {
+    opacity: 1,
+    y: 0,
+    x: 0,
+    scale: 1,
+    transition: {
+      type: 'spring',
+      stiffness: 300,
+      damping: 25,
+    }
+  },
+  exit: {
+    opacity: 0,
+    x: 40,
+    scale: 0.9,
+    transition: { duration: 0.2 }
+  }
+};
+
+// ── Tab Switch ──────────────────────────────────────────────────────────
+export const tabSwitch: Variants = {
+  initial: {
+    opacity: 0,
+    scale: 0.96,
+  },
+  animate: {
+    opacity: 1,
+    scale: 1,
+    transition: {
+      duration: 0.2,
+      ease: 'easeOut',
+    }
+  },
+  exit: {
+    opacity: 0,
+    scale: 0.96,
+    transition: { duration: 0.1 }
+  }
+};
+
+// ── Smooth Height Animation ────────────────────────────────────────────
+export const smoothHeight: Variants = {
+  collapsed: {
+    height: 0,
+    opacity: 0,
+    transition: {
+      height: { duration: 0.3, ease: 'easeInOut' },
+      opacity: { duration: 0.2 },
+    }
+  },
+  expanded: {
+    height: 'auto',
+    opacity: 1,
+    transition: {
+      height: { duration: 0.3, ease: 'easeInOut' },
+      opacity: { duration: 0.2, delay: 0.1 },
+    }
+  }
+};
+
 // ── Export all animations ──────────────────────────────────────────────
 export const animations = {
   fadeIn,
@@ -357,6 +585,17 @@ export const animations = {
   tooltip,
   spinner,
   progressBar,
+  listContainer,
+  listItem,
+  listItemFade,
+  pageSlideLeft,
+  pageSlideRight,
+  pageSlideUp,
+  expandCollapse,
+  scaleFadeIn,
+  toastSlide,
+  tabSwitch,
+  smoothHeight,
 };
 
 export default animations;
