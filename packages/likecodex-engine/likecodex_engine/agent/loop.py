@@ -125,6 +125,8 @@ class AgentLoop:
         self._used_any_tool = False
         self._handoff_nudges = 0
         self._handoff_active = False
+        self._mode_downgraded = False
+        self._all_done_counter = 0
         self.circuit_breaker = ToolCircuitBreaker()
         if hasattr(context, "set_working_dir"):
             context.set_working_dir(tools.working_dir)
@@ -494,6 +496,36 @@ class AgentLoop:
                         self.context.add_context_block(notice)
                         yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
                         continue
+                # Smart termination: detect "all done" loops
+                content_lower = (response.content or "").lower().strip()
+                done_phrases = {"all done", "done", "finished", "completed", "that's all", "all finished"}
+                if content_lower in done_phrases or (
+                    len(content_lower) < 20 and any(content_lower.startswith(p) for p in done_phrases)
+                ):
+                    self._all_done_counter += 1
+                    if self._all_done_counter >= 3:
+                        yield self._emit(
+                            LLMResponse(
+                                content="Smart termination: model repeated 'done' without tool calls 3 times.",
+                                model="system",
+                                event_type="notice",
+                            )
+                        )
+                        break
+                else:
+                    self._all_done_counter = 0
+                # Check if evidence ledger shows all steps complete
+                if self.evidence and not self.is_subagent:
+                    pending = self.evidence.pending_steps()
+                    if not pending and self._used_any_tool:
+                        yield self._emit(
+                            LLMResponse(
+                                content="All evidence steps completed. Finishing loop.",
+                                model="system",
+                                event_type="notice",
+                            )
+                        )
+                        break
                 break
 
             self._empty_final_blocks = 0

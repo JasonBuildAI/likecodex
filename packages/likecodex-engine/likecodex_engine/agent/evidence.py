@@ -143,3 +143,17 @@ class EvidenceLedger:
                 if not self.has_successful_complete_step(label) and not self.has_successful_complete_step(item_id):
                     missing.append(item)
         return missing
+
+    def pending_steps(self) -> list[str]:
+        """Return list of step descriptions that still need work."""
+        steps = []
+        for r in self._receipts:
+            if r.tool_name == "complete_step":
+                steps.append(r.step)
+        if not steps:
+            return []
+        # If there are incomplete todos, those are pending steps
+        incomplete = self.incomplete_todos()
+        if incomplete:
+            return [str(t.get("content", t.get("id", ""))) for t in incomplete]
+        return []
