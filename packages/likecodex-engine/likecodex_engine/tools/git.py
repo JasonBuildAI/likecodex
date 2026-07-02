@@ -425,3 +425,180 @@ class GitTools:
             result["diff_stat"] = stat_lines
 
         return json.dumps(result, ensure_ascii=False)
+
+    # ============================================================
+    # Phase 3.6: Composer Batch Commit
+    # ============================================================
+
+    def composer_commit_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Batch commit file changes grouped by feature/component.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_changes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "change_type": {
+                                    "type": "string",
+                                    "enum": ["create", "modify", "delete"],
+                                },
+                                "description": {"type": "string"},
+                            },
+                            "required": ["path"],
+                        },
+                        "description": "List of file changes to commit",
+                    },
+                    "group_by": {
+                        "type": "string",
+                        "enum": ["component", "directory", "none"],
+                        "default": "component",
+                        "description": "How to group changes",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Optional override commit message",
+                    },
+                },
+                "required": ["file_changes"],
+            },
+        }
+
+    async def composer_commit(
+        self,
+        file_changes: list[dict[str, Any]],
+        group_by: str = "component",
+        message: str = "",
+    ) -> str:
+        """Batch commit file changes grouped by feature/component.
+
+        Args:
+            file_changes: List of dicts with 'path' and optionally 'change_type' and 'description'.
+            group_by: How to group ('component', 'directory', 'none').
+            message: Optional override message.
+
+        Returns:
+            JSON with commit results.
+        """
+        if not file_changes:
+            return json.dumps({"error": "No file changes provided"})
+
+        if message:
+            # Single commit with custom message
+            return await self._do_atomic_commit(file_changes, message)
+
+        # Group changes
+        if group_by == "none":
+            groups = {"changes": file_changes}
+        else:
+            groups = self._group_file_changes(file_changes, group_by)
+
+        results: list[dict[str, Any]] = []
+        for group_name, group_files in groups.items():
+            auto_msg = self._generate_composer_message(group_name, group_files)
+            result = await self._do_atomic_commit(group_files, auto_msg)
+            results.append(json.loads(result))
+
+        return json.dumps({
+            "commits": results,
+            "total": len(results),
+            "files": len(file_changes),
+        }, ensure_ascii=False)
+
+    def _group_file_changes(
+        self,
+        file_changes: list[dict[str, Any]],
+        group_by: str,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Group file changes by component or directory."""
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for fc in file_changes:
+            path = fc.get("path", "")
+            if group_by == "component":
+                # Try to extract component: e.g. "composer/manager.py" -> "composer"
+                parts = path.replace("\\", "/").split("/")
+                key = parts[0] if len(parts) > 1 else "root"
+            elif group_by == "directory":
+                path_obj = Path(path)
+                key = str(path_obj.parent) if path_obj.parent != Path(".") else "root"
+            else:
+                key = "changes"
+
+            # Normalize key
+            key = key.replace("\\", "/").strip("/") or "root"
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(fc)
+        return groups
+
+    @staticmethod
+    def _generate_composer_message(
+        group_name: str,
+        group_files: list[dict[str, Any]],
+    ) -> str:
+        """Generate an auto-commit message for a group of file changes."""
+        # Detect change types
+        has_create = any(fc.get("change_type") == "create" for fc in group_files)
+        has_modify = any(fc.get("change_type") == "modify" for fc in group_files)
+        has_delete = any(fc.get("change_type") == "delete" for fc in group_files)
+
+        change_words = []
+        if has_create:
+            change_words.append("Add")
+        if has_modify:
+            change_words.append("Update")
+        if has_delete:
+            change_words.append("Remove")
+
+        action = " / ".join(change_words) if change_words else "Update"
+
+        # Collect descriptions
+        descriptions = [
+            fc.get("description", Path(fc["path"]).name)
+            for fc in group_files
+            if fc.get("description")
+        ]
+
+        file_count = len(group_files)
+        if descriptions:
+            detail = "; ".join(descriptions[:5])
+            if len(descriptions) > 5:
+                detail += f" +{len(descriptions) - 5} more"
+        else:
+            detail = f"{file_count} file(s)"
+
+        return f"{action} {group_name}: {detail}"[:100]
+
+    async def _do_atomic_commit(
+        self,
+        file_changes: list[dict[str, Any]],
+        commit_message: str,
+    ) -> str:
+        """Stage specific files and commit atomically."""
+        # Stage only the specific files
+        for fc in file_changes:
+            path = fc.get("path", "")
+            if path:
+                await self._run(f'add "{path}"')
+
+        # Check if there's anything to commit
+        status_result = await self._run("status --porcelain")
+        if not status_result.get("stdout", "").strip():
+            return json.dumps({
+                "message": commit_message,
+                "skip": True,
+                "reason": "Nothing to commit",
+            })
+
+        escaped = commit_message.replace('"', '\\"')
+        result = await self._run(f'commit -m "{escaped}"')
+
+        return json.dumps({
+            "message": commit_message,
+            "files": [fc.get("path", "") for fc in file_changes],
+            "file_count": len(file_changes),
+            **result,
+        }, ensure_ascii=False)
