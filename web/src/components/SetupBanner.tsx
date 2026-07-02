@@ -3,7 +3,7 @@
 import type { DoctorReport } from '@/lib/api';
 
 interface SetupBannerProps {
-  doctor: DoctorReport | null;
+  doctor?: DoctorReport | null;
 }
 
 export function SetupBanner({ doctor }: SetupBannerProps) {
