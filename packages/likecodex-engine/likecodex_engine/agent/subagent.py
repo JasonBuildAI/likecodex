@@ -36,29 +36,44 @@ class SubAgentOrchestrator:
 
     async def _run_one(self, subtask_id: str, description: str) -> SubAgentResult:
         result = SubAgentResult(subtask_id=subtask_id, description=description)
-        self._emit_progress(subtask_id, "started", description)
+        self._emit_progress(subtask_id, "started", description, progress_pct=0)
         try:
             agent: AgentLoop = self.factory(None, None)
             step_count = 0
+            last_action = ""
             async for resp in agent.run(description):
                 result.outputs.append(resp)
                 step_count += 1
-                if step_count % 3 == 0:  # Emit progress every 3 steps
-                    self._emit_progress(subtask_id, "running", description, steps=step_count)
-            self._emit_progress(subtask_id, "completed", description, steps=step_count)
+                # Extract action info from events
+                if resp.event_type == "tool_dispatch":
+                    last_action = resp.metadata.get("tool_name", "") if resp.metadata else ""
+                elif resp.event_type == "tool_result":
+                    last_action = f"result: {resp.content[:80] if resp.content else 'done'}"
+                elif resp.event_type == "assistant" and resp.content:
+                    last_action = resp.content[:80]
+                # Emit progress every step for real-time streaming
+                progress_pct = min(95, int(step_count * 5))
+                self._emit_progress(
+                    subtask_id, "running", description,
+                    steps=step_count, progress_pct=progress_pct,
+                    last_action=last_action,
+                )
+            self._emit_progress(subtask_id, "completed", description, steps=step_count, progress_pct=100)
         except Exception as e:
             result.success = False
             result.error = str(e)
-            self._emit_progress(subtask_id, "failed", description, error=str(e))
+            self._emit_progress(subtask_id, "failed", description, error=str(e), progress_pct=0)
         return result
 
-    def _emit_progress(self, subtask_id: str, status: str, description: str, steps: int = 0, error: str = "") -> None:
+    def _emit_progress(self, subtask_id: str, status: str, description: str, steps: int = 0, error: str = "", progress_pct: int = 0, last_action: str = "") -> None:
         if self.on_progress:
             self.on_progress({
                 "subtask_id": subtask_id,
                 "description": description[:100],
                 "status": status,
                 "steps": steps,
+                "progress_pct": progress_pct,
+                "last_action": last_action[:100] if last_action else "",
                 "error": error,
             })
 
