@@ -5,8 +5,36 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+  id-token: write  # For PyPI trusted publishing
+
 jobs:
+  # ------------------------------------------------------------------
+  # PyPI: build and publish Python package
+  # ------------------------------------------------------------------
+  pypi:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/likecodex/
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - name: Build wheel and sdist
+        run: uv build --all-packages
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+  # ------------------------------------------------------------------
+  # Rust: cross-platform binary builds
+  # ------------------------------------------------------------------
   build:
+    needs: pypi
     strategy:
       matrix:
         include:
@@ -37,10 +65,16 @@ jobs:
           name: ${{ matrix.artifact }}
           path: target/${{ matrix.target }}/release/likecodex*
 
+  # ------------------------------------------------------------------
+  # GitHub Release: attach binaries and changelog
+  # ------------------------------------------------------------------
   github-release:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -49,7 +83,24 @@ jobs:
           mkdir -p release
           find dist -type f -name 'likecodex*' -exec cp {} release/ \;
           ls -la release
+      - name: Generate changelog
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@v5
+        with:
+          configuration: |
+            {
+              "categories": [
+                {"title": "## 🚀 Features", "labels": ["feat"]},
+                {"title": "## 🐛 Bug Fixes", "labels": ["fix"]},
+                {"title": "## 📚 Documentation", "labels": ["docs"]},
+                {"title": "## 🧪 Tests", "labels": ["test"]},
+                {"title": "## 🔧 Maintenance", "labels": ["chore", "refactor"]}
+              ]
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          body: ${{ steps.changelog.outputs.changelog }}
           files: release/*
