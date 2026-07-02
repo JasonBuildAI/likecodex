@@ -227,17 +227,17 @@ export default function Home() {
       }
     }
     setShowSkillAutocomplete(false);
-    // @ mention detection
+    // @ mention detection — Phase 3.3: file picker via @mention
     const atCursor = value.slice(0, cursor);
     const atIndex = atCursor.lastIndexOf('@');
-    if (atIndex !== -1 && (atIndex === 0 || beforeCursor[atIndex - 1] === ' ' || beforeCursor[atIndex - 1] === '')) {
-      const query = beforeCursor.slice(atIndex + 1);
-      if (!query.includes(' ') && !query.length <= 50) {
+    if (atIndex !== -1 && (atIndex === 0 || atCursor[atIndex - 1] === ' ' || atCursor[atIndex - 1] === '\n')) {
+      const query = atCursor.slice(atIndex + 1);
+      if (!query.includes(' ') && !query.includes('\n') && query.length <= 50) {
         setShowMentions(true);
         setMentionQuery(query);
         const rect = textareaRef.current?.getBoundingClientRect();
         if (rect) {
-          setMentionPos({ top: rect.bottom - 60, left: rect.left + 20 });
+          setMentionPos({ top: rect.bottom + 4, left: rect.left + 16 });
         }
         return;
       }
