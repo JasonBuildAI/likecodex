@@ -2,7 +2,6 @@
 //!
 //! Starts the ACP server on stdin/stdout, bridging to the LikeCodex engine.
 
-use likecodex_acp::protocol::*;
 use likecodex_acp::server::Conn;
 use likecodex_acp::service::AcpService;
 use likecodex_core::config::Config;

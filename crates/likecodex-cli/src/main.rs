@@ -615,11 +615,11 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Sessions { ref action }) => {
             let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
-            cmd_sessions(&client, &engine_url, action).await
+            cmd_sessions(&client, &engine_url, action.clone()).await
         }
         Some(Commands::Rewind { ref id, list }) => {
             let _supervisor = ensure_engine(&cli, &client, &engine_url).await?;
-            cmd_rewind(&client, &engine_url, id, list).await
+            cmd_rewind(&client, &engine_url, id.clone(), list).await
         }
     }
 }

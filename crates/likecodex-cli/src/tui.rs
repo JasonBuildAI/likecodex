@@ -343,10 +343,11 @@ async fn run_tui_loop<B: Backend>(
 
     let engine_event_tx2 = event_tx.clone();
     let engine_url_for_spawn = engine_url.clone();
+    let client_for_spawn = client.clone();
     let _engine_reader = tokio::spawn(async move {
         while let Some(prompt) = prompt_rx.recv().await {
             let url = engine_url_for_spawn.clone();
-            let client = client.clone();
+            let client = client_for_spawn.clone();
             let tx = engine_event_tx2.clone();
             tokio::spawn(async move {
                 let tx2 = tx.clone();

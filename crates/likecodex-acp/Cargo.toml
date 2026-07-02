@@ -19,3 +19,4 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
