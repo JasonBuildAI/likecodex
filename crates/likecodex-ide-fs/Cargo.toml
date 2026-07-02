@@ -17,3 +17,4 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 sha2 = "0.10"
 glob = "0.3"
+walkdir = "2"
