@@ -170,7 +170,26 @@ class CacheFirstContext:
         self._log.append(Message(role=Role.USER, content=content))
         self._log_version += 1
 
-    def add_context_block(self, content: str) -> None:
+    # Priority levels for context blocks (P0=highest, P3=lowest)
+    _CONTEXT_PRIORITY = {
+        "system": 0,
+        "project_instruction": 0,
+        "memory": 1,
+        "user_message": 1,
+        "mention": 1,
+        "plan": 2,
+        "tool_result": 3,
+    }
+
+    def add_context_block(self, content: str, priority: str = "user_message") -> None:
+        """Add a context block with priority level for smart eviction.
+        
+        Priorities (lower = more important):
+        - system (P0): system prompts, project instructions
+        - memory (P1): user memories, @-referenced files
+        - plan (P2): plans, research findings
+        - tool_result (P3): tool outputs (first to be evicted)
+        """
         block = content if content.startswith(CONTEXT_PREFIX) else f"{CONTEXT_PREFIX}{content}"
         self._log.append(Message(role=Role.USER, content=block))
         self._log_version += 1
