@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -238,16 +239,62 @@ class Coordinator:
             yield resp
 
     def _inject_planner_research(self) -> None:
-        """Inject Planner research findings into Executor context."""
+        """Inject Planner research findings into Executor context.
+        
+        Extracts structured insights including file references, key decisions,
+        architecture context, and dependencies from the planner session.
+        """
         injected = 0
+        file_refs: list[str] = []
+        key_decisions: list[str] = []
+        research_parts: list[str] = []
+
         for msg in self._planner_context.messages:
-            if msg.role in ("assistant", "tool") and msg.content and len(msg.content) > 100:
-                self.executor.context.add_context_block(
-                    f"[Planner Research]\n{msg.content[:1500]}"
-                )
-                injected += 1
-                if injected >= 3:
-                    break
+            if not msg.content or len(msg.content) < 50:
+                continue
+            content = str(msg.content)
+
+            # Extract file references from tool results
+            if msg.role == "tool":
+                try:
+                    data = json.loads(content)
+                    if isinstance(data, dict):
+                        fp = data.get("file_path") or data.get("path", "")
+                        if fp:
+                            file_refs.append(fp)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # Collect assistant research content
+            if msg.role == "assistant":
+                research_parts.append(content)
+
+            # Extract key decisions from planner output
+            if msg.role in ("assistant", "tool") and any(
+                keyword in content[:200].lower()
+                for keyword in ["decision", "conclusion", "found", "therefore", "recommend"]
+            ):
+                key_decisions.append(content[:300])
+
+        # Build structured context block
+        blocks: list[str] = []
+
+        if file_refs:
+            unique_refs = list(dict.fromkeys(file_refs))  # dedup preserving order
+            blocks.append("[Planner File References]\n" + "\n".join(f"- {r}" for r in unique_refs[:10]))
+
+        if key_decisions:
+            blocks.append("[Planner Key Decisions]\n" + "\n".join(f"- {d}" for d in key_decisions[:5]))
+
+        if research_parts:
+            combined = "\n\n".join(research_parts)
+            blocks.append(f"[Planner Research Context]\n{combined[:2000]}")
+
+        for block in blocks:
+            self.executor.context.add_context_block(block)
+            injected += 1
+            if injected >= 5:
+                break
 
     async def _plan_with_tools(self, prompt: str) -> str:
         from likecodex_engine.agent.loop import AgentLoop
