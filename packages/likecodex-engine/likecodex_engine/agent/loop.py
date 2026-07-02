@@ -403,7 +403,8 @@ class AgentLoop:
                 if self._guard_should_continue:
                     continue
                 if self._guard_should_break:
-                    hit_max_iterations = True
+                    # Guard decided to break (e.g. GoalState satisfied).
+                    # This is *not* a max-iterations event.
                     break
                 break
 
@@ -815,7 +816,7 @@ class AgentLoop:
             return
 
         # ── GoalState integration ─────────────────────────────────────
-        if self.goal_state and not self.is_subagent:
+        if self.goal_state.active and not self.is_subagent:
             follow_up = self.goal_state.parse_response(response.content or "")
             if not follow_up and self._used_any_tool:
                 yield self._emit(

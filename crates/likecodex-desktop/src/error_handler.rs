@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use tauri::Manager;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CrashReport {

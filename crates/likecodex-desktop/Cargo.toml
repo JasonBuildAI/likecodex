@@ -13,6 +13,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = "3"
 tauri-plugin-updater = "2"
+dirs-next = "2"
 
 [lib]
 name = "likecodex_desktop_lib"
