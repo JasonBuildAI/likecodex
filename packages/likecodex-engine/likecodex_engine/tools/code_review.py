@@ -20,9 +20,19 @@ class CodeReviewTools:
             target = self.working_dir / target
         return target.resolve()
 
+    SECURITY_PATTERNS = [
+        (r"eval\(.*\)", "Avoid eval() - can execute arbitrary code"),
+        (r"exec\(.*\)", "Avoid exec() - can execute arbitrary code"),
+        (r"subprocess\.call\(.*shell=True.*\)", "shell=True allows command injection"),
+        (r"os\.system\(", "os.system() allows command injection"),
+        (r"pickle\.loads?", "Unsafe deserialization with pickle"),
+        (r"sqlite3\.execute\(f.*\)|execute\(\".*\{.*\}\"", "SQL injection risk - use parameterized queries"),
+        (r"request\.(GET|POST|PUT|DELETE).*\{.*\}", "Path traversal risk in URLs"),
+    ]
+
     def review_file_schema(self) -> dict[str, Any]:
         return {
-            "description": "Review a source file for common issues, bugs, and style problems.",
+            "description": "Review a source file for common issues, bugs, style problems, and security vulnerabilities.",
             "parameters": {
                 "type": "object",
                 "properties": {
