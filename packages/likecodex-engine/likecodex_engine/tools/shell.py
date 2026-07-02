@@ -369,3 +369,300 @@ class ShellTools:
                 return json.dumps({"error": "timeout waiting for job", **job.status()})
             await asyncio.sleep(0.2)
         return json.dumps(job.status())
+
+    # ── Phase 6.11: AI Command Enhancement ──────────────────────
+
+    SENSITIVE_PATTERNS: list[tuple[str, str]] = [
+        (r"rm\s+-rf\s+(/|\\\\)(\s|$)", "rm -rf / or root is dangerous"),
+        (r":\(\s*\^\s*D\s*\)|\\x00|\\xff", "Binary data injection detected"),
+        (r"mkfs\.|dd if=.*of=/dev/sd", "Dangerous disk operation"),
+        (r"chmod\s+777\s+/", "Overly permissive root permission"),
+        (r"wget.*\|\s*(ba|z)?sh", "Piping unverified download to shell"),
+        (r"curl.*\|\s*(ba|z)?sh", "Piping unverified download to shell"),
+        (r">\s*/dev/(sda|sdb|nvme|mmc)", "Direct disk write"),
+        (r"shutdown|reboot|halt|poweroff", "System shutdown/reboot"),
+        (r"fork\s*\(\s*\)|:(){:|bomb", "Fork bomb / DoS pattern"),
+    ]
+
+    DANGEROUS_COMMANDS: list[str] = [
+        "rm -rf /", "mkfs", "dd if=", ":(){:",
+        "chmod 777 /", "chown -R",
+    ]
+
+    def _detect_project_type(self) -> dict[str, Any]:
+        """Detect project type, language, and build system from working directory."""
+        info: dict[str, Any] = {
+            "has_setup_py": False,
+            "has_pyproject_toml": False,
+            "has_package_json": False,
+            "has_cargo_toml": False,
+            "has_gradle": False,
+            "has_makefile": False,
+            "has_dockerfile": False,
+            "has_git": False,
+            "python_version": "",
+            "node_version": "",
+            "project_type": "unknown",
+            "os": sys.platform,
+        }
+
+        try:
+            wd = self.working_dir
+            info["has_setup_py"] = (wd / "setup.py").exists()
+            info["has_pyproject_toml"] = (wd / "pyproject.toml").exists()
+            info["has_package_json"] = (wd / "package.json").exists()
+            info["has_cargo_toml"] = (wd / "Cargo.toml").exists()
+            info["has_gradle"] = (wd / "build.gradle").exists() or (wd / "build.gradle.kts").exists()
+            info["has_makefile"] = (wd / "Makefile").exists()
+            info["has_dockerfile"] = (wd / "Dockerfile").exists()
+            info["has_git"] = (wd / ".git").exists()
+
+            if info["has_cargo_toml"]:
+                info["project_type"] = "rust"
+            elif info["has_pyproject_toml"] or info["has_setup_py"]:
+                info["project_type"] = "python"
+            elif info["has_package_json"]:
+                info["project_type"] = "node"
+            elif info["has_gradle"]:
+                info["project_type"] = "java"
+            elif info["has_makefile"]:
+                info["project_type"] = "c_cpp"
+            else:
+                info["project_type"] = "other"
+        except Exception:
+            pass
+
+        return info
+
+    @staticmethod
+    def _check_command_safety(command: str) -> list[dict[str, Any]]:
+        """Check a command against safety rules and return warnings."""
+        import re
+        warnings: list[dict[str, Any]] = []
+        lowered = command.lower().strip()
+
+        # Check against sensitive patterns
+        for pattern, description in ShellTools.SENSITIVE_PATTERNS:
+            if re.search(pattern, lowered):
+                warnings.append({
+                    "severity": "danger",
+                    "message": description,
+                    "pattern": pattern,
+                })
+
+        # Check for dangerous commands
+        for dangerous in ShellTools.DANGEROUS_COMMANDS:
+            if dangerous in lowered:
+                warnings.append({
+                    "severity": "danger",
+                    "message": f"Command contains dangerous pattern: {dangerous}",
+                })
+
+        return warnings
+
+    @staticmethod
+    def _cleanup_command(command: str) -> str:
+        """Clean up command: remove leading symbols, handle chains.
+
+        Removes:
+        - Leading $ or # or > symbols (common when pasting from docs)
+        - Leading whitespace
+        - Trailing semicolons
+        - Handles command chains (; || &&)
+        """
+        cleaned = command.strip()
+
+        # Remove leading shell prompt symbols
+        while cleaned and cleaned[0] in ("$", "#", ">", "%"):
+            cleaned = cleaned[1:].strip()
+            if not cleaned:
+                return ""
+
+        # Remove leading whitespace again after symbol cleanup
+        cleaned = cleaned.strip()
+
+        # Remove trailing semicolons
+        while cleaned.endswith(";"):
+            cleaned = cleaned[:-1].strip()
+
+        return cleaned
+
+    @staticmethod
+    def _split_command_chain(command: str) -> list[dict[str, Any]]:
+        """Split a command chain into individual commands.
+
+        Handles: ; (semicolon), && (AND), || (OR), | (pipe)
+        Returns list of {command, separator} dicts.
+        """
+        import re
+
+        chain: list[dict[str, Any]] = []
+        # Regex to split on ;, &&, ||, | while keeping track of the separator
+        parts: list[tuple[str, str]] = re.findall(
+            r'(?:\\.|[^;|&])+|(;|&&|\|\||\|)',
+            command,
+        )
+
+        # Actually, let's do this more carefully
+        current = ""
+        i = 0
+        while i < len(command):
+            if command[i:i+2] == "&&":
+                if current.strip():
+                    chain.append({"command": current.strip(), "separator": "&&"})
+                current = ""
+                i += 2
+            elif command[i:i+2] == "||":
+                if current.strip():
+                    chain.append({"command": current.strip(), "separator": "||"})
+                current = ""
+                i += 2
+            elif command[i] == ";":
+                if current.strip():
+                    chain.append({"command": current.strip(), "separator": ";"})
+                current = ""
+                i += 1
+            elif command[i] == "|" and (i == 0 or command[i-1] != "\\"):
+                if current.strip():
+                    chain.append({"command": current.strip(), "separator": "|"})
+                current = ""
+                i += 1
+            else:
+                current += command[i]
+                i += 1
+
+        if current.strip():
+            chain.append({"command": current.strip(), "separator": ""})
+
+        return chain if len(chain) > 1 else []
+
+    def analyze_command_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Analyze a command for safety issues, project context, and chain structure.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Command to analyze"},
+                },
+                "required": ["command"],
+            },
+        }
+
+    async def analyze_command(self, command: str) -> str:
+        """Analyze a command for safety, context, and structure."""
+        cleaned = self._cleanup_command(command)
+        chain = self._split_command_chain(cleaned) if "&&" in cleaned or "||" in cleaned or ";" in cleaned or "|" in cleaned else []
+        safety = self._check_command_safety(cleaned)
+        project = self._detect_project_type()
+
+        result: dict[str, Any] = {
+            "original": command,
+            "cleaned": cleaned,
+            "has_chain": len(chain) > 0,
+            "chain": chain if chain else None,
+            "safety_warnings": safety,
+            "is_safe": len(safety) == 0,
+            "project_context": project,
+        }
+
+        return json.dumps(result, ensure_ascii=False)
+
+    def suggest_command_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Get context-aware command suggestions based on project type and OS.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "description": "What the user wants to do (e.g., 'install dependencies', 'run tests', 'build')",
+                    },
+                    "project_type": {
+                        "type": "string",
+                        "description": "Override project type (python, node, rust, java, etc.)",
+                    },
+                },
+                "required": ["intent"],
+            },
+        }
+
+    async def suggest_command(self, intent: str, project_type: str = "") -> str:
+        """Suggest context-aware commands for a given intent."""
+        proj = self._detect_project_type() if not project_type else {"project_type": project_type, "os": sys.platform}
+        ptype = proj.get("project_type", "unknown")
+        os_name = proj.get("os", sys.platform)
+
+        intent_lower = intent.lower()
+
+        # Build suggestion map based on project type
+        suggestions: dict[str, dict[str, list[str]]] = {
+            "python": {
+                "install": ["pip install -e .", "pip install -r requirements.txt", "pip install ."],
+                "test": ["pytest", "pytest -v", "python -m pytest", "tox"],
+                "build": ["python -m build", "pip install --upgrade build && python -m build"],
+                "run": ["python main.py", "python -m likecodex_engine.server", "uvicorn main:app"],
+                "lint": ["ruff check .", "flake8", "pylint src/"],
+                "format": ["ruff format .", "black .", "isort ."],
+                "clean": ["find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; find . -name '*.pyc' -delete"],
+                "deps": ["pip list --format=columns", "pip freeze > requirements.txt", "pipdeptree"],
+            },
+            "node": {
+                "install": ["npm install", "yarn", "pnpm install"],
+                "test": ["npm test", "npm run test", "npx vitest run", "npx jest"],
+                "build": ["npm run build", "npx next build"],
+                "run": ["npm run dev", "npx next dev", "node server.js"],
+                "lint": ["npx eslint .", "npm run lint"],
+                "format": ["npx prettier --write .", "npm run format"],
+                "clean": ["rm -rf node_modules .next dist"],
+                "deps": ["npm ls --depth=0", "npx npm-check-updates"],
+            },
+            "rust": {
+                "install": ["cargo build", "cargo build --release"],
+                "test": ["cargo test", "cargo test -- --nocapture", "cargo nextest run"],
+                "build": ["cargo build", "cargo build --release"],
+                "run": ["cargo run", "cargo run --release"],
+                "lint": ["cargo clippy -- -D warnings", "cargo fmt --check"],
+                "format": ["cargo fmt"],
+                "clean": ["cargo clean"],
+                "deps": ["cargo tree", "cargo outdated"],
+            },
+            "java": {
+                "install": ["./gradlew build", "mvn install", "gradle build"],
+                "test": ["./gradlew test", "mvn test"],
+                "build": ["./gradlew build", "mvn package"],
+                "run": ["./gradlew run", "mvn exec:java"],
+                "clean": ["./gradlew clean", "mvn clean"],
+            },
+        }
+
+        # Generic commands for any project type
+        generic: dict[str, list[str]] = {
+            "status": ["git status", "git log --oneline -5"],
+            "diff": ["git diff", "git diff --cached"],
+            "log": ["git log --oneline --graph --all -20"],
+            "branch": ["git branch -a", "git branch -vv"],
+            "search": ["grep -r", "rg"],
+        }
+
+        # Find matching suggestions
+        matches: list[str] = []
+        all_cmds = suggestions.get(ptype, {})
+        for key, cmds in {**all_cmds, **generic}.items():
+            if key in intent_lower or intent_lower in key:
+                matches.extend(cmd for cmd in cmds if cmd not in matches)
+
+        # If no specific match, return top suggestions for project type
+        if not matches:
+            default_cmds = suggestions.get(ptype, {}).get("run", []) + ["git status", "ls -la", "pwd"]
+            matches = default_cmds[:3]
+
+        # Filter out commands that don't exist on windows
+        if os_name == "win32":
+            matches = [m for m in matches if not m.startswith("find . ")]
+
+        return json.dumps({
+            "intent": intent,
+            "project_type": ptype,
+            "suggestions": matches[:5],
+            "os": os_name,
+        }, ensure_ascii=False)
