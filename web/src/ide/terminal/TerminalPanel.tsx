@@ -1,37 +1,43 @@
 'use client';
 
 /**
- * TerminalPanel — AI-powered terminal panel.
+ * TerminalPanel — AI-powered terminal panel with xterm.js integration.
  *
  * Features:
- * - Multi-tab terminal sessions
+ * - Multi-tab terminal sessions with xterm.js display
  * - Command input with history (↑↓)
  * - AI command suggestion (Cmd+K)
  * - Error auto-diagnosis
- *
- * == Phase 6: xterm.js Terminal Integration Plan ==
- * Replace the current <div>-based output display with a full-featured xterm.js
- * terminal instance for each session:
- *
- * 1. Install: npm install xterm @xterm/xterm @xterm/addon-fit @xterm/addon-web-links
- * 2. Each TerminalSession gets an xterm.Terminal instance attached in a ref
- * 3. Terminal.fitAddon handles resize; Terminal.webLinksAddon enables clickable URLs
- * 4. Input is captured from xterm.js key events rather than a separate <input>
- * 5. The backend streams output lines into terminal.write() in real time
- * 6. xterm.js search addon provides in-terminal Ctrl+F find
- * 7. The AI bars (AICommandInput, error diagnosis) remain as overlay panels
- *    docked below the xterm container
- *
- * Implementation steps:
- * - src/ide/terminal/xterm-manager.ts — createTerminal(), resizeHandler(), disposeTerminal()
- * - src/ide/terminal/TerminalPanel.tsx — embed <div ref={terminalRef}> instead of raw <div> lines
- * - src/ide/terminal/terminalStore.ts — store Terminal instance references, wire fitAddon
+ * - xterm.js: ANSI colors, clickable links, search, auto-resize
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useTerminalStore, type TerminalSession } from './terminalStore';
+import { useTerminalStore, type TerminalSession, type TerminalLine } from './terminalStore';
 import { getCompletions, applyCompletion, type CompletionItem } from './terminalCompletion';
 import { TerminalShortcutsHelp } from './TerminalShortcutsHelp';
+import { XtermManager } from './xterm-manager';
+
+/** Convert a store line to an ANSI string and write it to the xterm terminal. */
+function writeLineToXterm(manager: XtermManager, line: TerminalLine): void {
+  switch (line.type) {
+    case 'input':
+      manager.writeln(`\r\n\x1b[34m$ ${line.content}\x1b[0m`);
+      break;
+    case 'command':
+      manager.writeln(`\r\n\x1b[34m$ ${line.content}\x1b[0m`);
+      break;
+    case 'error':
+      manager.writeln(`\r\n\x1b[31m${line.content}\x1b[0m`);
+      break;
+    case 'system':
+      manager.writeln(`\r\n\x1b[90m${line.content}\x1b[0m`);
+      break;
+    case 'output':
+    default:
+      manager.writeln(`\r\n${line.content}`);
+      break;
+  }
+}
 
 export function TerminalPanel() {
   const {
@@ -58,12 +64,17 @@ export function TerminalPanel() {
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [useRegex, setUseRegex] = useState(false);
-  const [searchMatches, setSearchMatches] = useState<number[]>([]);
-  const [searchIndex, setSearchIndex] = useState(0);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const historySearchRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // ── xterm.js Refs ──────────────────────────────────────────────
+  const xtermContainerRef = useRef<HTMLDivElement>(null);
+  const xtermManagerRef = useRef<XtermManager | null>(null);
+  /** Tracks how many lines have been written to xterm per session. */
+  const linesWrittenRef = useRef<Map<string, number>>(new Map());
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
@@ -75,63 +86,89 @@ export function TerminalPanel() {
     return activeSession.history.filter((cmd) => cmd.toLowerCase().includes(q));
   }, [activeSession, historySearchQuery]);
 
-  // Auto-scroll to bottom
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  // ── xterm.js Lifecycle ─────────────────────────────────────────
+
+  /** Create/switch the xterm terminal for the active session. */
+  const initXterm = useCallback((session: TerminalSession) => {
+    if (!xtermContainerRef.current) return;
+
+    // Dispose previous manager
+    xtermManagerRef.current?.dispose();
+
+    // Create new manager
+    const manager = new XtermManager(xtermContainerRef.current, session.id);
+    xtermManagerRef.current = manager;
+
+    // Write all existing lines that haven't been written yet
+    const written = linesWrittenRef.current.get(session.id) ?? 0;
+    const newLines = session.lines.slice(written);
+    for (const line of newLines) {
+      writeLineToXterm(manager, line);
     }
+    linesWrittenRef.current.set(session.id, session.lines.length);
+
+    // Focus after a tick (DOM needs to settle)
+    requestAnimationFrame(() => {
+      manager.focus();
+    });
+  }, []);
+
+  // When active session changes, re-initialise xterm
+  useEffect(() => {
+    if (!activeSession || !xtermContainerRef.current) return;
+    initXterm(activeSession);
+    return () => {
+      xtermManagerRef.current?.dispose();
+      xtermManagerRef.current = null;
+    };
+  }, [activeSessionId, activeSession, initXterm]);
+
+  // When lines are added to the active session, write them to xterm
+  useEffect(() => {
+    if (!xtermManagerRef.current || !activeSession) return;
+    const written = linesWrittenRef.current.get(activeSession.id) ?? 0;
+    if (activeSession.lines.length <= written) return;
+
+    const newLines = activeSession.lines.slice(written);
+    for (const line of newLines) {
+      writeLineToXterm(xtermManagerRef.current, line);
+    }
+    linesWrittenRef.current.set(activeSession.id, activeSession.lines.length);
   }, [activeSession?.lines]);
 
-  // Create initial session
+  // Fit xterm when container resizes
+  useEffect(() => {
+    if (!xtermContainerRef.current) return;
+    const observer = new ResizeObserver(() => {
+      xtermManagerRef.current?.fit();
+    });
+    observer.observe(xtermContainerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  // ── Session creation ─────────────────────────────────────────────
+
   useEffect(() => {
     if (sessions.length === 0) {
       createSession();
     }
   }, [sessions.length, createSession]);
 
-  // Focus history search input
+  // ── Focus helpers ────────────────────────────────────────────────
+
   useEffect(() => {
     if (showHistorySearch && historySearchRef.current) {
       historySearchRef.current.focus();
     }
   }, [showHistorySearch]);
 
-  // Focus terminal search input
   useEffect(() => {
     if (showSearch && searchInputRef.current) {
       searchInputRef.current.focus();
     }
   }, [showSearch]);
 
-  // Compute search matches when query or session changes
-  useEffect(() => {
-    if (!showSearch || !searchQuery.trim() || !activeSession) {
-      setSearchMatches([]);
-      setSearchIndex(0);
-      return;
-    }
-    const matches: number[] = [];
-    const q = searchQuery;
-    activeSession.lines.forEach((line, i) => {
-      try {
-        if (useRegex) {
-          const flags = q.startsWith('(?i)') ? 'u' : 'iu';
-          const pattern = q.startsWith('(?i)') ? q.slice(4) : q;
-          if (new RegExp(pattern, flags).test(line.content)) {
-            matches.push(i);
-          }
-        } else {
-          if (line.content.toLowerCase().includes(q.toLowerCase())) {
-            matches.push(i);
-          }
-        }
-      } catch {
-        // Invalid regex, skip
-      }
-    });
-    setSearchMatches(matches);
-    setSearchIndex(matches.length > 0 ? 0 : -1);
-  }, [searchQuery, showSearch, activeSession, useRegex]);
+  // ── Commands ─────────────────────────────────────────────────────
 
   const handleSubmit = useCallback(() => {
     if (!input.trim() || isExecuting) return;
@@ -148,7 +185,6 @@ export function TerminalPanel() {
       } else if (e.key === 'Tab') {
         e.preventDefault();
         if (!activeSession) return;
-        // Get completions if not already shown
         if (completions.length === 0) {
           const items = getCompletions(input, input.length, activeSession.history);
           setCompletions(items);
@@ -158,7 +194,6 @@ export function TerminalPanel() {
             setInput(result.text);
           }
         } else {
-          // Cycle through completions
           const nextIdx = (completionIdx + 1) % completions.length;
           setCompletionIdx(nextIdx);
           const lastSpace = input.lastIndexOf(' ') + 1;
@@ -189,15 +224,11 @@ export function TerminalPanel() {
         e.preventDefault();
         setShowSearch(true);
         setSearchQuery('');
-        setSearchMatches([]);
-        setSearchIndex(0);
       } else if (e.key === 'Escape') {
         if (showSearch) {
           e.preventDefault();
           setShowSearch(false);
           setSearchQuery('');
-          setSearchMatches([]);
-          setSearchIndex(0);
         } else if (completions.length > 0) {
           e.preventDefault();
           setCompletions([]);
@@ -208,8 +239,26 @@ export function TerminalPanel() {
         setShowHelp(true);
       }
     },
-    [handleSubmit, historyIdx, activeSession, toggleAIInput]
+    [handleSubmit, historyIdx, activeSession, toggleAIInput, completions, completionIdx, input]
   );
+
+  // ── Search support via xterm SearchAddon ────────────────────────
+
+  const performSearch = useCallback((query: string, direction: 'next' | 'prev' = 'next') => {
+    const mgr = xtermManagerRef.current;
+    if (!mgr || !query.trim()) {
+      mgr?.clearSearch();
+      return;
+    }
+    const options = { regex: useRegex, incremental: true };
+    if (direction === 'next') {
+      mgr.findNext(query);
+    } else {
+      mgr.findPrevious(query);
+    }
+  }, [useRegex]);
+
+  // ── Render ───────────────────────────────────────────────────────
 
   if (!activeSession) {
     return (
@@ -271,48 +320,14 @@ export function TerminalPanel() {
         </button>
       </div>
 
-      {/* Terminal output */}
+      {/* xterm.js terminal container */}
       <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto p-2 font-mono text-xs leading-relaxed min-h-0"
-      >
-        {activeSession.lines.map((line, i) => {
-          const isMatch = searchMatches.includes(i);
-          const isActiveMatch = isMatch && searchMatches.indexOf(i) === searchIndex;
-          return (
-            <div
-              key={i}
-              ref={isActiveMatch ? (el) => {
-                if (el) {
-                  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-                }
-              } : undefined}
-              className={
-                (isActiveMatch
-                  ? 'bg-yellow-500/30 text-white'
-                  : isMatch
-                    ? 'bg-yellow-500/15'
-                    : '') +
-                ' ' +
-                (line.type === 'input'
-                  ? 'text-blue-300'
-                  : line.type === 'error'
-                    ? 'text-red-400'
-                    : line.type === 'system'
-                      ? 'text-gray-500'
-                      : 'text-gray-300')
-              }
-            >
-              {line.type === 'input' ? `$ ${line.content}` : line.content}
-            </div>
-          );
-        })}
-        {activeSession.isRunning && (
-          <div className="text-yellow-400 animate-pulse">▊</div>
-        )}
-      </div>
+        ref={xtermContainerRef}
+        className="flex-1 min-h-0 overflow-hidden"
+        style={{ padding: '4px 0' }}
+      />
 
-      {/* Terminal search overlay */}
+      {/* Terminal search overlay (uses xterm SearchAddon) */}
       {showSearch && (
         <div className="border-t border-gray-700 bg-[#252535] p-2 shrink-0">
           <div className="flex items-center gap-2">
@@ -323,46 +338,24 @@ export function TerminalPanel() {
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
+                performSearch(e.target.value);
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
                   e.preventDefault();
                   setShowSearch(false);
                   setSearchQuery('');
-                  setSearchMatches([]);
-                  setSearchIndex(0);
+                  xtermManagerRef.current?.clearSearch();
                   inputRef.current?.focus();
                 } else if (e.key === 'Enter') {
                   e.preventDefault();
-                  if (e.shiftKey) {
-                    // Navigate previous
-                    setSearchIndex((prev) => {
-                      const max = searchMatches.length - 1;
-                      if (max < 0) return -1;
-                      return prev <= 0 ? max : prev - 1;
-                    });
-                  } else {
-                    // Navigate next
-                    setSearchIndex((prev) => {
-                      const max = searchMatches.length - 1;
-                      if (max < 0) return -1;
-                      return prev >= max ? 0 : prev + 1;
-                    });
-                  }
+                  performSearch(searchQuery, e.shiftKey ? 'prev' : 'next');
                 } else if (e.key === 'ArrowUp') {
                   e.preventDefault();
-                  setSearchIndex((prev) => {
-                    const max = searchMatches.length - 1;
-                    if (max < 0) return -1;
-                    return prev <= 0 ? max : prev - 1;
-                  });
+                  performSearch(searchQuery, 'prev');
                 } else if (e.key === 'ArrowDown') {
                   e.preventDefault();
-                  setSearchIndex((prev) => {
-                    const max = searchMatches.length - 1;
-                    if (max < 0) return -1;
-                    return prev >= max ? 0 : prev + 1;
-                  });
+                  performSearch(searchQuery, 'next');
                 }
               }}
               className="flex-1 bg-[#1e1e2e] text-gray-200 text-xs border border-gray-600 rounded px-2 py-1 focus:outline-none focus:border-blue-500 font-mono"
@@ -376,46 +369,17 @@ export function TerminalPanel() {
               .*
             </button>
             <button
-              onClick={() => setShowSearch(false)}
+              onClick={() => {
+                setShowSearch(false);
+                setSearchQuery('');
+                xtermManagerRef.current?.clearSearch();
+              }}
               className="px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white"
               title="关闭搜索 (Esc)"
             >
               ✕
             </button>
           </div>
-          {searchQuery && (
-            <div className="flex items-center gap-2 mt-1">
-              <div className="text-[10px] text-gray-500">
-                {searchMatches.length > 0
-                  ? `${searchIndex + 1} / ${searchMatches.length} 匹配`
-                  : '无匹配结果'}
-              </div>
-              {searchMatches.length > 0 && (
-                <div className="flex gap-1 ml-auto">
-                  <button
-                    onClick={() => setSearchIndex((prev) => {
-                      const max = searchMatches.length - 1;
-                      return prev <= 0 ? max : prev - 1;
-                    })}
-                    className="px-1.5 py-0.5 text-[10px] bg-gray-700 text-gray-300 rounded hover:bg-gray-600"
-                    title="上一个 (Shift+Enter)"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    onClick={() => setSearchIndex((prev) => {
-                      const max = searchMatches.length - 1;
-                      return prev >= max ? 0 : prev + 1;
-                    })}
-                    className="px-1.5 py-0.5 text-[10px] bg-gray-700 text-gray-300 rounded hover:bg-gray-600"
-                    title="下一个 (Enter)"
-                  >
-                    ▼
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
 

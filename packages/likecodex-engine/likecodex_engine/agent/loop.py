@@ -830,7 +830,10 @@ class AgentLoop:
                 return
 
         # ── evidence ledger check ─────────────────────────────────────
-        if self.evidence and not self.is_subagent:
+        has_pending_steps = any(
+            r.tool_name == "complete_step" for r in self.evidence._receipts
+        )
+        if self.evidence and not self.is_subagent and has_pending_steps:
             pending = self.evidence.pending_steps()
             if not pending and self._used_any_tool:
                 yield self._emit(

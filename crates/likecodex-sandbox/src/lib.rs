@@ -1,5 +1,7 @@
+pub mod audit;
 pub mod docker;
 pub mod fallback;
+pub mod local_sandbox;
 pub mod policy;
 
 use anyhow::Result;
@@ -12,7 +14,10 @@ use tracing::{info, warn};
 pub use docker::DockerExecutor;
 pub use fallback::FallbackExecutor;
 pub use likecodex_executor::ExecutionResult;
+pub use local_sandbox::LocalSandboxExecutor;
 pub use policy::SandboxPolicy;
+
+use audit::AuditLogger;
 
 /// Unified sandbox executor that prefers Docker and falls back to local execution.
 #[derive(Debug, Clone)]
@@ -20,6 +25,7 @@ pub struct SandboxExecutor {
     config: SandboxConfig,
     policy: SandboxPolicy,
     image: String,
+    audit: Option<AuditLogger>,
 }
 
 impl SandboxExecutor {
@@ -36,11 +42,19 @@ impl SandboxExecutor {
             read_only_mounts: Vec::new(),
             read_write_mounts: Vec::new(),
         };
+        let audit = AuditLogger::new().ok();
         Self {
             config,
             policy,
             image,
+            audit,
         }
+    }
+
+    /// Attach an audit logger.
+    pub fn with_audit(mut self, audit: AuditLogger) -> Self {
+        self.audit = Some(audit);
+        self
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -70,42 +84,54 @@ impl SandboxExecutor {
         command: &str,
         working_dir: impl AsRef<Path>,
     ) -> Result<ExecutionResult> {
+        let start = std::time::Instant::now();
+
         if !self.config.enabled {
             anyhow::bail!("sandbox is disabled");
         }
 
         let working_dir = working_dir.as_ref().to_path_buf();
 
-        if self.is_available().await {
+        let result = if self.is_available().await {
             let docker = DockerExecutor::new(&self.image, self.policy.clone());
             if let Err(e) = docker.ensure_image().await {
                 if !self.config.allow_fallback {
                     anyhow::bail!("sandbox required but Docker image not available: {e}");
                 }
                 warn!(error = %e, "failed to ensure sandbox image, falling back to local");
-                return FallbackExecutor::new(self.policy.clone())
+                LocalSandboxExecutor::new(self.policy.clone())
                     .execute(command, &working_dir)
-                    .await;
-            }
-            match docker.execute(command, &working_dir).await {
-                Ok(result) => Ok(result),
-                Err(e) => {
-                    if !self.config.allow_fallback {
-                        anyhow::bail!("sandbox required but execution failed: {e}");
+                    .await?
+            } else {
+                match docker.execute(command, &working_dir).await {
+                    Ok(result) => result,
+                    Err(e) => {
+                        if !self.config.allow_fallback {
+                            anyhow::bail!("sandbox required but execution failed: {e}");
+                        }
+                        warn!(error = %e, "sandbox execution failed, falling back to local");
+                        LocalSandboxExecutor::new(self.policy.clone())
+                            .execute(command, &working_dir)
+                            .await?
                     }
-                    warn!(error = %e, "sandbox execution failed, falling back to local");
-                    FallbackExecutor::new(self.policy.clone())
-                        .execute(command, &working_dir)
-                        .await
                 }
             }
         } else if self.config.allow_fallback {
-            info!("docker not available, using fallback local executor");
-            FallbackExecutor::new(self.policy.clone())
+            info!("docker not available, using local sandbox executor");
+            LocalSandboxExecutor::new(self.policy.clone())
                 .execute(command, &working_dir)
-                .await
+                .await?
         } else {
             anyhow::bail!("sandbox execution is required but Docker is not available");
+        };
+
+        // Audit log
+        if let Some(ref audit) = self.audit {
+            let _ = audit
+                .log_execution(&result, start.elapsed().as_millis() as u64)
+                .await;
         }
+
+        Ok(result)
     }
 }
