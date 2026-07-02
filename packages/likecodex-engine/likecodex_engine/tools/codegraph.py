@@ -1,5 +1,11 @@
 """A lightweight, dependency-free code graph.
 
+Phase 7.3: Call Graph Visualization
+- Future: Add a visualize() method that outputs DOT / Mermaid format
+  or JSON edges list for frontend D3/vis.js rendering.
+- Example: graph.visualize() → digraph { "add" -> "Calc.run" ... }
+- See also: web/src/components/CodeGraphSearch.tsx call graph UI
+
 This builds a symbol table (definitions) and a call/reference graph across the
 workspace using language-aware regular expressions. It is not a full parser, but
 it gives the agent fast "where is X defined" and "who calls X" answers without an
