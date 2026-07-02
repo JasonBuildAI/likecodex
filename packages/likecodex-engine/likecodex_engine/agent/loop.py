@@ -22,6 +22,7 @@ from likecodex_engine.agent.guards import (
     LoopGuard,
     RepeatSuccessGuard,
     StormBreaker,
+    ToolCircuitBreaker,
     ToolTurnOutcome,
     classify_turn_outcome,
     empty_final_notice,
@@ -123,6 +124,7 @@ class AgentLoop:
         self._used_any_tool = False
         self._handoff_nudges = 0
         self._handoff_active = False
+        self.circuit_breaker = ToolCircuitBreaker()
         if hasattr(context, "set_working_dir"):
             context.set_working_dir(tools.working_dir)
         if hasattr(context, "set_compact_llm"):
@@ -503,6 +505,8 @@ class AgentLoop:
                 self.context.update_tool_result(tool_call_id, new_output)
                 self._turn_outcomes[0].output = new_output
                 yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
+            # Circuit breaker: advance iteration
+            self.circuit_breaker.next_iteration()
             # Prefetch: build context cache for next iteration while idle
             self.context.get_messages()
             iteration += 1
@@ -573,6 +577,23 @@ class AgentLoop:
                     content=f"Tool '{tool_call.name}' blocked: ask mode only allows read-only operations.",
                     model="permission",
                     event_type="permission",
+                )
+            )
+            return
+
+        # Circuit breaker: check if tool is tripped
+        if self.circuit_breaker.is_tripped(tool_call.name):
+            result = json.dumps({
+                "error": self.circuit_breaker.trip_message(tool_call.name),
+                "circuit_breaker": True
+            })
+            self.context.add_tool_result(tool_call_id=tool_call.id, content=result)
+            yield self._emit(
+                LLMResponse(
+                    content=result,
+                    model="tool-result",
+                    event_type="tool_result",
+                    metadata={"tool_call_id": tool_call.id, "circuit_breaker": True},
                 )
             )
             return
@@ -727,6 +748,7 @@ class AgentLoop:
             read_only=self.tools.is_read_only(tool_call.name),
             step=step,
         )
+        self.circuit_breaker.record(tool_call.name, success)
         if success:
             self.repeat_guard.record_success(tool_call.name, tool_call.arguments)
 

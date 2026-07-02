@@ -208,6 +208,63 @@ MAX_EMPTY_FINAL_BLOCKS = 3
 MAX_EXECUTOR_HANDOFF_NUDGES = 1
 
 
+@dataclass
+class ToolCircuitBreaker:
+    """Sliding-window circuit breaker: disables a tool temporarily when failure rate exceeds threshold.
+
+    Uses a sliding window of the last N calls to each tool. If the failure rate
+    within that window exceeds the threshold, the tool is tripped and stays
+    disabled for ``cooldown`` iterations before being allowed again.
+    """
+
+    window_size: int = 10
+    failure_threshold: float = 0.6  # 60 %
+    cooldown: int = 5
+
+    _history: dict[str, list[bool]] = field(default_factory=dict)
+    _disabled_until: dict[str, int] = field(default_factory=dict)
+    _global_iteration: int = 0
+
+    def record(self, tool_name: str, success: bool) -> None:
+        """Record a tool execution result."""
+        if tool_name not in self._history:
+            self._history[tool_name] = []
+        self._history[tool_name].append(success)
+        if len(self._history[tool_name]) > self.window_size:
+            self._history[tool_name].pop(0)
+
+    def is_tripped(self, tool_name: str) -> bool:
+        """Check if a tool is currently tripped (disabled by circuit breaker)."""
+        # Check cooldown
+        if tool_name in self._disabled_until:
+            if self._global_iteration < self._disabled_until[tool_name]:
+                return True
+            else:
+                del self._disabled_until[tool_name]
+        
+        # Check failure rate within window
+        history = self._history.get(tool_name, [])
+        if len(history) < self.window_size // 2:
+            return False  # Not enough data to trip
+        
+        failures = sum(1 for s in history if not s)
+        rate = failures / len(history)
+        if rate >= self.failure_threshold:
+            self._disabled_until[tool_name] = self._global_iteration + self.cooldown
+            return True
+        return False
+
+    def trip_message(self, tool_name: str) -> str:
+        return (
+            f"[circuit-breaker] Tool `{tool_name}` has failed more than "
+            f"{self.failure_threshold * 100:.0f}% of recent calls. It is temporarily disabled "
+            f"for {self.cooldown} iterations. Try a different approach or a different tool."
+        )
+
+    def next_iteration(self) -> None:
+        self._global_iteration += 1
+
+
 def has_visible_final_answer(text: str) -> bool:
     return bool(text.strip())
 
