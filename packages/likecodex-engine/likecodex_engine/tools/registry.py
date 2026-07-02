@@ -161,6 +161,11 @@ class ToolRegistry:
         hist = HistoryTools(self.working_dir)
         self.register("history", hist.history_schema(), hist.history, read_only=True)
 
+        share = SessionShareTools()
+        self.register("session_share", share.share_schema(), share.share, read_only=True)
+        self.register("session_export", share.export_schema(), share.export, read_only=True)
+        self.register("session_import", share.import_schema(), share.import_, read_only=True)
+
         mem = AgentMemoryTools(self.working_dir)
         self.register("remember", mem.remember_schema(), mem.remember)
         self.register("forget", mem.forget_schema(), mem.forget)
