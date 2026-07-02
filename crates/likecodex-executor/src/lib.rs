@@ -128,6 +128,7 @@ impl LocalExecutor {
             Ok(Err(e)) => return Err(anyhow::anyhow!("command failed: {e}")),
             Err(_) => {
                 let _ = child.kill().await;
+                let _ = child.wait().await;
                 (None, true)
             }
         };
