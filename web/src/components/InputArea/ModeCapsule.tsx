@@ -59,12 +59,44 @@ const MODE_ORDER: AgentMode[] = ['ask', 'agent', 'manual'];
 export const ModeCapsule: React.FC = () => {
   const agentMode = useAppStore((s) => s.agentMode);
   const setAgentMode = useAppStore((s) => s.setAgentMode);
+  const selectedModel = useAppStore((s) => s.selectedModel);
+  const setSelectedModel = useAppStore((s) => s.setSelectedModel);
+  const currentSessionId = useAppStore((s) => s.currentSessionId);
+  const addToast = useAppStore((s) => s.addToast);
 
   const cycleMode = useCallback(() => {
     const idx = MODE_ORDER.indexOf(agentMode);
     const next = MODE_ORDER[(idx + 1) % MODE_ORDER.length];
     setAgentMode(next);
   }, [agentMode, setAgentMode]);
+
+  const isPro = selectedModel === 'deepseek-v4-pro';
+
+  const toggleModel = useCallback(async () => {
+    const newModel = isPro ? 'deepseek-v4-flash' : 'deepseek-v4-pro';
+    setSelectedModel(newModel);
+    // Persist to localStorage
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('likecodex_model', newModel);
+    }
+    // Attempt to sync with backend
+    if (currentSessionId) {
+      try {
+        await fetch('/api/deepseek/switch-model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: currentSessionId,
+            model: isPro ? 'flash' : 'pro',
+            reason: 'User toggle in ModeCapsule',
+          }),
+        });
+        addToast({ type: 'success', message: `Switched to ${isPro ? 'Flash' : 'Pro'}` });
+      } catch {
+        // Backend sync best-effort
+      }
+    }
+  }, [isPro, setSelectedModel, currentSessionId, addToast]);
 
   return (
     <div className="flex items-center justify-center mb-3">
@@ -106,6 +138,34 @@ export const ModeCapsule: React.FC = () => {
             </motion.button>
           );
         })}
+
+        {/* Model Switch Divider */}
+        <div className="w-px h-5 bg-border/50 mx-1" />
+
+        {/* Flash / Pro Toggle */}
+        <motion.button
+          type="button"
+          onClick={toggleModel}
+          title={isPro ? 'Switch to Flash (faster, cheaper)' : 'Switch to Pro (more powerful)'}
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+            isPro
+              ? 'bg-purple-500/20 text-purple-400 border-purple-500/30 shadow-md'
+              : 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30 shadow-md'
+          }`}
+        >
+          {isPro ? (
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+          ) : (
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          )}
+          <span>{isPro ? 'Pro' : 'Flash'}</span>
+        </motion.button>
       </motion.div>
     </div>
   );
