@@ -157,3 +157,21 @@ class EvidenceLedger:
         if incomplete:
             return [str(t.get("content", t.get("id", ""))) for t in incomplete]
         return []
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize evidence to a dictionary for persistence."""
+        from copy import deepcopy
+        return {"receipts": [{"tool_name": r.tool_name, "success": r.success, "step": r.step} for r in self._receipts]}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> EvidenceLedger:
+        """Restore evidence from a dictionary."""
+        ledger = cls()
+        for r_data in data.get("receipts", []):
+            from likecodex_engine.agent.evidence import Receipt
+            ledger._receipts.append(Receipt(
+                tool_name=r_data["tool_name"],
+                success=r_data["success"],
+                step=r_data.get("step", ""),
+            ))
+        return ledger
