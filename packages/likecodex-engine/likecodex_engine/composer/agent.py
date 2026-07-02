@@ -60,6 +60,7 @@ class ComposerAgent:
         self._undo_stack: list[list[dict]] = []  # stack of change snapshots for undo
         self._redo_stack: list[list[dict]] = []  # stack for redo
         self._bg_tasks: dict[str, asyncio.Task] = {}
+        self._bg_results: dict[str, list[dict]] = {}
 
     # ============================================================
     # Public API
@@ -88,8 +89,8 @@ class ComposerAgent:
             task_id = uuid.uuid4().hex[:12]
             yield {"type": "background_started", "task_id": task_id}
             # Launch background task
-            loop = asyncio.get_event_loop()
-            bg_task = loop.create_task(
+            loop_ = asyncio.get_event_loop()
+            bg_task = loop_.create_task(
                 self._run_background(task_id, message, mentions, session_id)
             )
             self._bg_tasks[task_id] = bg_task
@@ -179,6 +180,10 @@ class ComposerAgent:
             return {"type": "composer_done"}
         return {"type": "running"}
 
+    async def get_bg_changes(self, task_id: str) -> list[dict] | None:
+        """Get the changes collected from a completed background task."""
+        return self._bg_results.get(task_id)
+
     # ============================================================
     # Internal execution
     # ============================================================
@@ -243,7 +248,7 @@ class ComposerAgent:
                                     }
                                     continue
 
-                            # Push undo snapshot before change
+                            # 3.5: Push undo snapshot before change
                             self._push_undo_snapshot()
 
                             self.change_set.append(change)
@@ -281,10 +286,23 @@ class ComposerAgent:
     async def _run_background(self, task_id: str, message: str, mentions: list[dict], session_id: str):
         """Run a composer task in the background, collecting changes."""
         try:
-            async for _event in self._execute_inner(message, mentions, session_id):
-                pass  # All changes collected into self.change_set
-        except Exception:
-            pass  # Errors handled within _execute_inner
+            # Use a dedicated ComposerAgent instance for background execution
+            bg_agent = ComposerAgent(self.config, self.working_dir)
+            async for _event in bg_agent._execute_inner(message, mentions, session_id):
+                pass
+            # Store results
+            self._bg_results[task_id] = [
+                {
+                    "file_path": c.file_path,
+                    "change_type": c.change_type,
+                    "original_content": c.original_content,
+                    "modified_content": c.modified_content,
+                    "language": c.language,
+                }
+                for c in bg_agent.change_set
+            ]
+        except Exception as exc:
+            self._bg_results[task_id] = [{"type": "composer_error", "content": str(exc)}]
 
     def _push_undo_snapshot(self):
         """Push current change state as an undo snapshot."""
