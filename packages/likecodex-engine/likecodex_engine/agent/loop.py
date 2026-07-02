@@ -320,6 +320,11 @@ class AgentLoop:
 
         # Start watchdog
         self._last_activity_time = time.time()
+        self._watchdog_event = asyncio.Event()
+        _watchdog_interval = 15  # seconds
+        _watchdog_timeout = 300   # 5 minutes
+        _loop_start_time = time.time()
+        _watchdog_fired = False
 
         iteration = 0
         hit_max_iterations = False
@@ -661,19 +666,63 @@ class AgentLoop:
             # Circuit breaker: advance iteration
             self.circuit_breaker.next_iteration()
             
-            # Watchdog: check if stuck (no tool calls for 5 minutes)
+            # Watchdog: periodic check (15s interval) with 5min timeout
             now = time.time()
-            if self._used_any_tool and (now - self._last_activity_time) > 300:
+            elapsed = now - self._start_time
+            idle_time = now - self._last_activity_time
+
+            # 5-minute absolute timeout
+            if elapsed > 300 and self._used_any_tool:
                 yield self._emit(
                     LLMResponse(
-                        content="[watchdog] No tool calls for 5 minutes. Injecting prompt to check if stuck.",
+                        content="[watchdog] Total execution time exceeded 5 minute timeout. Forcing termination.",
                         model="system",
-                        event_type="notice",
+                        event_type="watchdog_timeout",
+                        metadata={
+                            "elapsed_s": round(elapsed, 1),
+                            "idle_s": round(idle_time, 1),
+                            "action": "timeout_termination",
+                        },
                     )
                 )
-                self._last_activity_time = now
+                hit_max_iterations = True
+                break
+
+            # Idle detection
+            if idle_time > 15 and self._used_any_tool:
+                if not self._watchdog_fired:
+                    self._watchdog_fired = True
+                    yield self._emit(
+                        LLMResponse(
+                            content=f"[watchdog] Idle for {idle_time:.0f}s. Checking if stuck.",
+                            model="system",
+                            event_type="watchdog_check",
+                            metadata={
+                                "elapsed_s": round(elapsed, 1),
+                                "idle_s": round(idle_time, 1),
+                                "action": "idle_check",
+                            },
+                        )
+                    )
+                if idle_time > 60:
+                    yield self._emit(
+                        LLMResponse(
+                            content="[watchdog] Extended idle detected. Attempting to re-engage the model.",
+                            model="system",
+                            event_type="watchdog_idle",
+                            metadata={
+                                "elapsed_s": round(elapsed, 1),
+                                "idle_s": round(idle_time, 1),
+                                "action": "idle_nudge",
+                            },
+                        )
+                    )
+                    self._last_activity_time = now
+                    self._watchdog_fired = False
+            else:
+                self._watchdog_fired = False
             self._last_activity_time = now
-            
+
             # Prefetch: build context cache for next iteration while idle
             self.context.get_messages()
             iteration += 1
