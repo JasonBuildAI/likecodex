@@ -130,3 +130,43 @@ def _error_handler(message: str):
         return json.dumps({"error": message})
 
     return handler
+
+
+def mcp_tool_to_openai_format(
+    server_name: str,
+    tool: dict[str, Any],
+) -> dict[str, Any]:
+    """Convert a raw MCP tool definition to OpenAI-compatible function calling format.
+
+    Handles both MCP inputSchema (JSON Schema) and simplified schemas.
+    Auto-prefixes the tool name with mcp__{server_name} for disambiguation.
+    """
+    raw_name = tool.get("name", "unknown")
+    input_schema = tool.get("inputSchema") or {}
+
+    # Normalize parameters: ensure it has type="object" and properties
+    parameters = {"type": "object", "properties": {}}
+    if isinstance(input_schema, dict):
+        if "type" in input_schema:
+            parameters = dict(input_schema)
+        if "properties" in input_schema:
+            parameters["properties"] = dict(input_schema["properties"])
+        if "required" in input_schema:
+            parameters["required"] = list(input_schema["required"])
+
+    return {
+        "type": "function",
+        "function": {
+            "name": f"mcp__{server_name}__{raw_name}",
+            "description": tool.get("description", f"MCP tool from {server_name}: {raw_name}"),
+            "parameters": parameters,
+        },
+    }
+
+
+def convert_all_mcp_tools(
+    server_name: str,
+    tools: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert all tools from an MCP server to OpenAI format in one call."""
+    return [mcp_tool_to_openai_format(server_name, t) for t in tools if t.get("name")]
