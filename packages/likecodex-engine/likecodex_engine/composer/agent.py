@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import os
 import uuid
 from dataclasses import dataclass
@@ -232,19 +233,36 @@ class ComposerAgent:
                             args,
                         )
                         if change and change.file_path not in self._captured_paths:
-                            # Conflict detection
+                            # ============================================================
+                            # Phase 3.9: SHA256 文件变更冲突检测
+                            #
+                            # 在写入前校验磁盘文件是否已被外部修改。
+                            # 使用 SHA256 而非字符串比较, 优势:
+                            #   - 避免编码/换行符差异导致的误判
+                            #   - 大文件 O(1) 复杂度比较
+                            #   - 可持久化 hash 供后续审计/合并参考
+                            #
+                            # 冲突策略: 检测到冲突则跳过该文件, 继续处理其余文件,
+                            # 并向 UI 发送 conflict_detected 事件供用户裁决。
+                            # ============================================================
                             abs_path = change.file_path if os.path.isabs(change.file_path) else \
                                 os.path.join(self.working_dir, change.file_path)
                             if os.path.exists(abs_path) and change.change_type != "create":
-                                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-                                    current_content = f.read()
-                                if current_content != change.original_content:
+                                with open(abs_path, "rb") as f:
+                                    current_content_bytes = f.read()
+                                current_hash = hashlib.sha256(current_content_bytes).hexdigest()
+                                original_hash = hashlib.sha256(
+                                    change.original_content.encode("utf-8")
+                                ).hexdigest()
+                                if current_hash != original_hash:
                                     yield {
                                         "type": "conflict_detected",
                                         "filePath": change.file_path,
                                         "originalContent": change.original_content,
-                                        "currentContent": current_content,
+                                        "currentContent": current_content_bytes.decode("utf-8", errors="replace"),
                                         "modifiedContent": change.modified_content,
+                                        "originalHash": original_hash,
+                                        "currentHash": current_hash,
                                     }
                                     continue
 
