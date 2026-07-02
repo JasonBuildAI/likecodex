@@ -1,8 +1,8 @@
 """Parallel dispatch for read-only tool batches.
 
 Enhanced dedup:
-- Read-only dedup cache: 5-second TTL
-- Write tool merge: detect and skip duplicate write calls
+- Read-only dedup cache: 5-second TTL with max 1000 entries
+- Write tool merge: detect and skip duplicate write calls with max 500 entries
 """
 
 from __future__ import annotations
@@ -64,27 +64,35 @@ _write_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
 _WRITE_DEDUP_TTL = 2.0  # seconds
 _WRITE_MAX_ENTRIES = 500  # prevent unbounded growth
 
+_evict_counter: int = 0
 
-def _evict_stale_cache(ttl: float, max_entries: int) -> None:
-    """Periodically evict stale entries from dedup caches."""
-    global _dedup_cache, _write_cache
+
+def _evict_stale_cache() -> None:
+    """Periodically evict stale entries from dedup caches to prevent unbounded growth."""
+    global _dedup_cache, _write_cache, _evict_counter
     now = time.time()
+
     # Evict stale dedup entries
-    stale_dedup = [k for k, (ts, _) in _dedup_cache.items() if now - ts > ttl]
+    stale_dedup = [k for k, (ts, _) in _dedup_cache.items() if now - ts > _DEDUP_TTL]
     for k in stale_dedup:
         del _dedup_cache[k]
+
     # Trim dedup cache if over max
     if len(_dedup_cache) > _DEDUP_MAX_ENTRIES:
         sorted_dedup = sorted(_dedup_cache.items(), key=lambda x: x[1][0], reverse=True)
         _dedup_cache = dict(sorted_dedup[:_DEDUP_MAX_ENTRIES])
+
     # Evict stale write cache entries
-    stale_write = [k for k, (ts, _, _) in _write_cache.items() if now - ts > ttl]
+    stale_write = [k for k, (ts, _, _) in _write_cache.items() if now - ts > _WRITE_DEDUP_TTL]
     for k in stale_write:
         del _write_cache[k]
+
     # Trim write cache if over max
     if len(_write_cache) > _WRITE_MAX_ENTRIES:
         sorted_write = sorted(_write_cache.items(), key=lambda x: x[1][0], reverse=True)
         _write_cache = dict(sorted_write[:_WRITE_MAX_ENTRIES])
+
+    _evict_counter = 0
 
 
 def is_read_only_tool(name: str) -> bool:
@@ -100,7 +108,7 @@ def _merge_duplicate_calls(tool_calls: list[Any]) -> list[Any]:
     """Pre-merge identical tool calls within the same batch.
     
     For read-only tools: keep only the first occurrence.
-    For write tools: keep only the first occurrence (they would produce same result).
+    For write tools: keep only the first occurrence.
     Returns deduplicated list while preserving order.
     """
     seen: set[str] = set()
@@ -121,10 +129,10 @@ async def execute_tool_calls_parallel(
     """Execute read-only tools in parallel; others sequentially in order."""
 
     # Periodic cache eviction (every 100 calls)
-    _evict_stale_cache.counter = getattr(_evict_stale_cache, "counter", 0) + 1
-    if _evict_stale_cache.counter >= 100:  # noqa: B018
-        _evict_stale_cache(_DEDUP_TTL, _DEDUP_MAX_ENTRIES)
-        _evict_stale_cache.counter = 0
+    global _evict_counter
+    _evict_counter += 1
+    if _evict_counter >= 100:
+        _evict_stale_cache()
 
     # Pre-merge duplicate calls within this batch
     tool_calls = _merge_duplicate_calls(tool_calls)
