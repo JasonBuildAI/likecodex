@@ -135,8 +135,7 @@ def merge_tool_calls(response: LLMResponse) -> LLMResponse:
 
 def ensure_tool_call_ids(tool_calls: list[ToolCall]) -> list[ToolCall]:
     """Assign stable ids to tool calls missing them before persistence.
-    Detects and fixes duplicate IDs using full uuid4 for collision-free IDs.
-    Also performs cross-turn merge detection based on tool name + arguments.
+    Also detects and fixes duplicate IDs by appending a unique suffix.
     """
     out: list[ToolCall] = []
     used_ids: set[str] = set()
@@ -148,10 +147,8 @@ def ensure_tool_call_ids(tool_calls: list[ToolCall]) -> list[ToolCall]:
         elif tid in used_ids:
             tid = f"call_{uuid.uuid4().hex}"
         elif tid in _CROSS_TURN_IDS:
-            # Cross-turn conflict: append unique suffix
             tid = f"{tid}_{uuid.uuid4().hex[:4]}"
         used_ids.add(tid)
-        # Register in cross-turn registry
         _CROSS_TURN_IDS.add(tid)
         out.append(tc.model_copy(update={"id": tid}))
     return out
@@ -168,12 +165,7 @@ def reset_tool_call_id_registry() -> None:
 
 def validate_tool_call_ids(tool_calls: list[ToolCall]) -> list[str]:
     """Pre-validate tool call IDs and return list of issues found.
-    
-    Checks:
-    - Missing IDs
-    - Duplicate IDs within the same batch
-    - Non-standard ID format
-    
+    Checks: missing IDs, duplicates, non-standard format.
     Returns list of warning messages (empty if all valid).
     """
     issues: list[str] = []
