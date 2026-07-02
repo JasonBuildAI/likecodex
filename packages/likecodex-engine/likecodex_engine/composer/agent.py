@@ -48,6 +48,8 @@ class ComposerAgent:
         self.working_dir = working_dir
         self.change_set: list[FileChange] = []
         self._captured_paths: set[str] = set()
+        self._undo_stack: list[list[str]] = []  # stack of captured paths snapshots
+        self._redo_stack: list[list[str]] = []
 
     async def execute(
         self,
