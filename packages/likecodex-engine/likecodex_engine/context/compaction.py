@@ -195,6 +195,8 @@ class CacheFirstCompactor:
             content = m.content[:3000]
             if m.role == Role.TOOL:
                 lines.append(f"[tool result]: {content[:1500]}")
+            elif m.role == Role.ASSISTANT and m.reasoning_content:
+                lines.append(f"[{role}](reasoning:{m.reasoning_content[:500]}): {content}")
             else:
                 lines.append(f"[{role}]: {content}")
         transcript = "\n".join(lines[-60:])
@@ -210,10 +212,16 @@ class CacheFirstCompactor:
         return f"{SUMMARY_TAG_OPEN}\n{body}\n{SUMMARY_TAG_CLOSE}"
 
     def _summarize_default(self, log: list[Message]) -> str:
-        """Default summary (Level1/Level2 compatible)."""
+        """Default summary (Level1/Level2 compatible) with reasoning_content preserved."""
         user_msgs = [m for m in log if m.role == Role.USER]
         tool_msgs = [m for m in log if m.role == Role.TOOL]
         assistant_msgs = [m for m in log if m.role == Role.ASSISTANT]
+
+        # Extract reasoning summaries from assistant messages
+        reasoning_snippets = [
+            m.reasoning_content[:200] for m in assistant_msgs
+            if m.reasoning_content
+        ]
 
         # Extract key decisions: user messages with decision indicators
         decision_kw = ["改为", "使用", "采用", "选择", "use", "choose", "select", "decide", "switch"]
@@ -234,6 +242,9 @@ class CacheFirstCompactor:
         parts = [f"{SUMMARY_TAG_OPEN}"]
         parts.append("Previous conversation summarized due to context limits.")
         parts.append(f"Turns: {len(assistant_msgs)} assistant, {len(tool_msgs)} tool results.")
+
+        if reasoning_snippets:
+            parts.append("## Reasoning Summary\n- " + "\n- ".join(reasoning_snippets[-3:]))
 
         if not errors:
             # Level1: also check tool content for error patterns more broadly
@@ -262,7 +273,7 @@ class CacheFirstCompactor:
         return "\n".join(parts)
 
     def _summarize_level3(self, log: list[Message]) -> str:
-        """Level3 summary: only goal + decision points, extremely terse."""
+        """Level3 summary: only goal + decision points + reasoning, extremely terse."""
         user_msgs = [m for m in log if m.role == Role.USER]
         assistant_msgs = [m for m in log if m.role == Role.ASSISTANT]
         tool_msgs = [m for m in log if m.role == Role.TOOL]
@@ -270,6 +281,14 @@ class CacheFirstCompactor:
         parts = [f"{SUMMARY_TAG_OPEN}"]
         parts.append("Previous conversation summarized (aggressive).")
         parts.append(f"Turns: {len(assistant_msgs)} assistant.")
+
+        # Reasoning content summary (most critical for Level3)
+        reasoning_snippets = [
+            m.reasoning_content[:200] for m in assistant_msgs
+            if m.reasoning_content
+        ]
+        if reasoning_snippets:
+            parts.append("## Reasoning\n- " + "\n- ".join(reasoning_snippets[-2:]))
 
         if user_msgs:
             # Current goal = last user message
@@ -343,6 +362,7 @@ class CacheFirstCompactor:
                     "role": m.role.value,
                     "content": m.content,
                     "tool_call_id": m.tool_call_id,
+                    "reasoning_content": m.reasoning_content,
                 }
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return path
