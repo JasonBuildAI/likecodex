@@ -84,6 +84,20 @@ export {
   parseToolCalls,
 } from './services/skillService';
 
+// MCP Service
+export {
+  fetchMcpServers,
+  fetchMcpServerStatus,
+  connectMcpServer,
+  disconnectMcpServer,
+  fetchMcpTools,
+  updateMcpServerConfig,
+  deleteMcpServer,
+  testMcpConnection,
+  type McpServerInfo,
+  type McpToolInfo,
+} from './services/mcpService';
+
 // Workspace & IDE services
 export {
   fetchWorkspaceTree,

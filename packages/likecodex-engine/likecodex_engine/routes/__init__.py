@@ -9,7 +9,7 @@ from typing import Any
 
 from aiohttp import web
 
-from likecodex_engine.routes import agent, deepseek, git, ide, lsp, skills, static
+from likecodex_engine.routes import agent, deepseek, git, ide, lsp, mcp, skills, static
 
 
 def register_all_routes(app: web.Application, config: dict[str, Any]) -> None:
@@ -20,4 +20,5 @@ def register_all_routes(app: web.Application, config: dict[str, Any]) -> None:
     git.register_routes(app, config)
     lsp.register_routes(app, config)
     deepseek.register_routes(app, config)
+    mcp.register_routes(app, config)
     static.register_routes(app, config)
