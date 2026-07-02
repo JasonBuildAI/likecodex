@@ -7,19 +7,27 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from likecodex_engine.tools.agent_memory import AgentMemoryTools
+from likecodex_engine.tools.api_client import ApiClientTools
 from likecodex_engine.tools.ask import ask_tool_schema
 from likecodex_engine.tools.code_index import CodeIndexTools
 from likecodex_engine.tools.code_review import CodeReviewTools
 from likecodex_engine.tools.code_search import CodeSearchTools
+from likecodex_engine.tools.database import DatabaseTools
+from likecodex_engine.tools.economy import ToolEconomy
 from likecodex_engine.tools.edit_file import EditFileTools
 from likecodex_engine.tools.filesystem import FileSystemTools
 from likecodex_engine.tools.git import GitTools
+from likecodex_engine.tools.github import GitHubTools
 from likecodex_engine.tools.history import HistoryTools
+from likecodex_engine.tools.log_analyzer import LogAnalyzerTools
 from likecodex_engine.tools.lsp import LspTools
 from likecodex_engine.tools.lsp_tools import LspSemanticTools
+from likecodex_engine.tools.network import NetworkTools
 from likecodex_engine.tools.notebook import NotebookTools
 from likecodex_engine.tools.plan_progress import PlanProgressTools
+from likecodex_engine.tools.profiler import ProfilerTools
 from likecodex_engine.tools.refactor import RefactorTools
+from likecodex_engine.tools.session_share import SessionShareTools
 from likecodex_engine.tools.shell import ShellTools
 from likecodex_engine.tools.todo import TodoTools
 from likecodex_engine.tools.web_fetch import WebFetchTools
