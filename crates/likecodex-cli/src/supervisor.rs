@@ -13,6 +13,7 @@ use tokio::time::sleep;
 use crate::engine::{self, EngineSupervisor};
 
 pub struct StackSupervisor {
+    #[allow(dead_code)]
     engine: EngineSupervisor,
     server: Option<Child>,
     web: Option<Child>,
