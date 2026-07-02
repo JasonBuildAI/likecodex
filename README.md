@@ -1,10 +1,13 @@
 # LikeCodex
 
 [![CI](https://github.com/JasonBuildAI/likecodex/actions/workflows/ci.yml/badge.svg)](https://github.com/JasonBuildAI/likecodex/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/likecodex)](https://pypi.org/project/likecodex/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/likecodex)](https://pypi.org/project/likecodex/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![Node.js 20+](https://img.shields.io/badge/node.js-20+-green.svg)](https://nodejs.org/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 **LikeCodex** is an open-source **coding agent** powered by **DeepSeek V4**. You describe a task in natural language; the agent reads your codebase, runs commands, edits files, and reports back — with optional human approval for risky operations.
 
@@ -549,15 +552,26 @@ Switch modes via the capsule selector or press `Tab` to cycle.
 
 ### Prerequisites
 
-| Tool | Version |
-|------|---------|
-| Rust | 1.70+ |
-| Python | 3.11+ |
-| uv | latest |
-| Node.js | 20+ (for Web UI) |
-| Docker | optional (sandbox) |
+| Tool | Version | Notes |
+|------|---------|-------|
+| Python | 3.11+ | Required (agent engine) |
+| uv | latest | Recommended package manager |
+| Rust | 1.70+ | Required for CLI and server |
+| Node.js | 20+ | Required for Web UI |
+| Docker | optional | Required for sandbox isolation |
 
-### Install
+### Quick Install (Python-only)
+
+```bash
+pip install likecodex
+
+# Run directly:
+likecodex --setup                 # First-time configuration
+likecodex --chat                  # Interactive chat mode
+likecodex "fix this bug"          # One-shot task
+```
+
+### Full Install (with Rust CLI and Web UI)
 
 ```bash
 git clone https://github.com/JasonBuildAI/likecodex.git
