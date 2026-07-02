@@ -43,10 +43,34 @@ class Receipt:
 
 
 class EvidenceLedger:
-    """In-memory receipts for the current user turn."""
+    """Receipts for the current user turn, with SQLite persistence."""
 
-    def __init__(self) -> None:
+    def __init__(self, db_path: str | None = None) -> None:
         self._receipts: list[Receipt] = []
+        self._db_path = db_path or os.path.join(
+            os.environ.get("LIKECODEX_HOME", os.path.expanduser("~/.likecodex")),
+            "evidence.db",
+        )
+
+    def _get_connection(self) -> sqlite3.Connection:
+        os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
+        conn = sqlite3.connect(self._db_path)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS evidence ("
+            "   id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "   session_id TEXT NOT NULL,"
+            "   tool_name TEXT NOT NULL,"
+            "   success INTEGER NOT NULL,"
+            "   command TEXT DEFAULT '',"
+            "   step TEXT DEFAULT '',"
+            "   paths TEXT DEFAULT '[]',"
+            "   todos TEXT DEFAULT '[]',"
+            "   read_only INTEGER DEFAULT 0,"
+            "   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        conn.commit()
+        return conn
 
     def reset(self) -> None:
         self._receipts.clear()
@@ -148,33 +172,92 @@ class EvidenceLedger:
         return missing
 
     def pending_steps(self) -> list[str]:
-        """Return list of step descriptions that still need work."""
         steps = []
         for r in self._receipts:
             if r.tool_name == "complete_step":
                 steps.append(r.step)
         if not steps:
             return []
-        # If there are incomplete todos, those are pending steps
         incomplete = self.incomplete_todos()
         if incomplete:
             return [str(t.get("content", t.get("id", ""))) for t in incomplete]
         return []
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize evidence to a dictionary for persistence."""
-        from copy import deepcopy
-        return {"receipts": [{"tool_name": r.tool_name, "success": r.success, "step": r.step} for r in self._receipts]}
+        return {
+            "receipts": [
+                {
+                    "tool_name": r.tool_name,
+                    "success": r.success,
+                    "step": r.step,
+                    "command": r.command,
+                    "paths": r.paths,
+                    "read_only": r.read_only,
+                }
+                for r in self._receipts
+            ]
+        }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EvidenceLedger:
-        """Restore evidence from a dictionary."""
         ledger = cls()
         for r_data in data.get("receipts", []):
-            from likecodex_engine.agent.evidence import Receipt
             ledger._receipts.append(Receipt(
                 tool_name=r_data["tool_name"],
                 success=r_data["success"],
                 step=r_data.get("step", ""),
+                command=r_data.get("command", ""),
+                paths=r_data.get("paths", []),
+                read_only=r_data.get("read_only", False),
             ))
         return ledger
+
+    def save(self, session_id: str) -> None:
+        """Persist evidence receipts to SQLite for the given session."""
+        try:
+            conn = self._get_connection()
+            conn.execute("DELETE FROM evidence WHERE session_id = ?", (session_id,))
+            for r in self._receipts:
+                conn.execute(
+                    "INSERT INTO evidence (session_id, tool_name, success, command, step, paths, todos, read_only)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        session_id,
+                        r.tool_name,
+                        1 if r.success else 0,
+                        r.command,
+                        r.step,
+                        json.dumps(r.paths),
+                        json.dumps(r.todos),
+                        1 if r.read_only else 0,
+                    ),
+                )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass  # Best-effort persistence
+
+    def load(self, session_id: str) -> None:
+        """Load evidence receipts from SQLite for the given session."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.execute(
+                "SELECT tool_name, success, command, step, paths, todos, read_only"
+                " FROM evidence WHERE session_id = ? ORDER BY id",
+                (session_id,),
+            )
+            self._receipts.clear()
+            for row in cursor:
+                tool_name, success, command, step, paths_str, todos_str, read_only = row
+                self._receipts.append(Receipt(
+                    tool_name=tool_name,
+                    success=bool(success),
+                    command=command,
+                    step=step,
+                    paths=json.loads(paths_str) if paths_str else [],
+                    todos=json.loads(todos_str) if todos_str else [],
+                    read_only=bool(read_only),
+                ))
+            conn.close()
+        except Exception:
+            self._receipts.clear()

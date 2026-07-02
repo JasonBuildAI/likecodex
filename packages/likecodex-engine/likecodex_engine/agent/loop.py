@@ -779,9 +779,22 @@ class AgentLoop:
                     metadata={
                         "tool_name": tool_call.name,
                         "arguments": stable_json_dumps(tool_call.arguments),
+                        "mode": "manual",
+                        "non_blocking": True,
                     },
                 )
             )
+            # Non-blocking wait for manual approval (max 5 minutes)
+            if self.pending_permissions or self.pending_asks:
+                # Yield control back while waiting for approval
+                yield self._emit(
+                    LLMResponse(
+                        content="",
+                        model="system",
+                        event_type="waiting_for_approval",
+                        metadata={"tool_name": tool_call.name, "mode": "manual"},
+                    )
+                )
 
         if tool_call.name == "ask":
             async for resp in self._handle_ask_tool(tool_call):
