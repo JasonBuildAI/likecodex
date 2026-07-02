@@ -198,6 +198,11 @@ class ToolRegistry:
         self.register("log_grep", log.grep_log_schema(), log.grep_log, read_only=True)
         self.register("log_error_summary", log.error_summary_schema(), log.error_summary, read_only=True)
 
+        api = ApiClientTools()
+        self.register("api_http_request", api.http_request_schema(), api.http_request, read_only=True)
+        self.register("api_test", api.api_test_schema(), api.api_test, read_only=True)
+        self.register("api_websocket_test", api.websocket_test_schema(), api.websocket_test, read_only=True)
+
         mem = AgentMemoryTools(self.working_dir)
         self.register("remember", mem.remember_schema(), mem.remember)
         self.register("forget", mem.forget_schema(), mem.forget)
