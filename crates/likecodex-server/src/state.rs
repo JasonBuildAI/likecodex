@@ -1,6 +1,5 @@
 use likecodex_core::config::Config;
 use likecodex_core::events::EventBus;
-use std::sync::Arc;
 
 use crate::engine_bridge::EngineBridge;
 use crate::pty::PtyManager;
@@ -28,6 +27,3 @@ impl AppState {
         }
     }
 }
-
-/// Convenience alias for thread-safe state references.
-pub type SharedState = Arc<AppState>;

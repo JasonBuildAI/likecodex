@@ -2,6 +2,7 @@ use axum::{
     extract::State,
     http::HeaderMap,
     response::sse::{Event as SseEvent, Sse},
+    Json,
 };
 use futures::StreamExt;
 use likecodex_core::events::Event;

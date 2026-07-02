@@ -1,5 +1,4 @@
 use axum::{extract::State, http::StatusCode, response::Json};
-use likecodex_core::config::Config;
 use std::sync::Arc;
 
 use crate::state::AppState;

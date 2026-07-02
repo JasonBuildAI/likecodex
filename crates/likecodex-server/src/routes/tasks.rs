@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::Json,
 };
@@ -10,7 +10,6 @@ use likecodex_indexer::{CodeGraph, FileIndex};
 use likecodex_sandbox::SandboxExecutor;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::info;
 
 use crate::dto::{
     CreateTaskRequest, ExecuteRequest, IndexSearchQuery, PlanRequest, RewindCheckpointRequest,

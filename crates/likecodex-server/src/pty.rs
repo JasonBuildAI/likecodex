@@ -47,6 +47,7 @@ impl PtySession {
 }
 
 /// Manages all active PTY terminal sessions.
+#[derive(Clone)]
 pub struct PtyManager {
     sessions: Arc<Mutex<HashMap<String, PtySession>>>,
 }

@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 
 use crate::dto::NewSessionRequest;
@@ -48,7 +48,7 @@ pub async fn pty_list(
 
 /// POST /api/terminal/:id/resize — resize a terminal (rows, cols).
 pub async fn pty_resize(
-    Path(id): Path<String>,
+    Path(_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
     let rows = body["rows"].as_u64().unwrap_or(24) as u16;
