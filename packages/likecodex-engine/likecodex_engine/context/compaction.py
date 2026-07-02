@@ -13,6 +13,8 @@ from likecodex_engine.llm.base import Message, Role
 if TYPE_CHECKING:
     from likecodex_engine.llm.base import LLMProvider
 
+from enum import Enum
+
 SUMMARY_TAG_OPEN = "<compaction-summary>"
 SUMMARY_TAG_CLOSE = "</compaction-summary>"
 
@@ -26,12 +28,25 @@ SUMMARY_SYSTEM = """You are compacting a coding agent conversation. Write under 
 ## Pending & next step
 Be terse. Preserve paths and identifiers exactly."""
 
+LEVEL1_COMPACT_RATIO = 0.70
+LEVEL2_COMPACT_RATIO = 0.80
+LEVEL3_COMPACT_RATIO = 0.92
+
 DEFAULT_COMPACT_RATIO = 0.8
 DEFAULT_SOFT_COMPACT_RATIO = 0.5
 DEFAULT_COMPACT_FORCE_RATIO = 0.9
 DEFAULT_CONTEXT_WINDOW = 1_000_000
 MAX_PINNED_USER_CHARS = 6000
 MAX_CONSECUTIVE_NOOP_COMPACTS = 3
+
+MAX_KEEP_ROUNDS_LEVEL2 = 3  # number of (user+assistant+tool) rounds to preserve
+
+
+class CompactLevel(str, Enum):
+    """Three-level compaction strategy thresholds."""
+    LEVEL1 = "level1"
+    LEVEL2 = "level2"
+    LEVEL3 = "level3"
 
 
 class ContextCompactor:
@@ -68,6 +83,7 @@ class CacheFirstCompactor:
         compact_ratio: float = DEFAULT_COMPACT_RATIO,
         soft_compact_ratio: float = DEFAULT_SOFT_COMPACT_RATIO,
         compact_force_ratio: float = DEFAULT_COMPACT_FORCE_RATIO,
+        compact_level: str = CompactLevel.LEVEL2,
         working_dir: str = ".",
     ) -> None:
         self.max_messages = max_messages
@@ -75,12 +91,22 @@ class CacheFirstCompactor:
         self.compact_ratio = compact_ratio
         self.soft_compact_ratio = soft_compact_ratio
         self.compact_force_ratio = compact_force_ratio
+        self.compact_level = compact_level
         self.working_dir = Path(working_dir)
         self._consecutive_noop_compacts = 0
         self._last_log_size = 0
 
+    def _get_level_ratio(self) -> float:
+        """Return the effective compaction ratio for the current level."""
+        mapping = {
+            CompactLevel.LEVEL1: LEVEL1_COMPACT_RATIO,
+            CompactLevel.LEVEL2: LEVEL2_COMPACT_RATIO,
+            CompactLevel.LEVEL3: LEVEL3_COMPACT_RATIO,
+        }
+        return mapping.get(self.compact_level, self.compact_ratio)
+
     def should_compact(self, prompt_tokens: int) -> bool:
-        threshold = int(self.context_window * self.compact_ratio)
+        threshold = int(self.context_window * self._get_level_ratio())
         return prompt_tokens >= threshold
 
     def should_soft_compact(self, prompt_tokens: int) -> bool:
@@ -122,7 +148,13 @@ class CacheFirstCompactor:
         return self._consecutive_noop_compacts >= MAX_CONSECUTIVE_NOOP_COMPACTS
 
     def summarize_log(self, log: list[Message]) -> str:
-        """Enhanced rule-based summary extracting decisions, errors, and progress."""
+        """Level-aware rule-based summary."""
+        if self.compact_level == CompactLevel.LEVEL3:
+            return self._summarize_level3(log)
+        return self._summarize_default(log)
+
+    def _summarize_default(self, log: list[Message]) -> str:
+        """Default summary (Level1/Level2 compatible)."""
         user_msgs = [m for m in log if m.role == Role.USER]
         tool_msgs = [m for m in log if m.role == Role.TOOL]
         assistant_msgs = [m for m in log if m.role == Role.ASSISTANT]
@@ -147,6 +179,15 @@ class CacheFirstCompactor:
         parts.append("Previous conversation summarized due to context limits.")
         parts.append(f"Turns: {len(assistant_msgs)} assistant, {len(tool_msgs)} tool results.")
 
+        if not errors:
+            # Level1: also check tool content for error patterns more broadly
+            for m in tool_msgs:
+                content_lower = m.content.lower()
+                if any(kw in content_lower for kw in ["error", "exception", "traceback", "failed", "exit code 1"]):
+                    errors.append(m.content[:200])
+                    if len(errors) >= 3:
+                        break
+
         if decisions:
             parts.append("## Key Decisions\n- " + "\n- ".join(decisions[-3:]))
 
@@ -160,6 +201,41 @@ class CacheFirstCompactor:
         if user_msgs:
             last_user = user_msgs[-1].content[:150]
             parts.append(f"## Last User Request\n{last_user}")
+
+        parts.append(SUMMARY_TAG_CLOSE)
+        return "\n".join(parts)
+
+    def _summarize_level3(self, log: list[Message]) -> str:
+        """Level3 summary: only goal + decision points, extremely terse."""
+        user_msgs = [m for m in log if m.role == Role.USER]
+        assistant_msgs = [m for m in log if m.role == Role.ASSISTANT]
+        tool_msgs = [m for m in log if m.role == Role.TOOL]
+
+        parts = [f"{SUMMARY_TAG_OPEN}"]
+        parts.append("Previous conversation summarized (aggressive).")
+        parts.append(f"Turns: {len(assistant_msgs)} assistant.")
+
+        if user_msgs:
+            # Current goal = last user message
+            last_user = user_msgs[-1].content[:200]
+            parts.append(f"## Current Goal\n{last_user}")
+
+        # Decision points
+        decision_kw = ["改为", "使用", "采用", "选择", "use", "choose", "select", "decide", "switch"]
+        decisions = [
+            m.content[:200] for m in user_msgs
+            if any(kw in m.content.lower() for kw in decision_kw)
+        ]
+        if decisions:
+            parts.append("## Decisions\n- " + "\n- ".join(decisions[-2:]))
+
+        # Errors only
+        errors = [
+            m.content[:200] for m in tool_msgs
+            if any(kw in m.content.lower() for kw in ["error", "exception", "traceback", "failed", "exit code"])
+        ]
+        if errors:
+            parts.append("## Errors\n- " + "\n- ".join(errors[-2:]))
 
         parts.append(SUMMARY_TAG_CLOSE)
         return "\n".join(parts)
@@ -225,11 +301,55 @@ class CacheFirstCompactor:
         return True
 
     def split_compactable(self, log: list[Message]) -> tuple[list[Message], list[Message]]:
-        """Split pinned user turns vs foldable assistant/tool work."""
+        """Split pinned vs foldable based on compact_level."""
+        if self.compact_level == CompactLevel.LEVEL1:
+            return self._split_level1(log)
+        if self.compact_level == CompactLevel.LEVEL3:
+            return self._split_level3(log)
+        return self._split_default(log)
+
+    def _split_default(self, log: list[Message]) -> tuple[list[Message], list[Message]]:
+        """Level2 default: keep system + last 3 full rounds."""
+        pinned: list[Message] = []
+        foldable: list[Message] = []
+        # Walk backwards, collect up to MAX_KEEP_ROUNDS_LEVEL2 complete turns
+        kept = 0
+        round_msgs: list[Message] = []
+        for m in reversed(log):
+            if m.role == Role.USER:
+                round_msgs.append(m)
+                kept += 1
+                if kept >= MAX_KEEP_ROUNDS_LEVEL2:
+                    break
+            elif kept > 0 or not round_msgs:
+                round_msgs.append(m)
+        # reverse back to original order
+        pinned = list(reversed(round_msgs))
+        cutoff = len(log) - len(pinned)
+        foldable = log[:cutoff]
+        return pinned, foldable
+
+    def _split_level1(self, log: list[Message]) -> tuple[list[Message], list[Message]]:
+        """Level1: keep all user messages, fold only tool results."""
         pinned: list[Message] = []
         foldable: list[Message] = []
         for m in log:
-            if m.role == Role.USER and self._is_pinned(m):
+            if m.role == Role.TOOL:
+                foldable.append(m)
+            else:
+                pinned.append(m)
+        return pinned, foldable
+
+    def _split_level3(self, log: list[Message]) -> tuple[list[Message], list[Message]]:
+        """Level3: only keep the last user message (current goal), fold everything else."""
+        pinned: list[Message] = []
+        foldable: list[Message] = []
+        last_user_idx = -1
+        for i, m in enumerate(log):
+            if m.role == Role.USER:
+                last_user_idx = i
+        for i, m in enumerate(log):
+            if i == last_user_idx and m.role == Role.USER:
                 pinned.append(m)
             else:
                 foldable.append(m)

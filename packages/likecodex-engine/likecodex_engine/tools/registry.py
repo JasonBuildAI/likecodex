@@ -19,11 +19,11 @@ from likecodex_engine.tools.lsp import LspTools
 from likecodex_engine.tools.lsp_tools import LspSemanticTools
 from likecodex_engine.tools.notebook import NotebookTools
 from likecodex_engine.tools.plan_progress import PlanProgressTools
+from likecodex_engine.tools.refactor import RefactorTools
 from likecodex_engine.tools.shell import ShellTools
 from likecodex_engine.tools.todo import TodoTools
 from likecodex_engine.tools.web_fetch import WebFetchTools
 from likecodex_engine.tools.web_search import WebSearchTools
-from likecodex_engine.tools.refactor import RefactorTools
 
 AgentFactory = Callable[[list[str] | None, int | None], Any]
 
