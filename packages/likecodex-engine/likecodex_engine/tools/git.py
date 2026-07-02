@@ -201,3 +201,84 @@ class GitTools:
         escaped_message = message.replace('"', '\\"')
         result = await self._run(f'commit -m "{escaped_message}"')
         return json.dumps(result)
+
+    def compare_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Compare two git refs (branches, tags, commits). Shows ahead/behind info and diff stats.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "base": {
+                        "type": "string",
+                        "description": "Base ref to compare from (default: current branch)",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Target ref to compare against (default: main/master)",
+                    },
+                },
+                "required": [],
+            },
+        }
+
+    async def git_compare(self, base: str = "", target: str = "main") -> str:
+        """Compare two git refs. Returns JSON with commits ahead/behind and diff stats."""
+        # Auto-detect default branch
+        if target == "main":
+            # Try main first, then master
+            branch_check = await self._run("rev-parse --verify main")
+            if branch_check.get("exit_code") != 0:
+                target = "master"
+
+        if not base:
+            base_result = await self._run("branch --show-current")
+            base = base_result.get("stdout", "").strip()
+            if not base:
+                base = "HEAD"
+
+        result: dict[str, Any] = {
+            "base": base,
+            "target": target,
+        }
+
+        # Get ahead/behind counts
+        rev_result = await self._run(f"rev-list --left-right --count {base}...{target}")
+        if rev_result.get("exit_code") == 0 and rev_result.get("stdout"):
+            parts = rev_result["stdout"].strip().split()
+            if len(parts) == 2:
+                result["ahead"] = int(parts[0])
+                result["behind"] = int(parts[1])
+
+        # Get commits in base not in target
+        ahead_result = await self._run(
+            f"log --oneline --no-decorate {target}..{base}"
+        )
+        if ahead_result.get("exit_code") == 0:
+            commits = [
+                c.strip()
+                for c in ahead_result["stdout"].strip().split("\n")
+                if c.strip()
+            ]
+            result["commits_ahead"] = commits[:50]
+
+        # Get commits in target not in base
+        behind_result = await self._run(
+            f"log --oneline --no-decorate {base}..{target}"
+        )
+        if behind_result.get("exit_code") == 0:
+            commits = [
+                c.strip()
+                for c in behind_result["stdout"].strip().split("\n")
+                if c.strip()
+            ]
+            result["commits_behind"] = commits[:50]
+
+        # Get diff stat between the two refs
+        diff_result = await self._run(f"diff --stat {base}...{target}")
+        if diff_result.get("exit_code") == 0:
+            stat_lines = [
+                l for l in diff_result["stdout"].strip().split("\n") if l.strip()
+            ]
+            result["diff_stat"] = stat_lines
+
+        return json.dumps(result, ensure_ascii=False)
