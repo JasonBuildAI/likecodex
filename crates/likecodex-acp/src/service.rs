@@ -5,6 +5,7 @@
 
 use crate::protocol::*;
 use crate::server::RpcErrorBox;
+use futures::StreamExt;
 use likecodex_core::config::Config;
 use likecodex_core::events::{Event, EventBus};
 use reqwest::Client;
@@ -103,7 +104,7 @@ impl SessionFactory {
         let mut stream = response.bytes_stream();
         let mut has_error = false;
 
-        while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+        while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
