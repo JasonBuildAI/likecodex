@@ -41,6 +41,7 @@ from likecodex_engine.skills.loader import discover_skills, skills_prefix_block,
 from likecodex_engine.skills.state import is_skill_enabled, set_skill_enabled, load_skill_state
 from likecodex_engine.tools.registry import ToolRegistry
 
+from likecodex_engine.config_loader import clear_config_cache
 from likecodex_engine.routes._shared import (
     APP_CONFIG,
     _ACTIVE_LOOPS,
@@ -112,6 +113,16 @@ _ENGINE_START_TIME = time.time()
 
 async def metrics(request: web.Request) -> web.Response:
     return web.json_response(global_cache_metrics().to_dict())
+
+
+async def reload_config(request: web.Request) -> web.Response:
+    """Hot-reload configuration from files and environment."""
+    clear_config_cache()
+    _RESOLVED_CONFIG_CACHE.clear()
+    from likecodex_engine.config_loader import get_config_with_hot_reload
+    new_config = get_config_with_hot_reload(validate=False)
+    request.app[APP_CONFIG] = new_config
+    return web.json_response({"status": "ok", "message": "Configuration reloaded"})
 
 
 def _make_agent(
@@ -893,6 +904,7 @@ def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_get("/health/liveness", liveness)
     app.router.add_get("/health/readiness", readiness)
     app.router.add_get("/metrics", metrics)
+    app.router.add_post("/admin/reload", reload_config)
     app.router.add_post("/chat", chat)
     app.router.add_post("/run", run_task)
     app.router.add_post("/plan", plan_task)
