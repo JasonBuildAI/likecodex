@@ -3,6 +3,8 @@
 Provides:
 - interactive_setup(): Rich-based 3-step config wizard
 - run_doctor(): Health check and diagnostics
+
+Re-exports from doctor.py and setup_wizard.py modules.
 """
 
 from __future__ import annotations
