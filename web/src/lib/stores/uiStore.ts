@@ -16,6 +16,17 @@ export interface UISlice {
   skillFilter: 'all' | 'builtin' | 'project' | 'home';
   codeGraphResults: SearchResult[];
 
+  // ── Phase 7.7: Variable Watch Panel ──────────────────────────────
+  // Future state for debugging variable watches:
+  watchExpressions: string[];      // expressions the user wants to watch
+  watchValues: Record<string, string>;  // expression -> evaluated value
+  debugSessionActive: boolean;    // whether a DAP session is running
+  // Actions:
+  addWatchExpression: (expr: string) => void;
+  removeWatchExpression: (expr: string) => void;
+  updateWatchValues: (values: Record<string, string>) => void;
+  setDebugSessionActive: (active: boolean) => void;
+
   addToast: (toast: Omit<Toast, 'id'>) => void;
   removeToast: (id: string) => void;
   setTheme: (theme: 'dark' | 'light') => void;
@@ -46,6 +57,11 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   skillFilter: 'all' as const,
   codeGraphResults: [],
 
+  // Phase 7.7: Variable Watch initial state
+  watchExpressions: [],
+  watchValues: {},
+  debugSessionActive: false,
+
   addToast: (toast) =>
     set((state) => ({
       toasts: [...state.toasts, { ...toast, id: `toast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` }],
@@ -64,4 +80,16 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   setSkillSearchQuery: (query) => set({ skillSearchQuery: query }),
   setSkillFilter: (filter) => set({ skillFilter: filter }),
   setCodeGraphResults: (results) => set({ codeGraphResults: results }),
+
+  // Phase 7.7: Variable Watch actions (stubs for future DAP integration)
+  addWatchExpression: (expr) =>
+    set((state) => ({
+      watchExpressions: [...state.watchExpressions, expr],
+    })),
+  removeWatchExpression: (expr) =>
+    set((state) => ({
+      watchExpressions: state.watchExpressions.filter((e) => e !== expr),
+    })),
+  updateWatchValues: (values) => set({ watchValues: values }),
+  setDebugSessionActive: (active) => set({ debugSessionActive: active }),
 });
