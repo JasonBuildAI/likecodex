@@ -1,3 +1,9 @@
+// ── Phase 7.2: Symbol Tree Backend (Rust) ────────────────────────────
+// Future: Extend CodeGraph with hierarchical parent-child relationships
+// so the frontend can render a tree (package → module → class → method).
+// Add parent_id/children fields to SymbolEntry, and a build_tree() method.
+// ─────────────────────────────────────────────────────────────────────────
+
 use anyhow::Result;
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
