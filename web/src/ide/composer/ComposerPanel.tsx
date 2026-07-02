@@ -6,9 +6,20 @@
  * Layout:
  * - Header with status indicator
  * - Message history (user + assistant messages)
- * - File change tabs + Diff preview
+ * - File change tabs + Diff preview (Phase 3.4: 变更预览区)
  * - Accept/Reject buttons
  * - Input area with @ mention support
+ *
+ * ## 变更预览架构 (Phase 3.4)
+ *
+ * 文件变更以 tabs 形式展示，每个 tab 显示一个文件的 Diff.
+ * 预览区自上而下分为三层:
+ *   1. File Tabs       — 横向文件切换栏 (+/-/~ 图标标识变更类型)
+ *   2. Diff Viewer     — 280px 的 inline diff 对比区
+ *   3. Action Bar      — 接受/拒绝按钮 + 进度统计
+ *
+ * 变更状态机: null(待审) → true(已接受) / false(已拒绝)
+ * 全部接受/拒绝通过 batches 提交到后端 write API.
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
@@ -253,8 +264,18 @@ export function ComposerPanel() {
           </div>
         )}
 
-        {/* File Changes Preview */}
-        {changesArray.length > 0 && (
+        {/* ============================================================
+       * Phase 3.4: Composer 变更预览区
+       *
+       * 三层结构:
+       *   1. File Tabs: 水平文件标签栏, 以 ~/ +/- 图标区分变更类型
+       *      点击切换 activeChangePath, 带绿色/红色边框标记接受/拒绝状态
+       *   2. Diff Viewer: 280px 横向分割 diff 视图
+       *      通过 DiffViewer 组件展示 originalContent vs modifiedContent
+       *      每个 diff 带独立 Accept/Reject 按钮
+       *   3. Action Bar: 全部接受/全部拒绝 + 进度统计 (accepted/total)
+       * ============================================================ */
+      {changesArray.length > 0 && (
           <div className="border border-gray-700 rounded-lg overflow-hidden mt-3">
             {/* File tabs */}
             <div className="flex border-b border-gray-700 overflow-x-auto bg-gray-800/50">
