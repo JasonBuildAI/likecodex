@@ -141,6 +141,15 @@ class AgentLoop:
                 yield resp
 
     async def _run_with_retry_context(self, prompt: str) -> AsyncIterator[LLMResponse]:
+        # Emit mode_changed event at start of run
+        yield self._emit(
+            LLMResponse(
+                content="",
+                model="system",
+                event_type="mode_changed",
+                metadata={"agent_mode": self.agent_mode},
+            )
+        )
         if self.memory:
             memories = self.memory.search(prompt, top_k=3)
             if memories:
