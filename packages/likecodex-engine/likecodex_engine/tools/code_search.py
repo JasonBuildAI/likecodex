@@ -56,6 +56,42 @@ class CodeSearchTools:
             },
         }
 
+    async def semantic_search(self, query: str, max_results: int = 10) -> str:
+        """Search code by semantic meaning using LLM embedding.
+        
+        Converts natural language query to embedding vector and searches
+        the codebase for matching code snippets.
+        """
+        try:
+            import json
+            from likecodex_engine.memory.vector import VectorMemory
+            memory = VectorMemory()
+            results = memory.search(query, top_k=max_results)
+            if not results:
+                return json.dumps({"results": [], "message": "No semantic results found. Try grep_files instead."})
+            return json.dumps({
+                "results": [
+                    {"text": r["text"][:500], "score": r.get("score", 0.0)}
+                    for r in results
+                ],
+                "total": len(results),
+            })
+        except Exception as e:
+            return json.dumps({"error": f"Semantic search failed: {e}"})
+
+    def semantic_search_schema(self) -> dict:
+        return {
+            "description": "Search code by meaning (e.g. 'find where users are authenticated'). Uses embeddings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Natural language search query"},
+                    "max_results": {"type": "integer", "description": "Maximum results", "default": 10},
+                },
+                "required": ["query"],
+            },
+        }
+
     async def grep_files(self, pattern: str, glob: str | None = None, max_results: int = 20) -> str:
         try:
             file_glob = glob or "**/*"
