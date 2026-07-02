@@ -12,7 +12,7 @@ interface RegisteredCommand extends CommandDefinition {
   extensionId?: string;
 }
 
-type CommandDefPartial = Partial<Omit<CommandDefinition, never>> & { extensionId?: string };
+type CommandDefPartial = Partial<CommandDefinition> & { extensionId?: string };
 
 class CommandRegistryImpl {
   private commands = new Map<string, RegisteredCommand>();
