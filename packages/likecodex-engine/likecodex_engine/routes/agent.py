@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -82,7 +83,7 @@ async def health(request: web.Request) -> web.Response:
         "provider": config.get("provider", "deepseek"),
         "model": config.get("model", "deepseek-v4-flash"),
         "python": sys.version,
-        "uptime": time.time() - _START_TIME,
+        "uptime": time.time() - _ENGINE_START_TIME,
         "cache": metrics,
         "active_sessions": len(_ACTIVE_LOOPS),
         "active_coordinators": len(_ACTIVE_COORDINATORS),
@@ -889,6 +890,8 @@ async def delete_session(request: web.Request) -> web.Response:
 
 def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_get("/health", health)
+    app.router.add_get("/health/liveness", liveness)
+    app.router.add_get("/health/readiness", readiness)
     app.router.add_get("/metrics", metrics)
     app.router.add_post("/chat", chat)
     app.router.add_post("/run", run_task)

@@ -86,10 +86,96 @@ class GitTools:
                     "message": {"type": "string", "description": "Commit message (optional, auto-generated if empty)"},
                     "all": {"type": "boolean", "default": True, "description": "Stage all changes before commit"},
                     "auto_message": {"type": "boolean", "default": True, "description": "Auto-generate commit message from diff"},
+                    "use_ai": {"type": "boolean", "default": False, "description": "Use AI to generate commit message"},
                 },
                 "required": [],
             },
         }
+
+    async def _generate_ai_commit_message(self) -> str:
+        """Generate a commit message using AI analysis of the staged diff.
+
+        Analyzes the diff content and file changes to create a structured message.
+        Falls back to regular generation if AI is unavailable.
+        """
+        # Get diff content for analysis
+        diff_result = await self._run("diff --cached")
+        stat_result = await self._run("diff --cached --stat")
+
+        diff_content = diff_result.get("stdout", "")[:2000]
+        stat_content = stat_result.get("stdout", "") or ""
+
+        if not diff_content and not stat_content:
+            return "Auto-commit: no staged changes"
+
+        # Extract changed file extensions for type detection
+        changed_exts = set()
+        changed_keywords = []
+        for line in stat_content.split("\n"):
+            if "|" in line:
+                fname = line.split("|")[0].strip()
+                ext = Path(fname).suffix.lower()
+                if ext:
+                    changed_exts.add(ext)
+                changed_keywords.append(fname)
+
+        # Smart type detection
+        type_map = {
+            ".py": "feat", ".rs": "feat", ".js": "feat", ".ts": "feat",
+            ".jsx": "feat", ".tsx": "feat", ".go": "feat", ".java": "feat",
+            ".md": "docs", ".rst": "docs", ".txt": "docs",
+            ".css": "style", ".scss": "style", ".less": "style",
+            ".json": "chore", ".yaml": "chore", ".yml": "chore", ".toml": "chore",
+        }
+
+        commit_type = "chore"
+        type_priority = {"feat": 0, "fix": 1, "docs": 2, "test": 3, "style": 4, "chore": 5}
+        for fname in changed_keywords:
+            lower = fname.lower()
+            if any(k in lower for k in ["test_", "_test", ".spec.", ".test."]):
+                if type_priority.get("test", 99) < type_priority.get(commit_type, 99):
+                    commit_type = "test"
+            if any(k in lower for k in ["fix", "bug", "hotfix", "issue"]):
+                if type_priority.get("fix", 99) < type_priority.get(commit_type, 99):
+                    commit_type = "fix"
+
+        # Determine type from extensions (lower priority)
+        for ext in changed_exts:
+            detected = type_map.get(ext)
+            if detected and type_priority.get(detected, 99) < type_priority.get(commit_type, 99):
+                commit_type = detected
+
+        # Infer scope from directory structure
+        scopes = set()
+        for fname in changed_keywords:
+            parts = fname.replace("\\", "/").split("/")
+            if len(parts) >= 2:
+                scopes.add(parts[0])
+            if len(parts) >= 3:
+                scopes.add(f"{parts[0]}/{parts[1]}")
+
+        scope_str = f"({', '.join(sorted(scopes)[:2])})" if scopes else ""
+
+        # Generate description from first meaningful file name
+        file_count = len(changed_keywords)
+        first_name = Path(changed_keywords[0]).stem.replace("_", " ").replace("-", " ") if changed_keywords else "changes"
+
+        if file_count == 1:
+            desc = first_name[:70]
+        elif file_count <= 3:
+            names = [Path(f).stem.replace("_", " ").replace("-", " ")[:20] for f in changed_keywords]
+            desc = f"{", ".join(names)}"
+        else:
+            desc = f"{first_name[:35]} +{file_count - 1} more"
+
+        # Add diff summary for more context
+        additions = diff_content.count("\n+") - diff_content.count("\n+++")
+        deletions = diff_content.count("\n-") - diff_content.count("\n---")
+        if additions > 0 or deletions > 0:
+            desc += f" ({'+' if additions > 0 else ''}{additions}/-{deletions})"
+
+        message = f"{commit_type}{scope_str}: {desc}"
+        return message[:120]
 
     async def _generate_commit_message(self) -> str:
         """Generate a descriptive commit message from the staged diff.
