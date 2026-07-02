@@ -295,15 +295,6 @@ def _interrupted_msg(call_id: str, name: str | None) -> Message:
     )
 
 
-def _interrupted_msg(call_id: str, name: str | None) -> Message:
-    return Message(
-        role=Role.TOOL,
-        content=INTERRUPTED_TOOL_RESULT,
-        tool_call_id=call_id,
-        name=name,
-    )
-
-
 def _pair_tool_results(calls: list[dict[str, Any]], avail: list[Message]) -> list[Message]:
     out: list[Message] = []
     if _id_distinct(calls):
