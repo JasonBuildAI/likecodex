@@ -1,4 +1,4 @@
-"""Shared state and utilities for route modules.
+﻿"""Shared state and utilities for route modules.
 
 This module contains the global state variables and utility functions
 that were previously defined in server.py. Route modules import from here
@@ -35,6 +35,7 @@ _SESSION_STORE: SessionStore | None = None
 _CONTEXT_CACHE = SessionContextCache(max_size=200)
 
 _DEEPSEEK_TOOLS_REGISTERED: bool = False
+_VISION_TOOLS_REGISTERED: bool = False
 
 _RESOLVED_CONFIG_CACHE: dict[int, dict] = {}
 _RESOLVED_CONFIG_KEYS: tuple[str, ...] = (

@@ -1,19 +1,22 @@
-//! ACP entry point.
+//! ACP entry point — pure async stdin/stdout JSON-RPC server.
 //!
 //! Starts the ACP server on stdin/stdout, bridging to the LikeCodex engine.
+//! All RPC handlers are registered as async closures, eliminating the
+//! `block_in_place` + `block_on` anti-pattern.
 
 use likecodex_acp::server::Conn;
-use likecodex_acp::service::AcpService;
+use likecodex_acp::service::{AcpService, SessionStore};
 use likecodex_core::config::Config;
 use likecodex_core::events::EventBus;
-use std::io::{stdin, stdout};
 use std::sync::Arc;
+use tokio::io::{stdin, stdout};
 use tracing::{info, warn};
-use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt().with_env_filter(
+        tracing_subscriber::EnvFilter::from_default_env(),
+    ).init();
 
     let config = Config::load().unwrap_or_else(|e| {
         warn!(error = %e, "failed to load config, using defaults");
@@ -28,165 +31,204 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "http://127.0.0.1:9090".to_string());
 
     let event_bus = EventBus::new(1024);
-    let service = Arc::new(AcpService::new(engine_url, config, event_bus));
+
+    // Initialise the SQLite-backed session store
+    let store = SessionStore::new(&SessionStore::default_path())
+        .map_err(|e| anyhow::anyhow!("failed to open session store: {e}"))?;
+
+    let service = Arc::new(AcpService::new(
+        engine_url.clone(),
+        config,
+        event_bus.clone(),
+        Some(store),
+    )
+    .await);
 
     // Health check
     if let Err(e) = service.factory().health_check().await {
         warn!("ACP engine health check failed: {e}");
     }
 
-    let conn = Arc::new(Conn::new(Box::new(stdin()), Box::new(stdout())));
+    // Create the connection — writer uses std::io::Write sync wrapper for
+    // stdout, while stdin is read asynchronously via process_reader.
+    let conn = Arc::new(Conn::new(Box::new(stdout())));
 
-    // Register initialize handler
+    // ── Register all RPC handlers ────────────────────────────
+
+    // initialize
     {
         let svc = service.clone();
-        conn.handle("initialize", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    svc.handle_initialize(params).await
-                })
-            })
-        }));
+        conn.handle(
+            "initialize",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_initialize(params).await }
+            })),
+        )
+        .await;
     }
 
-    // Register authenticate handler
+    // authenticate
     {
         let svc = service.clone();
-        conn.handle("authenticate", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    svc.handle_authenticate(params).await
-                })
-            })
-        }));
+        conn.handle(
+            "authenticate",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_authenticate(params).await }
+            })),
+        )
+        .await;
     }
 
-    // Register session/new handler
+    // session/new
     {
         let svc = service.clone();
-        conn.handle("session/new", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    svc.handle_session_new(params).await
-                })
-            })
-        }));
+        conn.handle(
+            "session/new",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_session_new(params).await }
+            })),
+        )
+        .await;
     }
 
-    // Register session/load handler
+    // session/load
     {
         let svc = service.clone();
-        conn.handle("session/load", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    svc.handle_session_load(params).await
-                })
-            })
-        }));
+        conn.handle(
+            "session/load",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_session_load(params).await }
+            })),
+        )
+        .await;
     }
 
-    // Register session/resume handler
+    // session/resume
     {
         let svc = service.clone();
-        conn.handle("session/resume", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::runtime::Handle::current().block_on(async {
-                svc.handle_session_resume(params).await
-            })
-        }));
+        conn.handle(
+            "session/resume",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_session_resume(params).await }
+            })),
+        )
+        .await;
     }
 
-    // Register session/prompt handler
+    // session/prompt
     {
         let svc = service.clone();
-        conn.handle("session/prompt", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    svc.handle_session_prompt(params).await
-                })
-            })
-        }));
+        conn.handle(
+            "session/prompt",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_session_prompt(params).await }
+            })),
+        )
+        .await;
     }
 
-    // Register session/cancel handler (as notification)
+    // session/cancel (notification)
     {
         let svc = service.clone();
-        conn.handle_notify("session/cancel", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    let _ = svc.handle_session_cancel(params).await;
-                })
-            })
-        }));
+        conn.handle_notify(
+            "session/cancel",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { let _ = svc.handle_session_cancel(params).await; }
+            })),
+        )
+        .await;
     }
 
-    // Register session/set_config_option handler
+    // session/set_config_option
     {
         let svc = service.clone();
-        conn.handle("session/set_config_option", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    svc.handle_session_set_config_option(params).await
-                })
-            })
-        }));
+        conn.handle(
+            "session/set_config_option",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_session_set_config_option(params).await }
+            })),
+        )
+        .await;
     }
 
-    // Register session/set_model handler
+    // session/set_model
     {
         let svc = service.clone();
-        conn.handle("session/set_model", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    svc.handle_session_set_model(params).await
-                })
-            })
-        }));
+        conn.handle(
+            "session/set_model",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_session_set_model(params).await }
+            })),
+        )
+        .await;
     }
 
-    // Register session/list handler
+    // session/list
     {
         let svc = service.clone();
-        conn.handle("session/list", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::runtime::Handle::current().block_on(async {
-                svc.handle_session_list(params).await
-            })
-        }));
+        conn.handle(
+            "session/list",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_session_list(params).await }
+            })),
+        )
+        .await;
     }
 
-    // Register session/close handler
+    // session/close
     {
         let svc = service.clone();
-        conn.handle("session/close", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::runtime::Handle::current().block_on(async {
-                svc.handle_session_close(params).await
-            })
-        }));
+        conn.handle(
+            "session/close",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_session_close(params).await }
+            })),
+        )
+        .await;
     }
 
-    // Register session/delete handler
+    // session/delete
     {
         let svc = service.clone();
-        conn.handle("session/delete", Arc::new(move |params| {
-            let svc = svc.clone();
-            tokio::runtime::Handle::current().block_on(async {
-                svc.handle_session_delete(params).await
-            })
-        }));
+        conn.handle(
+            "session/delete",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_session_delete(params).await }
+            })),
+        )
+        .await;
+    }
+
+    // session/request_permission
+    {
+        let svc = service.clone();
+        conn.handle(
+            "session/request_permission",
+            Arc::new(move |params| Box::pin({
+                let svc = svc.clone();
+                async move { svc.handle_request_permission(params).await }
+            })),
+        )
+        .await;
     }
 
     info!("LikeCodex ACP server starting on stdin/stdout");
-    conn.process_reader(Box::new(stdin()));
+
+    // Read stdin asynchronously — this is the main event loop
+    conn.process_reader(Box::new(stdin())).await;
+
     info!("LikeCodex ACP server stopped");
 
     Ok(())

@@ -24,6 +24,3 @@ __all__ = [
     "fuse",
     "update_access",
 ]
-from likecodex_engine.memory.vector import VectorMemory
-
-__all__ = ["VectorMemory"]

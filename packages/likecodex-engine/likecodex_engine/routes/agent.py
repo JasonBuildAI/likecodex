@@ -1,4 +1,4 @@
-"""Core Agent API route handlers.
+﻿"""Core Agent API route handlers.
 
 Handles: health, metrics, chat, run, plan, tasks, permissions, asks,
 checkpoints, codegraph, sessions, plan mode toggle, context compaction.
@@ -51,6 +51,7 @@ from likecodex_engine.routes._shared import (
     _CONTEXT_CACHE,
     _SESSION_STORE,
     _DEEPSEEK_TOOLS_REGISTERED,
+    _VISION_TOOLS_REGISTERED,
     _RESOLVED_CONFIG_CACHE,
     _RESOLVED_CONFIG_KEYS,
     _make_sse_response,
@@ -265,6 +266,26 @@ def _make_agent(
             )
         _DEEPSEEK_TOOLS_REGISTERED = True
         _set_current_deepseek_session(loop, context, sid)
+    global _VISION_TOOLS_REGISTERED
+    if not _VISION_TOOLS_REGISTERED:
+        try:
+            from likecodex_engine.tools.vision import TOOL_DEFINITIONS as VISION_TOOLS
+            for tool_name, tool_def in VISION_TOOLS.items():
+                tools.register(
+                    tool_def["name"],
+                    {
+                        "description": tool_def["description"],
+                        "parameters": tool_def["parameters"],
+                    },
+                    tool_def["handler"],
+                    read_only=tool_def.get("read_only", True),
+                )
+            _VISION_TOOLS_REGISTERED = True
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
 
     host_checks = load_host_checks_from_dir(Path(working_dir))
     if host_checks:
@@ -932,3 +953,5 @@ def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_post("/resume", resume_session)
     app.router.add_post("/sessions/delete", delete_session)
     app.router.add_post("/agent/mode", set_agent_mode)
+
+

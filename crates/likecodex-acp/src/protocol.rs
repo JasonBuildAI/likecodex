@@ -438,6 +438,12 @@ pub enum SessionUpdate {
         session_id: String,
         message: String,
     },
+    #[serde(rename = "permission_request")]
+    PermissionRequest {
+        session_id: String,
+        tool_call: PermissionToolCall,
+        options: Vec<PermissionOption>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
