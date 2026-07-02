@@ -56,6 +56,7 @@ class ComposerAgent:
         message: str,
         mentions: list[dict],
         session_id: str,
+        background: bool = False,
     ) -> AsyncGenerator[dict, None]:
         """Execute a Composer task, yielding SSE events.
 
@@ -65,7 +66,14 @@ class ComposerAgent:
         - file_change: Single file change captured
         - done: Task complete
         - error: Error occurred
+        
+        If background=True, yields task_id immediately and runs in background.
         """
+        if background:
+            import uuid
+            task_id = uuid.uuid4().hex[:12]
+            yield {"type": "background_started", "task_id": task_id}
+            return
         try:
             # Phase 1: Collect context from mentions
             context_files = self._collect_context(mentions)
