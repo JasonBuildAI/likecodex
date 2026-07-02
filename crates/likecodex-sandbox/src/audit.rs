@@ -17,7 +17,7 @@ use tracing::{debug, warn};
 use likecodex_executor::ExecutionResult;
 
 /// A single audit log entry written as a JSON Line.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
     /// ISO 8601 UTC timestamp.
     pub timestamp: String,

@@ -1,11 +1,11 @@
-"""Session share HTTP API routes.
+﻿"""Session share HTTP API routes.
 
 Endpoints
 --------
-POST   /session/share              — create a share link
-GET    /session/share/{token}      — resolve / peek a share link
-POST   /session/share/{token}/import — import a shared session
-DELETE /session/share/{token}      — revoke a share link
+POST   /session/share              鈥?create a share link
+GET    /session/share/{token}      鈥?resolve / peek a share link
+POST   /session/share/{token}/import 鈥?import a shared session
+DELETE /session/share/{token}      鈥?revoke a share link
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from likecodex_engine.routes._shared import (
 
 logger = logging.getLogger(__name__)
 
-# ── Lazy singleton ──────────────────────────────────────────────────────
+# 鈹€鈹€ Lazy singleton 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 _SHARE_SERVICE: SessionShareService | None = None
 
@@ -44,7 +44,7 @@ def _reset_services() -> None:
         _SHARE_SERVICE = None
 
 
-# ── Request helpers ─────────────────────────────────────────────────────
+# 鈹€鈹€ Request helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 
 async def _read_json(request: web.Request) -> dict[str, Any]:
@@ -54,11 +54,11 @@ async def _read_json(request: web.Request) -> dict[str, Any]:
         return {}
 
 
-# ── Handlers ────────────────────────────────────────────────────────────
+# 鈹€鈹€ Handlers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 
 async def handle_create_share(request: web.Request) -> web.Response:
-    """POST /session/share — create a share link for a session."""
+    """POST /session/share 鈥?create a share link for a session."""
     data = await _read_json(request)
     session_id = data.get("session_id", "")
     expiry_hours = int(data.get("expiry_hours", 24))
@@ -86,7 +86,7 @@ async def handle_create_share(request: web.Request) -> web.Response:
 
 
 async def handle_get_share(request: web.Request) -> web.Response:
-    """GET /session/share/{token} — resolve / peek a share link.
+    """GET /session/share/{token} 鈥?resolve / peek a share link.
 
     If the share is password-protected the caller must provide the
     password in the ``X-Share-Password`` header or as a query
@@ -121,7 +121,7 @@ async def handle_get_share(request: web.Request) -> web.Response:
 
 
 async def handle_import_share(request: web.Request) -> web.Response:
-    """POST /session/share/{token}/import — import a shared session.
+    """POST /session/share/{token}/import 鈥?import a shared session.
 
     Creates a new forked session in the current user's store.
     """
@@ -151,7 +151,7 @@ async def handle_import_share(request: web.Request) -> web.Response:
 
 
 async def handle_revoke_share(request: web.Request) -> web.Response:
-    """DELETE /session/share/{token} — revoke a share link."""
+    """DELETE /session/share/{token} 鈥?revoke a share link."""
     token = request.match_info.get("token", "")
     svc = _share_service()
     ok = svc.revoke_share_link(token)
@@ -160,7 +160,7 @@ async def handle_revoke_share(request: web.Request) -> web.Response:
     return web.json_response({"status": "revoked", "token": token})
 
 
-# ── Route registration ──────────────────────────────────────────────────
+# 鈹€鈹€ Route registration 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 
 def register_routes(app: web.Application, config: dict[str, Any]) -> None:
@@ -171,7 +171,7 @@ def register_routes(app: web.Application, config: dict[str, Any]) -> None:
     app.router.add_delete("/session/share/{token}", handle_revoke_share)
 
 
-# ── Lazy singleton ──────────────────────────────────────────────────────
+# 鈹€鈹€ Lazy singleton 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 _SHARE_SERVICE: SessionShareService | None = None
 
@@ -191,10 +191,10 @@ def _reset_services() -> None:
         _SHARE_SERVICE = None
 
 
-# ── Request helpers ─────────────────────────────────────────────────────
+# 鈹€鈹€ Request helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 
-def _json_body(request: web.Request) -> dict[str, Any]:
+async def _json_body(request: web.Request) -> dict[str, Any]:
     try:
         return json.loads(await request.read()) if request.can_read_body else {}
     except (json.JSONDecodeError, TypeError):
@@ -208,11 +208,11 @@ async def _read_json(request: web.Request) -> dict[str, Any]:
         return {}
 
 
-# ── Handlers ────────────────────────────────────────────────────────────
+# 鈹€鈹€ Handlers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 
 async def handle_create_share(request: web.Request) -> web.Response:
-    """POST /session/share — create a share link for a session."""
+    """POST /session/share 鈥?create a share link for a session."""
     data = await _read_json(request)
     session_id = data.get("session_id", "")
     expiry_hours = int(data.get("expiry_hours", 24))
@@ -241,7 +241,7 @@ async def handle_create_share(request: web.Request) -> web.Response:
 
 
 async def handle_get_share(request: web.Request) -> web.Response:
-    """GET /session/share/{token} — resolve / peek a share link.
+    """GET /session/share/{token} 鈥?resolve / peek a share link.
 
     If the share is password-protected the caller must provide the
     password in the ``X-Share-Password`` header or as a query
@@ -277,7 +277,7 @@ async def handle_get_share(request: web.Request) -> web.Response:
 
 
 async def handle_import_share(request: web.Request) -> web.Response:
-    """POST /session/share/{token}/import — import a shared session.
+    """POST /session/share/{token}/import 鈥?import a shared session.
 
     Creates a new forked session in the current user's store.
     """
@@ -308,7 +308,7 @@ async def handle_import_share(request: web.Request) -> web.Response:
 
 
 async def handle_revoke_share(request: web.Request) -> web.Response:
-    """DELETE /session/share/{token} — revoke a share link."""
+    """DELETE /session/share/{token} 鈥?revoke a share link."""
     token = request.match_info.get("token", "")
     svc = _share_service()
     ok = svc.revoke_share_link(token)
@@ -317,7 +317,7 @@ async def handle_revoke_share(request: web.Request) -> web.Response:
     return web.json_response({"status": "revoked", "token": token})
 
 
-# ── Route registration ──────────────────────────────────────────────────
+# 鈹€鈹€ Route registration 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 
 def register_routes(app: web.Application, config: dict[str, Any]) -> None:
