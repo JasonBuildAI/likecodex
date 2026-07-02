@@ -10,11 +10,13 @@ from typing import Any
 
 from likecodex_engine.tools.encoding import read_text_detect, write_text_preserve
 from likecodex_engine.tools.path_utils import resolve_in_working_dir
+from likecodex_engine.tools.undo_stack import EditEntry, UndoStack
 
 
 class EditFileTools:
-    def __init__(self, working_dir: str) -> None:
+    def __init__(self, working_dir: str, undo_stack: UndoStack | None = None) -> None:
         self.working_dir = working_dir
+        self.undo_stack = undo_stack or UndoStack(max_depth=50)
 
     def _resolve_file(self, path: str) -> tuple[Path | None, str | None]:
         """Resolve a file path, returning (path, None) on success or (None, error_json) on failure."""
@@ -112,6 +114,10 @@ class EditFileTools:
             return json.dumps({"path": path, "mode": mode, "no_change": True})
 
         used = write_text_preserve(target, after, decoded.encoding)
+
+        # Track in undo stack
+        self.undo_stack.push(path, before, after, description=mode_label)
+
         return json.dumps(
             {
                 "path": path,
@@ -180,6 +186,18 @@ class EditFileTools:
                 current = current.replace(old, new, 1)
 
         used = write_text_preserve(target, current, decoded.encoding)
+
+        # Track whole group in undo stack
+        entries = [
+            EditEntry(
+                file_path=path,
+                before_content=before,
+                after_content=current,
+                description=f"multi_edit #{len(edits)}",
+            )
+        ]
+        self.undo_stack.push_group(entries, description=f"multi_edit({len(edits)} edits)")
+
         return json.dumps(
             {
                 "path": path,
@@ -398,3 +416,85 @@ class EditFileTools:
             result = result[:old_slice_start] + new_hunk + result[old_slice_end:]
 
         return "".join(result)
+
+    # ============================================================
+    # Phase 3.5: Undo/Redo Convenience Methods
+    # ============================================================
+
+    def undo_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Undo the last file edit.",
+            "parameters": {"type": "object", "properties": {}},
+        }
+
+    async def undo(self) -> str:
+        """Undo the last edit group."""
+        group = self.undo_stack.undo()
+        if group is None:
+            return json.dumps({"error": "Nothing to undo"})
+        restored = []
+        for entry in group.edits:
+            target, err = self._resolve_file(entry.file_path)
+            if err:
+                continue
+            if target and target.exists():
+                decoded = read_text_detect(target)
+                write_text_preserve(target, entry.before_content, decoded.encoding)
+                restored.append(entry.file_path)
+        return json.dumps({
+            "undone": True,
+            "files": restored,
+            "description": group.description,
+        })
+
+    def redo_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Redo the last undone edit.",
+            "parameters": {"type": "object", "properties": {}},
+        }
+
+    async def redo(self) -> str:
+        """Redo the last undone edit group."""
+        group = self.undo_stack.redo()
+        if group is None:
+            return json.dumps({"error": "Nothing to redo"})
+        restored = []
+        for entry in group.edits:
+            target, err = self._resolve_file(entry.file_path)
+            if err:
+                continue
+            if target and target.exists():
+                decoded = read_text_detect(target)
+                write_text_preserve(target, entry.after_content, decoded.encoding)
+                restored.append(entry.file_path)
+        return json.dumps({
+            "redone": True,
+            "files": restored,
+            "description": group.description,
+        })
+
+    def undo_history_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Get undo/redo history.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Max entries to return",
+                    }
+                },
+            },
+        }
+
+    async def undo_history(self, limit: int = 20) -> str:
+        """Get recent undo history."""
+        history = self.undo_stack.get_undo_history(limit=limit)
+        return json.dumps({
+            "history": history,
+            "can_undo": self.undo_stack.can_undo(),
+            "can_redo": self.undo_stack.can_redo(),
+            "undo_count": self.undo_stack.undo_count,
+            "redo_count": self.undo_stack.redo_count,
+        })
