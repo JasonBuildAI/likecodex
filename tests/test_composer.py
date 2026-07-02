@@ -534,3 +534,30 @@ class TestDiffEdgeCases:
     def test_empty_sequences(self) -> None:
         result = MyersDiff.diff([], [])
         assert result.net_changes == 0
+
+    def test_conflict_detection(self) -> None:
+        """Test that divergent edits produce detectable conflicts."""
+        base = ["line1", "line2", "line3"]
+        edit_a = ["line1", "line_a", "line3"]
+        edit_b = ["line1", "line_b", "line3"]
+        diff_a = MyersDiff.diff(base, edit_a)
+        diff_b = MyersDiff.diff(base, edit_b)
+        assert diff_a.net_changes > 0
+        assert diff_b.net_changes > 0
+        # The two diffs are different
+        assert diff_a.to_unified_diff() != diff_b.to_unified_diff()
+
+    def test_apply_diff_undo(self) -> None:
+        """Test applying then reversing a diff returns to original."""
+        original = "def foo():\n    return 1\n"
+        modified = "def foo():\n    return 42\n"
+
+        # Compute diff and apply
+        result = compute_diff(original, modified)
+        patched = apply_diff(original, result.ops)
+        assert patched == modified
+
+        # Reverse and apply
+        reversed_ops = reverse_diff(result.ops)
+        unpatched = apply_diff(modified, reversed_ops)
+        assert unpatched == original
