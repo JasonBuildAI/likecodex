@@ -53,10 +53,20 @@ class EditFileTools:
     async def edit_file(
         self,
         path: str,
-        old_string: str,
-        new_string: str,
+        old_string: str = "",
+        new_string: str = "",
         replace_all: bool = False,
+        mode: str = "search_replace",
+        content: str = "",
+        patch: str = "",
     ) -> str:
+        """Edit a file in one of three modes (Phase 3.11).
+
+        Modes:
+        - search_replace (default): Replace old_string with new_string (incremental).
+        - replace: Overwrite entire file with content (full replacement).
+        - patch: Apply a git unified diff patch string.
+        """
         target, err = self._resolve_file(path)
         if err:
             return err
@@ -66,22 +76,46 @@ class EditFileTools:
 
         decoded = read_text_detect(target)
         before = decoded.text
-        if old_string not in before:
-            hint = self._context_hint(before, old_string)
-            return json.dumps({"error": f"old_string not found in {path}", "hint": hint})
 
-        if replace_all:
-            after = before.replace(old_string, new_string)
-            count = before.count(old_string)
+        if mode == "replace":
+            # Phase 3.11: 全量替换模式 — 用 content 完全覆盖文件
+            if not content:
+                return json.dumps({"error": "'content' required for replace mode"})
+            after = content
+            mode_label = "replace"
+
+        elif mode == "patch":
+            # Phase 3.11: Patch 模式 — 应用 git unified diff
+            if not patch:
+                return json.dumps({"error": "'patch' required for patch mode"})
+            after = self._apply_patch(before, patch)
+            if after is None:
+                return json.dumps({"error": f"Failed to apply patch to {path}: hunk(s) did not match"})
+            mode_label = "patch"
+
         else:
-            after = before.replace(old_string, new_string, 1)
-            count = 1
+            # search_replace (default) — 增量编辑
+            if not old_string:
+                return json.dumps({"error": "'old_string' required for search_replace mode"})
+            if old_string not in before:
+                hint = self._context_hint(before, old_string)
+                return json.dumps({"error": f"old_string not found in {path}", "hint": hint})
+            if replace_all:
+                after = before.replace(old_string, new_string)
+                count = before.count(old_string)
+            else:
+                after = before.replace(old_string, new_string, 1)
+                count = 1
+            mode_label = f"search_replace ({count} replacement(s))"
+
+        if after == before:
+            return json.dumps({"path": path, "mode": mode, "no_change": True})
 
         used = write_text_preserve(target, after, decoded.encoding)
         return json.dumps(
             {
                 "path": path,
-                "replacements": count,
+                "mode": mode_label,
                 "diff": self._diff(path, before, after),
                 "before_len": len(before),
                 "after_len": len(after),
@@ -297,3 +331,70 @@ class EditFileTools:
                 snippet = "\n".join(f"{j + 1}: {lines[j]}" for j in range(start, end))
                 return f"Near line {i + 1}:\n{snippet}"
         return "No similar context found."
+
+    # ============================================================
+    # Phase 3.11: Patch 模式 — git unified diff 解析与应用
+    # ============================================================
+
+    @staticmethod
+    def _apply_patch(original: str, patch_text: str) -> str | None:
+        """Apply a git unified diff patch to the original content.
+
+        Parses hunks like:
+            @@ -start,count +start,count @@
+            -old_line
+            +new_line
+
+        Hunks are applied from bottom to top so line numbers stay valid.
+        Returns the patched content, or None if any hunk fails to match.
+        """
+        lines = original.splitlines(keepends=True)
+        hunk_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+        # Phase 1: parse all hunks
+        raw_hunks = patch_text.split("\n@@ ")
+        parsed_hunks: list[tuple[int, int, list[str], list[str]]] = []
+
+        for raw in raw_hunks:
+            if not raw.strip():
+                continue
+            # Re-prepend @@ if we split on it
+            hunk_str = raw if raw.startswith("@@") else "@@ " + raw
+            hunk_lines = hunk_str.splitlines(keepends=True)
+            if not hunk_lines:
+                continue
+
+            header_match = hunk_re.match(hunk_lines[0].strip())
+            if not header_match:
+                continue
+
+            old_start = int(header_match.group(1))
+            # new_start = int(header_match.group(3))
+
+            old_hunk: list[str] = []
+            new_hunk: list[str] = []
+
+            for hl in hunk_lines[1:]:
+                if hl.startswith("-"):
+                    old_hunk.append(hl[1:])
+                elif hl.startswith("+"):
+                    new_hunk.append(hl[1:])
+                else:
+                    stripped = hl[1:] if hl.startswith(" ") else hl
+                    old_hunk.append(stripped)
+                    new_hunk.append(stripped)
+
+            parsed_hunks.append((old_start, len(old_hunk), old_hunk, new_hunk))
+
+        # Phase 2: apply from bottom to top
+        result = list(lines)
+        for old_start, _old_count, old_hunk, new_hunk in sorted(parsed_hunks, key=lambda x: -x[0]):
+            old_slice_start = old_start - 1  # convert to 0-indexed
+            old_slice_end = old_slice_start + len(old_hunk)
+
+            if result[old_slice_start:old_slice_end] != old_hunk:
+                return None
+
+            result = result[:old_slice_start] + new_hunk + result[old_slice_end:]
+
+        return "".join(result)
