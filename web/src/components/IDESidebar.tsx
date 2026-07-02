@@ -8,6 +8,13 @@ interface IDESidebarProps {
 
 /**
  * IDE left sidebar container with fixed width.
+ *
+ * Phase 7.6: Debug Panel Sidebar
+ * - Future: Add debug-specific panels in sidebar:
+ *   - Call Stack panel (thread frames)
+ *   - Breakpoints list panel
+ *   - Watches panel (Phase 7.7)
+ * - Toggle between file-tree view and debug view via toolbar
  */
 export const IDESidebar: React.FC<IDESidebarProps> = ({ children }) => {
   return (
