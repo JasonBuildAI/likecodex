@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -47,7 +47,7 @@ You can now use LikeCodex:
 Need help? Run `likecodex --help`
 """
 
-PROVIDER_OPTIONS: dict[str, dict[str, str]] = {
+PROVIDER_OPTIONS: Dict[str, Dict[str, str]] = {
     "1": {
         "name": "DeepSeek",
         "description": "DeepSeek V4 Flash / Pro (recommended)",
@@ -65,13 +65,13 @@ PROVIDER_OPTIONS: dict[str, dict[str, str]] = {
     },
 }
 
-MODE_OPTIONS: dict[str, str] = {
+MODE_OPTIONS: Dict[str, str] = {
     "1": "auto",
     "2": "manual",
     "3": "approve",
 }
 
-OPTIONAL_COMPONENTS: dict[str, str] = {
+OPTIONAL_COMPONENTS: Dict[str, str] = {
     "sandbox": "Docker sandbox for safe command execution",
     "memory": "Vector memory with ChromaDB for long-term context",
     "webui": "Web UI (requires Node.js for frontend build)",
@@ -87,24 +87,24 @@ async def run_setup_wizard() -> None:
     """Run the interactive 4-step configuration wizard."""
     console.print(Markdown(WELCOME_MD))
 
-    # ── Step 1: LLM Provider ──────────────────────────────────────
+    # Step 1: LLM Provider
     config = await _step_provider_selection()
     if config is None:
         return
 
-    # ── Step 2: API Key ───────────────────────────────────────────
+    # Step 2: API Key
     if config.get("online", True):
         await _step_api_key(config)
         if config.get("api_key"):
             await _test_connection(config)
 
-    # ── Step 3: Agent Mode ────────────────────────────────────────
+    # Step 3: Agent Mode
     await _step_agent_mode(config)
 
-    # ── Step 4: Optional Components ───────────────────────────────
+    # Step 4: Optional Components
     await _step_optional_components(config)
 
-    # ── Write config ──────────────────────────────────────────────
+    # Write config
     config_dir = Path.home() / ".likecodex"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.toml"
@@ -117,21 +117,16 @@ async def run_setup_wizard() -> None:
 
     if Confirm.ask("Save this configuration?", default=True):
         config_path.write_text(config_content, encoding="utf-8")
-        console.print(f"[green]✓ Configuration saved to {config_path}[/green]")
+        console.print(f"[green]Configuration saved to {config_path}[/green]")
 
-    # ── Create project memory ─────────────────────────────────────
+    # Create project memory
     if Confirm.ask("\nCreate project memory file (.likecodex/memory.md)?", default=False):
         await _create_project_memory()
 
     console.print(Markdown(COMPLETION_MD))
 
 
-# ---------------------------------------------------------------------------
-# Step helpers
-# ---------------------------------------------------------------------------
-
-
-async def _step_provider_selection() -> dict[str, Any] | None:
+async def _step_provider_selection() -> Dict[str, Any] | None:
     """Step 1: Let user choose an LLM provider."""
     console.print("\n[bold]Step 1/4: Choose LLM Provider[/bold]\n")
 
@@ -150,27 +145,24 @@ async def _step_provider_selection() -> dict[str, Any] | None:
 
     info = PROVIDER_OPTIONS[choice]
     is_online = choice != "3"
-    config: dict[str, Any] = {
+    model_map = {"1": "deepseek-v4-flash", "2": "gpt-4o", "3": "mock-model"}
+    config: Dict[str, Any] = {
         "provider": info["name"].lower().replace(" ", "-"),
         "provider_name": info["name"],
         "base_url": info["base_url"],
         "online": is_online,
         "api_key": "",
-        "model": {
-            "1": "deepseek-v4-flash",
-            "2": "gpt-4o",
-            "3": "mock-model",
-        }.get(choice, "deepseek-v4-flash"),
+        "model": model_map.get(choice, "deepseek-v4-flash"),
         "approval_mode": "auto",
         "enable_planner": True,
         "optional_components": [],
     }
 
-    console.print(f"[green]✓ Selected {info['name']}[/green]")
+    console.print(f"[green]Selected {info['name']}[/green]")
     return config
 
 
-async def _step_api_key(config: dict[str, Any]) -> None:
+async def _step_api_key(config: Dict[str, Any]) -> None:
     """Step 2: Collect API key."""
     console.print("\n[bold]Step 2/4: API Key[/bold]")
     provider = config["provider_name"]
@@ -194,24 +186,25 @@ async def _step_api_key(config: dict[str, Any]) -> None:
             config["api_key"] = Prompt.ask("Re-enter your API Key", password=True)
 
 
-async def _test_connection(config: dict[str, Any]) -> None:
+async def _test_connection(config: Dict[str, Any]) -> None:
     """Test API connectivity for the chosen provider."""
     console.print("\n[bold]Testing API connection...[/bold]")
     ok = await _test_api_connectivity(
         provider=config["provider"],
         api_key=config.get("api_key", ""),
         base_url=config.get("base_url", ""),
+        model=config.get("model", "deepseek-v4-flash"),
     )
     if ok:
-        console.print("[green]✓ API connection successful![/green]")
+        console.print("[green]API connection successful![/green]")
     else:
-        console.print("[red]✗ Connection failed. Check your API key and network.[/red]")
+        console.print("[red]Connection failed. Check your API key and network.[/red]")
         if not Confirm.ask("Ignore and continue?"):
             config["api_key"] = ""
             config["online"] = False
 
 
-async def _step_agent_mode(config: dict[str, Any]) -> None:
+async def _step_agent_mode(config: Dict[str, Any]) -> None:
     """Step 3: Choose agent approval mode."""
     console.print("\n[bold]Step 3/4: Choose Agent Mode[/bold]\n")
 
@@ -226,38 +219,31 @@ async def _step_agent_mode(config: dict[str, Any]) -> None:
 
     choice = Prompt.ask("Choose (1-3)", default="1")
     config["approval_mode"] = MODE_OPTIONS.get(choice, "auto")
+    console.print(f"[green]Mode set to '{config['approval_mode']}'[/green]")
 
-    console.print(f"[green]✓ Mode set to '{config['approval_mode']}'[/green]")
-
-    # Planner sub-question
     if Confirm.ask("Enable smart planning for complex tasks?", default=True):
         config["enable_planner"] = True
     else:
         config["enable_planner"] = False
 
 
-async def _step_optional_components(config: dict[str, Any]) -> None:
+async def _step_optional_components(config: Dict[str, Any]) -> None:
     """Step 4: Select optional components to install."""
     console.print("\n[bold]Step 4/4: Optional Components[/bold]\n")
 
-    selected: list[str] = []
+    selected: List[str] = []
     for key, desc in OPTIONAL_COMPONENTS.items():
         if Confirm.ask(f"Install [cyan]{key}[/cyan]? ({desc})", default=False):
             selected.append(key)
 
     config["optional_components"] = selected
     if selected:
-        console.print(f"[green]✓ Selected: {', '.join(selected)}[/green]")
+        console.print(f"[green]Selected: {', '.join(selected)}[/green]")
     else:
         console.print("[dim]No optional components selected.[/dim]")
 
 
-# ---------------------------------------------------------------------------
-# Config rendering
-# ---------------------------------------------------------------------------
-
-
-def _render_config_toml(config: dict[str, Any]) -> str:
+def _render_config_toml(config: Dict[str, Any]) -> str:
     """Render the configuration dictionary as a TOML string."""
     api_key = config.get("api_key", "")
     model = config.get("model", "deepseek-v4-flash")
@@ -290,12 +276,9 @@ def _render_config_toml(config: dict[str, Any]) -> str:
     ])
 
     if components:
-        lines.extend([
-            "",
-            "[install]",
-        ])
+        lines.extend(["", "[install]"])
         for comp in components:
-            lines.append(f'{comp} = true')
+            lines.append(f"{comp} = true")
 
     return "\n".join(lines) + "\n"
 
@@ -307,17 +290,13 @@ def _mask_api_key(content: str, api_key: str) -> str:
     return content
 
 
-# ---------------------------------------------------------------------------
-# Connectivity test
-# ---------------------------------------------------------------------------
-
-
 async def _test_api_connectivity(
     provider: str,
     api_key: str,
     base_url: str,
+    model: str = "deepseek-v4-flash",
 ) -> bool:
-    """Test API connectivity by listing models."""
+    """Test API connectivity by sending a minimal chat request."""
     if not api_key:
         return False
 
@@ -327,14 +306,14 @@ async def _test_api_connectivity(
 
             client = AsyncOpenAI(api_key=api_key, base_url=base_url)
             response = await client.chat.completions.create(
-                model=config.get("model", "deepseek-v4-flash"),
+                model=model,
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=5,
             )
             return bool(response.choices)
         else:
-            # Generic httpx-based check
             import httpx
+
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
                     base_url.rstrip("/") + "/models",
@@ -344,11 +323,6 @@ async def _test_api_connectivity(
     except Exception as e:
         console.print(f"[dim]Connection test failed: {e}[/dim]")
         return False
-
-
-# ---------------------------------------------------------------------------
-# Project memory creation
-# ---------------------------------------------------------------------------
 
 
 async def _create_project_memory() -> None:
@@ -371,9 +345,10 @@ Created: {datetime.now().strftime('%Y-%m-%d')}
 <!-- Key architectural decisions -->
 """
     memory_path.write_text(content, encoding="utf-8")
-    console.print(f"[green]✓ Created {memory_path}[/green]")
+    console.print(f"[green]Created {memory_path}[/green]")
 
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(run_setup_wizard())
