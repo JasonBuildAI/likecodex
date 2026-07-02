@@ -123,16 +123,23 @@ impl EngineBridge {
     }
 
     /// Poll a task until it completes and yield each new output chunk.
+    /// Uses an overall timeout to prevent infinite polling.
     pub async fn poll_task_outputs(
         &self,
         task_id: String,
     ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<Value>> + Send>>> {
         let bridge = self.clone();
+        let start = std::time::Instant::now();
+        const MAX_POLL_SECS: u64 = 300;
         let stream = futures::stream::unfold(0_usize, move |last_count| {
             let bridge = bridge.clone();
             let task_id = task_id.clone();
             async move {
                 loop {
+                    if start.elapsed().as_secs() > MAX_POLL_SECS {
+                        error!("poll_task_outputs timed out after {}s", MAX_POLL_SECS);
+                        return None;
+                    }
                     match bridge.get_task(&task_id).await {
                         Ok(body) => {
                             let outputs = body["outputs"].as_array().cloned().unwrap_or_default();
