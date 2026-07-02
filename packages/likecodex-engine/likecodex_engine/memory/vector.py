@@ -1,47 +1,95 @@
-"""Vector memory for project context and user preferences."""
+"""Vector memory for project context and user preferences.
+
+Three-tier memory architecture:
+- Working: current session (in-memory only, ephemeral)
+- Episodic: recent sessions (synced to persistent storage)
+- Semantic: long-term knowledge (project rules, decisions, patterns)
+"""
 
 from __future__ import annotations
 
 import json
 import logging
+import time
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 
 logger = logging.getLogger(__name__)
 
+WORKING_MAX_ENTRIES = 50
+EPISODIC_PERSIST_INTERVAL = 10  # sync every N entries
 
-class VectorMemory:
-    """Semantic memory with optional chromadb backend and layered storage.
-    
-    Supports three memory tiers:
-    - working: current session (in-memory only)
-    - episodic: recent sessions (synced to chroma)
-    - semantic: long-term knowledge (project rules, decisions)
-    """
+
+class MemoryTier(str, Enum):
+    """Three tiers of memory hierarchy."""
+    WORKING = "working"
+    EPISODIC = "episodic"
+    SEMANTIC = "semantic"
+
+
+@dataclass
+class MemoryEntry:
+    text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    tier: str = MemoryTier.WORKING
+    timestamp: float = field(default_factory=time.time)
+    source_session: str = ""
+
+
+class WorkingMemory:
+    """Current session, in-memory only, fast keyword search."""
+
+    def __init__(self, max_entries: int = WORKING_MAX_ENTRIES) -> None:
+        self._entries: list[MemoryEntry] = []
+        self._max_entries = max_entries
+
+    def add(self, text: str, metadata: dict[str, Any] | None = None) -> None:
+        entry = MemoryEntry(text=text, metadata=metadata or {}, tier=MemoryTier.WORKING)
+        self._entries.append(entry)
+        if len(self._entries) > self._max_entries:
+            # Evict oldest when over limit (move to episodic later)
+            self._entries.pop(0)
+
+    def search(self, query: str, top_k: int = 3) -> list[MemoryEntry]:
+        """Fast keyword-based search on working memory."""
+        query_words = set(query.lower().split())
+        scored: list[tuple[float, MemoryEntry]] = []
+        for entry in self._entries:
+            text_words = set(entry.text.lower().split())
+            common = query_words & text_words
+            if common:
+                score = len(common) / max(len(query_words), 1)
+                scored.append((score, entry))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [entry for _, entry in scored[:top_k]]
+
+    def get_all(self) -> list[MemoryEntry]:
+        return list(self._entries)
+
+    def clear(self) -> list[MemoryEntry]:
+        """Clear and return the current entries for archival."""
+        entries = self._entries
+        self._entries = []
+        return entries
+
+    @property
+    def size(self) -> int:
+        return len(self._entries)
+
+
+class EpisodicMemory:
+    """Recent sessions persisted to JSONL and optionally ChromaDB."""
 
     def __init__(self, path: str | Path = ".likecodex/memory.jsonl") -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._collection = None
         self._init_chroma()
-        self._working_memory: list[dict[str, Any]] = []  # current session
-
-    def add_working(self, text: str, metadata: dict[str, Any] | None = None) -> None:
-        """Add to working memory (current session, not persisted)."""
-        self._working_memory.append({"text": text, "metadata": metadata or {}})
-        if len(self._working_memory) > 50:  # Keep working memory bounded
-            self._working_memory.pop(0)
-
-    def search_working(self, query: str) -> list[dict[str, Any]]:
-        """Search working memory for current session context."""
-        query_words = set(query.lower().split())
-        results = []
-        for item in self._working_memory:
-            text_words = set(item["text"].lower().split())
-            if query_words & text_words:
-                results.append(item)
-        return results[:3]
+        self._pending_sync: list[MemoryEntry] = []
+        self._sync_counter = 0
 
     def _init_chroma(self) -> None:
         try:
@@ -52,22 +100,140 @@ class VectorMemory:
         except Exception:
             self._collection = None
 
-    def add(self, text: str, metadata: dict[str, Any] | None = None, memory_type: str = "user") -> None:
-        meta = {"type": memory_type, **(metadata or {})}
-        entry = {"text": text, "metadata": meta}
-        with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
-        if self._collection is not None:
-            doc_id = str(abs(hash(text + str(metadata))))
-            self._collection.upsert(ids=[doc_id], documents=[text], metadatas=[meta])
+    def add(self, entry: MemoryEntry) -> None:
+        """Persist an episodic memory entry."""
+        self._pending_sync.append(entry)
+        self._sync_counter += 1
+        # Bulk write to JSONL
+        if self._sync_counter >= EPISODIC_PERSIST_INTERVAL:
+            self._flush()
 
-    def search(self, query: str, top_k: int = 5, memory_type: str | None = None) -> list[dict[str, Any]]:
-        results = self._search_impl(query, top_k)
-        if memory_type:
-            results = [r for r in results if r.get("metadata", {}).get("type") == memory_type]
+    def _flush(self) -> None:
+        if not self._pending_sync:
+            return
+        with self.path.open("a", encoding="utf-8") as f:
+            for entry in self._pending_sync:
+                row = {
+                    "text": entry.text,
+                    "metadata": {**entry.metadata, "tier": entry.tier, "timestamp": entry.timestamp},
+                }
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        # Sync to chroma
+        if self._collection is not None:
+            for entry in self._pending_sync:
+                doc_id = str(abs(hash(entry.text + str(entry.metadata))))
+                meta = {**entry.metadata, "tier": entry.tier}
+                self._collection.upsert(ids=[doc_id], documents=[entry.text], metadatas=[meta])
+        self._pending_sync.clear()
+
+    def search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+        self._flush()
+        if self._collection is not None:
+            try:
+                result = self._collection.query(query_texts=[query], n_results=top_k)
+                docs = result.get("documents", [[]])[0]
+                metas = result.get("metadatas", [[]])[0]
+                return [
+                    {"text": doc, "metadata": meta or {}, "score": 1.0, "tier": MemoryTier.EPISODIC}
+                    for doc, meta in zip(docs, metas, strict=False)
+                ]
+            except Exception:
+                logger.warning("chromadb query failed, falling back to JSONL", exc_info=True)
+        return self._search_jsonl(query, top_k)
+
+    def _search_jsonl(self, query: str, top_k: int) -> list[dict[str, Any]]:
+        if not self.path.exists():
+            return []
+        results: list[dict[str, Any]] = []
+        with self.path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("metadata", {}).get("tier") != MemoryTier.EPISODIC:
+                    continue
+                text = entry.get("text", "")
+                query_words = set(query.lower().split())
+                text_words = set(text.lower().split())
+                if not query_words:
+                    continue
+                common = query_words & text_words
+                score = len(common) / len(query_words)
+                results.append({"text": text, "metadata": entry.get("metadata", {}), "score": score})
+        results.sort(key=lambda x: x["score"], reverse=True)
         return results[:top_k]
 
-    def list_by_type(self, memory_type: str, limit: int = 10) -> list[dict[str, Any]]:
+    def persist_working(self, working: WorkingMemory) -> int:
+        """Bulk persist current working memory entries into episodic storage."""
+        entries = working.clear()
+        count = 0
+        for entry in entries:
+            entry.tier = MemoryTier.EPISODIC
+            self.add(entry)
+            count += 1
+        return count
+
+    def close(self) -> None:
+        self._flush()
+
+
+class SemanticMemory:
+    """Long-term knowledge: project rules, architectural decisions, user preferences.
+
+    Entries are persisted with high priority and never automatically evicted.
+    """
+
+    def __init__(self, path: str | Path = ".likecodex/memory.jsonl") -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def add(self, text: str, metadata: dict[str, Any] | None = None) -> None:
+        """Add a semantic memory entry (persisted immediately)."""
+        entry = MemoryEntry(
+            text=text,
+            metadata={**(metadata or {}), "tier": MemoryTier.SEMANTIC},
+            tier=MemoryTier.SEMANTIC,
+        )
+        row = {
+            "text": entry.text,
+            "metadata": {**entry.metadata, "tier": MemoryTier.SEMANTIC, "timestamp": entry.timestamp},
+        }
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def search(self, query: str, top_k: int = 3) -> list[dict[str, Any]]:
+        """Search semantic memory entries."""
+        if not self.path.exists():
+            return []
+        results: list[dict[str, Any]] = []
+        with self.path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("metadata", {}).get("tier") != MemoryTier.SEMANTIC:
+                    continue
+                text = entry.get("text", "")
+                query_words = set(query.lower().split())
+                text_words = set(text.lower().split())
+                if not query_words:
+                    continue
+                common = query_words & text_words
+                score = len(common) / len(query_words)
+                results.append({**entry, "score": score})
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:top_k]
+
+    def list_all(self, limit: int = 100) -> list[dict[str, Any]]:
+        """List all semantic memory entries."""
         if not self.path.exists():
             return []
         items: list[dict[str, Any]] = []
@@ -80,41 +246,135 @@ class VectorMemory:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if entry.get("metadata", {}).get("type") == memory_type:
+                if entry.get("metadata", {}).get("tier") == MemoryTier.SEMANTIC:
                     items.append(entry)
         return items[:limit]
 
+
+class VectorMemory:
+    """Unified access to three-tier memory architecture.
+
+    Delegates to WorkingMemory, EpisodicMemory, and SemanticMemory
+    with tier-aware search and promotion/consolidation operations.
+    """
+
+    def __init__(self, path: str | Path = ".likecodex/memory.jsonl") -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.working = WorkingMemory()
+        self.episodic = EpisodicMemory(path)
+        self.semantic = SemanticMemory(path)
+
+    # --- Working tier ---
+    def add_working(self, text: str, metadata: dict[str, Any] | None = None) -> None:
+        """Add to working memory (current session, in-memory)."""
+        self.working.add(text, metadata)
+
+    def search_working(self, query: str, top_k: int = 3) -> list[MemoryEntry]:
+        """Search only working memory."""
+        return self.working.search(query, top_k)
+
+    # --- Episodic tier ---
+    def add_episodic(self, text: str, metadata: dict[str, Any] | None = None) -> None:
+        """Add an entry directly to episodic memory."""
+        entry = MemoryEntry(text=text, metadata=metadata or {}, tier=MemoryTier.EPISODIC)
+        self.episodic.add(entry)
+
+    def search_episodic(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+        """Search episodic memory."""
+        return self.episodic.search(query, top_k)
+
+    # --- Semantic tier ---
+    def add_semantic(self, text: str, metadata: dict[str, Any] | None = None) -> None:
+        """Add an entry to semantic (long-term) memory."""
+        self.semantic.add(text, metadata)
+
+    def search_semantic(self, query: str, top_k: int = 3) -> list[dict[str, Any]]:
+        """Search semantic memory."""
+        return self.semantic.search(query, top_k)
+
+    def list_semantic(self, limit: int = 100) -> list[dict[str, Any]]:
+        """List all semantic memories."""
+        return self.semantic.list_all(limit)
+
+    # --- Cross-tier operations ---
+    def search(self, query: str, top_k: int = 5, memory_type: str | None = None) -> list[dict[str, Any]]:
+        """Search across all tiers, optionally filtered by type.
+
+        Returns combined results ranked by relevance. Working memory results
+        are boosted because they represent the current session context.
+        """
+        results: list[dict[str, Any]] = []
+
+        # Working memory (in-memory, boosted)
+        working_results = self.working.search(query, top_k)
+        for entry in working_results:
+            results.append({
+                "text": entry.text,
+                "metadata": {**entry.metadata, "tier": MemoryTier.WORKING},
+                "score": 1.5,  # boost working memory
+            })
+
+        # Episodic memory
+        episodic_results = self.episodic.search(query, top_k)
+        results.extend(episodic_results)
+
+        # Semantic memory
+        semantic_results = self.semantic.search(query, top_k)
+        results.extend(semantic_results)
+
+        # Filter by type if specified
+        if memory_type:
+            results = [r for r in results if r.get("metadata", {}).get("type") == memory_type]
+
+        # Deduplicate by text
+        seen: set[str] = set()
+        deduped: list[dict[str, Any]] = []
+        for r in results:
+            text = r.get("text", "")
+            if text not in seen:
+                seen.add(text)
+                deduped.append(r)
+
+        deduped.sort(key=lambda x: x.get("score", 0), reverse=True)
+        return deduped[:top_k]
+
+    def promote_to_episodic(self) -> int:
+        """Promote all current working memory entries to episodic storage.
+
+        Returns the number of promoted entries.
+        """
+        return self.episodic.persist_working(self.working)
+
+    def list_by_type(self, memory_type: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Legacy compatibility: list entries by type across all tiers."""
+        if memory_type == MemoryTier.WORKING:
+            return [{"text": e.text, "metadata": e.metadata} for e in self.working.get_all()]
+        if memory_type == MemoryTier.SEMANTIC:
+            return self.semantic.list_all(limit)
+        # Episodic
+        return self.episodic._search_jsonl(memory_type, limit) if hasattr(self.episodic, '_search_jsonl') else []
+
+    def close(self) -> None:
+        """Flush pending entries and release resources."""
+        self.episodic.close()
+
+    # --- Legacy compat ---
+    def add(self, text: str, metadata: dict[str, Any] | None = None, memory_type: str = "user") -> None:
+        """Legacy add: route to appropriate tier based on memory_type."""
+        if memory_type == "working":
+            self.add_working(text, metadata)
+        elif memory_type == "semantic":
+            self.add_semantic(text, metadata)
+        else:
+            self.add_episodic(text, metadata)
+
+    # --- Legacy private methods kept for backward compatibility ---
     def _search_impl(self, query: str, top_k: int) -> list[dict[str, Any]]:
-        if self._collection is not None:
-            try:
-                result = self._collection.query(query_texts=[query], n_results=top_k)
-                docs = result.get("documents", [[]])[0]
-                metas = result.get("metadatas", [[]])[0]
-                return [
-                    {"text": doc, "metadata": meta or {}, "score": 1.0} for doc, meta in zip(docs, metas, strict=False)
-                ]
-            except Exception:
-                logger.warning("chromadb search failed, falling back to JSONL search", exc_info=True)
-                pass
-        return self._search_jsonl(query, top_k)
+        return self.search(query, top_k)
 
     def _search_jsonl(self, query: str, top_k: int) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
-        results = []
-        with self.path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                score = self._simple_score(query, entry.get("text", ""))
-                results.append({**entry, "score": score})
-        results.sort(key=lambda x: x["score"], reverse=True)
-        return results[:top_k]
+        return self.episodic._search_jsonl(query, top_k)
 
     @staticmethod
     def _simple_score(query: str, text: str) -> float:
