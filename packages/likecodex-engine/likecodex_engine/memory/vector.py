@@ -16,6 +16,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .decay import apply_decay, update_access
+from .embeddings import EmbeddingManager
+from .fusion import fuse
+from .vector_store import VectorStore
+
 
 logger = logging.getLogger(__name__)
 
@@ -258,12 +263,21 @@ class VectorMemory:
     with tier-aware search and promotion/consolidation operations.
     """
 
-    def __init__(self, path: str | Path = ".likecodex/memory.jsonl") -> None:
+    def __init__(
+        self,
+        path: str | Path = ".likecodex/memory.jsonl",
+        embedder: EmbeddingManager | None = None,
+        vector_store: VectorStore | None = None,
+    ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.working = WorkingMemory()
         self.episodic = EpisodicMemory(path)
         self.semantic = SemanticMemory(path)
+        # New embedding system
+        self._embedder = embedder or EmbeddingManager()
+        store_path = self.path.parent / "vector_store"
+        self._vector_store = vector_store or VectorStore(store_path)
 
     # --- Working tier ---
     def add_working(self, text: str, metadata: dict[str, Any] | None = None) -> None:
@@ -297,16 +311,43 @@ class VectorMemory:
         """List all semantic memories."""
         return self.semantic.list_all(limit)
 
+    # --- Embedding search (new) ---
+    def search_embedding(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+        """Search using true semantic embedding similarity.
+
+        Queries the vector store with the query's embedding, then applies
+        decay and fuses results from all tiers.
+        """
+        query_emb = self._embedder.embed(query)
+        store_results = self._vector_store.search(query_emb, top_k=top_k)
+
+        # Apply decay
+        store_results = apply_decay(store_results)
+
+        # Mark accessed
+        for r in store_results:
+            update_access(r)
+
+        return store_results
+
     # --- Cross-tier operations ---
     def search(self, query: str, top_k: int = 5, memory_type: str | None = None) -> list[dict[str, Any]]:
         """Search across all tiers, optionally filtered by type.
+
+        Uses true embedding search when the vector store is populated;
+        falls back to the original keyword search otherwise.
 
         Returns combined results ranked by relevance. Working memory results
         are boosted because they represent the current session context.
         """
         results: list[dict[str, Any]] = []
 
-        # Working memory (in-memory, boosted)
+        # Try embedding search first (if store has entries)
+        if self._vector_store.count() > 0:
+            embedding_results = self.search_embedding(query, top_k)
+            results.extend(embedding_results)
+
+        # Also always search working memory (in-memory, boosted)
         working_results = self.working.search(query, top_k)
         for entry in working_results:
             results.append({
@@ -315,11 +356,10 @@ class VectorMemory:
                 "score": 1.5,  # boost working memory
             })
 
-        # Episodic memory
+        # Fallback: episodic + semantic keyword search
         episodic_results = self.episodic.search(query, top_k)
         results.extend(episodic_results)
 
-        # Semantic memory
         semantic_results = self.semantic.search(query, top_k)
         results.extend(semantic_results)
 
@@ -358,16 +398,82 @@ class VectorMemory:
     def close(self) -> None:
         """Flush pending entries and release resources."""
         self.episodic.close()
+        self._vector_store.close()
 
-    # --- Legacy compat ---
-    def add(self, text: str, metadata: dict[str, Any] | None = None, memory_type: str = "user") -> None:
-        """Legacy add: route to appropriate tier based on memory_type."""
+    # --- New add with embedding ---
+    def add_with_embedding(self, text: str, metadata: dict[str, Any] | None = None, memory_type: str = "user") -> str:
+        """Add a memory entry *with* embedding vector to the vector store.
+
+        Also adds to the appropriate tier for backward compatibility.
+        Returns the vector store entry ID.
+        """
+        embedding = self._embedder.embed(text)
+        meta = {
+            **(metadata or {}),
+            "tier": memory_type,
+            "timestamp": time.time(),
+        }
+        entry_id = self._vector_store.add(None, text, embedding, meta)
+
+        # Also add to traditional tiers
         if memory_type == "working":
             self.add_working(text, metadata)
         elif memory_type == "semantic":
             self.add_semantic(text, metadata)
         else:
             self.add_episodic(text, metadata)
+
+        return entry_id
+
+    # --- Fusion ---
+    def fuse_memories(self, memories: list[dict[str, Any]] | None = None, threshold: float = 0.88) -> list[dict[str, Any]]:
+        """Fuse duplicate/similar memories across sessions.
+
+        If *memories* is None, all entries from the vector store are
+        loaded, fused, and re-inserted.
+        """
+        if memories is None:
+            # Load all from vector store (best-effort, limited)
+            dummy_emb = [0.0] * self._embedder.dimension
+            raw = self._vector_store.search(dummy_emb, top_k=10000)
+            memories = raw
+
+        fused_entries = fuse(memories, threshold=threshold, embedder=self._embedder)
+
+        # Re-insert fused entries into vector store
+        if memories is not None and len(fused_entries) < len(memories):
+            logger.info(
+                "Fused %d memories into %d (%.1f%% reduction)",
+                len(memories), len(fused_entries),
+                (1 - len(fused_entries) / len(memories)) * 100,
+            )
+
+        return fused_entries
+
+    # --- Decay ---
+    def apply_decay(self, entries: list[dict[str, Any]] | None = None, half_life: float = 604800.0) -> list[dict[str, Any]]:
+        """Apply time-based decay to memory entries."""
+        if entries is None:
+            dummy_emb = [0.0] * self._embedder.dimension
+            entries = self._vector_store.search(dummy_emb, top_k=10000)
+        return apply_decay(entries, half_life=half_life)
+
+    # --- Embedding manager access ---
+    @property
+    def embedder(self) -> EmbeddingManager:
+        return self._embedder
+
+    @property
+    def vector_store(self) -> VectorStore:
+        return self._vector_store
+
+    # --- Legacy compat ---
+    def add(self, text: str, metadata: dict[str, Any] | None = None, memory_type: str = "user") -> None:
+        """Legacy add: route to appropriate tier based on memory_type.
+
+        Also stores the embedding in the vector store for semantic search.
+        """
+        self.add_with_embedding(text, metadata, memory_type)
 
     # --- Legacy private methods kept for backward compatibility ---
     def _search_impl(self, query: str, top_k: int) -> list[dict[str, Any]]:

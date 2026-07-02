@@ -12,7 +12,7 @@ path = "src/main.rs"
 likecodex-core = { path = "../likecodex-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-std"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
@@ -20,3 +20,4 @@ chrono = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
