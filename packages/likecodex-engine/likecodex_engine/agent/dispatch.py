@@ -49,6 +49,10 @@ class _ToolCircuitBreaker:
 
 _tool_breaker = _ToolCircuitBreaker()
 
+# Dedup cache: avoid re-executing identical read-only calls within the same batch
+_dedup_cache: dict[str, tuple[float, str]] = {}  # key -> (timestamp, result)
+_DEDUP_TTL = 1.0  # seconds
+
 
 def is_read_only_tool(name: str) -> bool:
     return name in READ_TOOLS or name.startswith("mcp__") or name.startswith("mcp_")
@@ -61,6 +65,14 @@ async def execute_tool_calls_parallel(
     """Execute read-only tools in parallel; others sequentially in order."""
 
     async def run_one(tc: Any) -> tuple[Any, str]:
+        # Dedup check: identical read-only calls within 1s window
+        if is_read_only_tool(tc.name):
+            from likecodex_engine.context.utils import stable_json_dumps
+            dedup_key = f"{tc.name}:{stable_json_dumps(tc.arguments)}"
+            cached_dedup = _dedup_cache.get(dedup_key)
+            if cached_dedup and (time.time() - cached_dedup[0]) < _DEDUP_TTL:
+                return tc, cached_dedup[1]
+
         # Circuit breaker check
         if _tool_breaker.is_open(tc.name):
             return tc, json.dumps({
@@ -95,6 +107,10 @@ async def execute_tool_calls_parallel(
         # Cache read-only tool results
         if is_read_only_tool(tc.name):
             tool_cache.set(tc.name, tc.arguments, result)
+            # Also update dedup cache
+            from likecodex_engine.context.utils import stable_json_dumps
+            dedup_key = f"{tc.name}:{stable_json_dumps(tc.arguments)}"
+            _dedup_cache[dedup_key] = (time.time(), result)
 
         return tc, result
 
