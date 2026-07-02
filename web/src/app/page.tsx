@@ -33,12 +33,12 @@ import { IDESettingsPanel } from '@/ide/settings/IDESettingsPanel';
 import { AgentSidebar } from '@/components/AgentSidebar';
 import { ShortcutHelpPanel } from '@/components/ShortcutHelp';
 import { OnboardingTooltips } from '@/components/Onboarding';
-import { createNewSession, fetchSessionEvents, fetchSessions } from '@/lib/api';
 import { useAppStore, type Skill } from '@/lib/store';
 import { useAppInit } from '@/hooks/useAppInit';
 import { useEventSubscription } from '@/hooks/useEventSubscription';
 import { useChatLogic } from '@/hooks/useChatLogic';
 import { usePageLogic } from '@/hooks/usePageLogic';
+import { useFileManagement } from '@/hooks/useFileManagement';
 
 export default function Home() {
   const [input, setInput] = useState('');
@@ -62,11 +62,13 @@ export default function Home() {
     toggleDiff,
   } = usePageLogic();
 
+  const fileMgmt = useFileManagement();
+  const { sessions, currentSessionId, handleSessionSelect } = fileMgmt;
+
   // Extract store slices
   const messages = useAppStore((s) => s.messages);
   const tasks = useAppStore((s) => s.tasks);
   const planSteps = useAppStore((s) => s.planSteps);
-  const sessions = useAppStore((s) => s.sessions);
   const pendingPermissions = useAppStore((s) => s.pendingPermissions);
   const pendingAskRequests = useAppStore((s) => s.pendingAskRequests);
   const activeDiff = useAppStore((s) => s.activeDiff);
@@ -74,7 +76,6 @@ export default function Home() {
   const planModeActive = useAppStore((s) => s.planModeActive);
   const collaborationMode = useAppStore((s) => s.collaborationMode);
   const isStreaming = useAppStore((s) => s.isStreaming);
-  const currentSessionId = useAppStore((s) => s.currentSessionId);
   const activeFilePath = useAppStore((s) => s.activeFilePath);
   const composerOpen = useComposerStore((s) => s.isOpen);
   const toggleComposer = useComposerStore((s) => s.toggleComposer);
@@ -121,12 +122,7 @@ export default function Home() {
       }
       if (e.key === 'n' && (e.ctrlKey || e.metaKey) && !isInput) {
         e.preventDefault();
-        createNewSession().then((r) => {
-          setCurrentSessionId(r.session_id);
-          setMessages([]);
-          addToast({ type: 'success', message: 'New session created' });
-          fetchSessions().then(setSessions);
-        });
+        fileMgmt.handleNewSession();
       }
       if (e.key === 'Escape') {
         useAppStore.getState().setCommandPaletteOpen(false);
@@ -136,15 +132,7 @@ export default function Home() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [setCurrentSessionId, setMessages, setSessions, addToast]);
-
-  const handleSessionSelect = async (sessionId: string) => {
-    setCurrentSessionId(sessionId);
-    useAppStore.getState().setIsStreaming(false);
-    useAppStore.getState().setPlanSteps([]);
-    const events = await fetchSessionEvents(sessionId);
-    setMessages(events);
-  };
+  }, [fileMgmt, addToast]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
