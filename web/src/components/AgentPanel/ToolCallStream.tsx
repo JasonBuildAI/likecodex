@@ -259,6 +259,7 @@ export const ToolCallStream = memo(function ToolCallStream({
   items,
   maxVisible = 20,
 }: ToolCallStreamProps) {
+  const [showStats, setShowStats] = useState(false);
   const visibleItems = useMemo(
     () => items.slice(-maxVisible),
     [items, maxVisible]
@@ -292,6 +293,18 @@ export const ToolCallStream = memo(function ToolCallStream({
     () => items.filter((i) => i.status === 'error' || i.status === 'cancelled').length,
     [items]
   );
+
+  // Top 5 slowest completed items
+  const top5Slowest = useMemo(() => {
+    return items
+      .filter((i) => i.status === 'completed' && i.completedAt)
+      .map((i) => ({
+        ...i,
+        duration: (i.completedAt!) - i.startedAt,
+      }))
+      .sort((a, b) => b.duration - a.duration)
+      .slice(0, 5);
+  }, [items]);
 
   if (items.length === 0) return null;
 
@@ -351,6 +364,38 @@ export const ToolCallStream = memo(function ToolCallStream({
               />
             );
           })}
+        </div>
+      )}
+
+      {/* Top 5 slowest stats */}
+      {top5Slowest.length > 0 && (
+        <div className="px-1">
+          <button
+            onClick={() => setShowStats(!showStats)}
+            className="flex items-center gap-1 text-[9px] text-muted/50 hover:text-muted transition-colors"
+          >
+            <svg className={`h-2.5 w-2.5 transition-transform ${showStats ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+            Top {top5Slowest.length} slowest
+          </button>
+          {showStats && (
+            <div className="mt-1 p-2 rounded bg-background/60 border border-border/40">
+              {top5Slowest.map((item, i) => (
+                <div key={item.id} className="flex items-center gap-2 py-0.5 text-[9px]">
+                  <span className="text-muted/50 w-3 text-right">{i + 1}.</span>
+                  <span className="text-foreground/80 truncate flex-1">{item.call.name}</span>
+                  <div className="flex-1 h-1.5 bg-background rounded-full overflow-hidden max-w-[80px]">
+                    <div
+                      className="h-full bg-gradient-to-r from-amber-500 to-red-500 rounded-full"
+                      style={{ width: `${Math.min(100, (item.duration / top5Slowest[0].duration) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="text-muted font-mono w-14 text-right">{formatDuration(item.duration)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
