@@ -1,13 +1,66 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '@/lib/store';
+
+// ── Fuzzy search (character-level subsequence matching + scoring) ───────
+function fuzzyScore(query: string, target: string): number {
+  const q = query.toLowerCase();
+  const t = target.toLowerCase();
+  let qi = 0;
+  let score = 0;
+  let prevMatch = -2;
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) {
+      score += ti === prevMatch + 1 ? 3 : 1; // consecutive bonus
+      prevMatch = ti;
+      qi++;
+    }
+  }
+  return qi === q.length ? score : 0;
+}
+
+// ── Icons per category ──────────────────────────────────────────────────
+const CATEGORY_ICONS: Record<string, JSX.Element> = {
+  session: (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+    </svg>
+  ),
+  view: (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+    </svg>
+  ),
+  settings: (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  ),
+  approval: (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  ),
+  code: (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+    </svg>
+  ),
+  misc: (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+    </svg>
+  ),
+};
 
 interface Command {
   id: string;
   label: string;
   description: string;
+  category: keyof typeof CATEGORY_ICONS;
   action: () => void;
   shortcut?: string;
 }
@@ -34,6 +87,7 @@ export function CommandPalette() {
       id: 'new-session',
       label: 'New Session',
       description: 'Create a new conversation session',
+      category: 'session',
       shortcut: 'Ctrl+N',
       action: () => {
         setOpen(false);
@@ -56,6 +110,7 @@ export function CommandPalette() {
       id: 'toggle-sidebar',
       label: 'Toggle Sidebar',
       description: 'Show or hide the sidebar panel',
+      category: 'view',
       shortcut: 'Ctrl+B',
       action: () => {
         toggleSidebar();
@@ -66,7 +121,8 @@ export function CommandPalette() {
       id: 'settings',
       label: 'Settings',
       description: 'Open settings panel',
-      shortcut: 'Ctrl+S',
+      category: 'settings',
+      shortcut: 'Ctrl+,',
       action: () => {
         setSettingsOpen(true);
         setOpen(false);
@@ -76,6 +132,7 @@ export function CommandPalette() {
       id: 'toggle-theme',
       label: 'Toggle Theme',
       description: 'Switch between dark and light theme',
+      category: 'settings',
       action: () => {
         const store = useAppStore.getState();
         store.setTheme(store.theme === 'dark' ? 'light' : 'dark');
@@ -86,6 +143,7 @@ export function CommandPalette() {
       id: 'approval-auto',
       label: 'Approval: Auto',
       description: 'Set approval mode to auto',
+      category: 'approval',
       action: () => {
         useAppStore.getState().setApprovalMode('auto');
         setOpen(false);
@@ -96,6 +154,7 @@ export function CommandPalette() {
       label: 'Approval: YOLO',
       description:
         'Set approval mode to yolo (no confirmations)',
+      category: 'approval',
       action: () => {
         useAppStore.getState().setApprovalMode('yolo');
         setOpen(false);
@@ -106,6 +165,7 @@ export function CommandPalette() {
       label: 'Compact Context',
       description:
         'Manually compact conversation context',
+      category: 'session',
       action: () => {
         const sid =
           useAppStore.getState().currentSessionId;
@@ -120,6 +180,7 @@ export function CommandPalette() {
       id: 'code-search',
       label: 'Code Symbol Search',
       description: 'Search symbols in the codebase',
+      category: 'code',
       shortcut: 'Ctrl+Shift+F',
       action: () => {
         setOpen(false);
@@ -127,18 +188,22 @@ export function CommandPalette() {
     },
   ];
 
-  // Fuzzy search filter
-  const filtered = query
-    ? commands.filter(
-        (c) =>
-          c.label
-            .toLowerCase()
-            .includes(query.toLowerCase()) ||
-          c.description
-            .toLowerCase()
-            .includes(query.toLowerCase())
-      )
-    : commands;
+  // Fuzzy search filter with scoring
+  const filtered = useMemo(() => {
+    if (!query) return commands;
+    const scored = commands
+      .map((c) => ({
+        cmd: c,
+        score: Math.max(
+          fuzzyScore(query, c.label),
+          fuzzyScore(query, c.description),
+          fuzzyScore(query, c.category)
+        ),
+      }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score);
+    return scored.map((x) => x.cmd);
+  }, [query]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -243,12 +308,20 @@ export function CommandPalette() {
                       : 'hover:bg-accent/10 text-muted hover:text-foreground'
                   }`}
                 >
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium truncate">
-                      {cmd.label}
-                    </div>
-                    <div className="text-xs text-muted/70 truncate">
-                      {cmd.description}
+                  <div className="flex items-center gap-3 min-w-0">
+                    {/* Category icon */}
+                    <span className={`shrink-0 p-1.5 rounded-lg ${
+                      i === selectedIndex ? 'bg-primary/30 text-primary' : 'bg-accent/10 text-muted'
+                    }`}>
+                      {CATEGORY_ICONS[cmd.category] || CATEGORY_ICONS.misc}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">
+                        {cmd.label}
+                      </div>
+                      <div className="text-xs text-muted/70 truncate">
+                        {cmd.description}
+                      </div>
                     </div>
                   </div>
                   {cmd.shortcut && (
