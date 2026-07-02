@@ -170,6 +170,77 @@ class ComposerAgent:
         self._undo_stack.clear()
         self._redo_stack.clear()
 
+    # ============================================================
+    # Phase 3.10: Composer 会话持久化 (序列化/反序列化)
+    #
+    # 支持将 ComposerAgent 的完整执行状态保存为 JSON,
+    # 从而实现会话中断恢复 / 跨工作区迁移 / 审计追踪。
+    #
+    # 序列化内容:
+    # - change_set: 所有已捕获的文件变更 (含原始/修改内容)
+    # - _captured_paths: 已处理的文件路径集合
+    # - _undo_stack: 撤销堆栈快照
+    # - _redo_stack: 重做堆栈快照
+    # - config + working_dir: 用于重建 agent 上下文
+    #
+    # 反序列化后不保留:
+    # - 后台任务 (_bg_tasks/_bg_results) — 需要重新执行
+    # - SSE 连接 / abortController — 属于前端职责
+    # ============================================================
+
+    def serialize(self) -> dict:
+        """Serialize current ComposerAgent state to a JSON-serializable dict."""
+        return {
+            "version": 1,
+            "config": self.config,
+            "working_dir": self.working_dir,
+            "change_set": [
+                {
+                    "file_path": c.file_path,
+                    "change_type": c.change_type,
+                    "original_content": c.original_content,
+                    "modified_content": c.modified_content,
+                    "language": c.language,
+                }
+                for c in self.change_set
+            ],
+            "captured_paths": list(self._captured_paths),
+            "undo_stack": list(self._undo_stack),
+            "redo_stack": list(self._redo_stack),
+        }
+
+    @classmethod
+    def deserialize(cls, data: dict) -> ComposerAgent:
+        """Restore a ComposerAgent from a serialized dict.
+
+        Args:
+            data: Dict previously returned by serialize().
+
+        Returns:
+            A new ComposerAgent instance with restored change_set and undo/redo stacks.
+        """
+        agent = cls(
+            config=data.get("config", {}),
+            working_dir=data.get("working_dir", "."),
+        )
+        # Restore change_set
+        agent.change_set = [
+            FileChange(
+                file_path=c["file_path"],
+                change_type=c["change_type"],
+                original_content=c["original_content"],
+                modified_content=c["modified_content"],
+                language=c.get("language", ""),
+            )
+            for c in data.get("change_set", [])
+        ]
+        # Restore captured paths
+        agent._captured_paths = set(data.get("captured_paths", []))
+        # Restore undo/redo stacks
+        agent._undo_stack = list(data.get("undo_stack", []))
+        agent._redo_stack = list(data.get("redo_stack", []))
+        return agent
+
     async def get_bg_status(self, task_id: str) -> dict | None:
         """Get the status of a background task."""
         task = self._bg_tasks.get(task_id)
