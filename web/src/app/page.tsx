@@ -228,6 +228,14 @@ export default function Home() {
     }
     setShowSkillAutocomplete(false);
     // @ mention detection — Phase 3.3: file picker via @mention
+    // Phase 5.10 enhancement notes:
+    // - Added fuzzy matching via MentionPicker API search
+    // - Added relevance scores and token estimates per result
+    // - Added type-based icons (file, folder, symbol, git, issue)
+    // - TODO: Multi-token @mentions (e.g. @file:path/to/file.ts)
+    // - TODO: Recent/priority mentions showing first
+    // - TODO: Inline context preview on hover (expandable snippet)
+    // - TODO: Mention history (recently used references)
     const atCursor = value.slice(0, cursor);
     const atIndex = atCursor.lastIndexOf('@');
     if (atIndex !== -1 && (atIndex === 0 || atCursor[atIndex - 1] === ' ' || atCursor[atIndex - 1] === '\n')) {
