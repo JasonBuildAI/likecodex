@@ -164,7 +164,7 @@ class GitTools:
             desc = first_name[:70]
         elif file_count <= 3:
             names = [Path(f).stem.replace("_", " ").replace("-", " ")[:20] for f in changed_keywords]
-            desc = f"{", ".join(names)}"
+             desc = ', '.join(names)
         else:
             desc = f"{first_name[:35]} +{file_count - 1} more"
 
