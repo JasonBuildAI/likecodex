@@ -56,41 +56,6 @@ class CodeSearchTools:
             },
         }
 
-    async def semantic_search(self, query: str, max_results: int = 10) -> str:
-        """Search code by semantic meaning using LLM embedding.
-        
-        Converts natural language query to embedding vector and searches
-        the codebase for matching code snippets.
-        """
-        try:
-            import json
-            from likecodex_engine.memory.vector import VectorMemory
-            memory = VectorMemory()
-            results = memory.search(query, top_k=max_results)
-            if not results:
-                return json.dumps({"results": [], "message": "No semantic results found. Try grep_files instead."})
-            return json.dumps({
-                "results": [
-                    {"text": r["text"][:500], "score": r.get("score", 0.0)}
-                    for r in results
-                ],
-                "total": len(results),
-            })
-        except Exception as e:
-            return json.dumps({"error": f"Semantic search failed: {e}"})
-
-    def semantic_search_schema(self) -> dict:
-        return {
-            "description": "Search code by meaning (e.g. 'find where users are authenticated'). Uses embeddings.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Natural language search query"},
-                    "max_results": {"type": "integer", "description": "Maximum results", "default": 10},
-                },
-                "required": ["query"],
-            },
-        }
 
     async def grep_files(self, pattern: str, glob: str | None = None, max_results: int = 20) -> str:
         try:
@@ -297,7 +262,7 @@ class CodeSearchTools:
     def semantic_search_schema(self) -> dict[str, Any]:
         return {
             "description": (
-                "Search code by meaning/intent using symbol-based matching. "
+                "Search code by meaning/intent using embedding + symbol-based matching. "
                 "Example queries: 'find the payment validation logic', "
                 "'where is the user authentication handler', 'database connection setup'"
             ),
@@ -313,14 +278,41 @@ class CodeSearchTools:
                         "default": 10,
                         "description": "Maximum number of results",
                     },
+                    "file_type": {
+                        "type": "string",
+                        "description": "Optional file type filter, e.g. 'py', 'ts', 'rs'",
+                    },
                 },
                 "required": ["query"],
             },
         }
 
-    async def semantic_search(self, query: str, max_results: int = 10) -> str:
-        """Search code by semantic intent using keyword extraction + CodeGraph."""
-        # Extract meaningful keywords from the natural language query
+    async def semantic_search(self, query: str, max_results: int = 10, file_type: str | None = None) -> str:
+        """Search code by semantic intent — tries VectorMemory first, falls back to keyword+CodeGraph."""
+        # Try embedding-based search first
+        try:
+            from likecodex_engine.memory.vector import VectorMemory
+            memory = VectorMemory()
+            vec_results = memory.search(query, top_k=max_results * 2)
+        except Exception:
+            vec_results = None
+
+        if vec_results:
+            clean = []
+            for r in vec_results:
+                text = r.get("text", "")[:500]
+                if file_type and not text.lower().endswith(f".{file_type}"):
+                    continue
+                clean.append({"text": text, "score": r.get("score", 0.0)})
+            if clean:
+                return json.dumps({
+                    "method": "embedding",
+                    "query": query,
+                    "results": clean[:max_results],
+                    "total": len(clean),
+                })
+
+        # Fallback: keyword extraction + CodeGraph
         stop_words = {
             "the", "a", "an", "is", "are", "was", "were", "be", "been",
             "being", "have", "has", "had", "do", "does", "did", "will",
@@ -355,6 +347,8 @@ class CodeSearchTools:
 
         scored: list[dict[str, Any]] = []
         for sym in graph.symbols:
+            if file_type and not sym.path.endswith(f".{file_type}"):
+                continue
             score = 0
             sym_lower = sym.name.lower()
             for kw in keywords:
