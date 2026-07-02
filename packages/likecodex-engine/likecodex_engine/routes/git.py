@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 _git_service: Any = None
 
 
+def _reset_services() -> None:
+    """Reset all lazy-init services (called during shutdown)."""
+    global _git_service
+    _git_service = None
+
+
 def _get_git_service(working_dir: str):
     global _git_service
     if _git_service is None:

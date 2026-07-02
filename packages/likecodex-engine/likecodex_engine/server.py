@@ -26,12 +26,6 @@ from likecodex_engine.routes._shared import (
     _ACTIVE_COORDINATORS,
     _CONTEXT_CACHE,
     _SESSION_STORE,
-    _completion_service,
-    _lsp_manager,
-    _git_service,
-    _terminal_manager,
-    _test_runner,
-    _settings_manager,
 )
 from likecodex_engine.routes.static import warmup_deepseek_cache
 
@@ -88,15 +82,13 @@ async def _on_cleanup(app: web.Application) -> None:
 
     _RESOLVED_CONFIG_CACHE.clear()
 
-    # Clear all lazy-init services
-    global _completion_service, _lsp_manager, _git_service
-    global _terminal_manager, _test_runner, _settings_manager
-    _completion_service = None
-    _lsp_manager = None
-    _git_service = None
-    _terminal_manager = None
-    _test_runner = None
-    _settings_manager = None
+    # Clear all lazy-init services from route modules
+    from likecodex_engine.routes.ide import _reset_services as _reset_ide_services
+    from likecodex_engine.routes.git import _reset_services as _reset_git_services
+    from likecodex_engine.routes.lsp import _reset_services as _reset_lsp_services
+    _reset_ide_services()
+    _reset_git_services()
+    _reset_lsp_services()
 
     logger.info("LikeCodex engine server shutdown complete")
 

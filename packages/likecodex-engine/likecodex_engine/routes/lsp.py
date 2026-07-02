@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 _lsp_manager: Any = None
 
 
+def _reset_services() -> None:
+    """Reset all lazy-init services (called during shutdown)."""
+    global _lsp_manager
+    _lsp_manager = None
+
+
 def _get_lsp_manager(working_dir: str):
     global _lsp_manager
     if _lsp_manager is None:

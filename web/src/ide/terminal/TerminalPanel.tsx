@@ -28,7 +28,7 @@
  * - src/ide/terminal/terminalStore.ts — store Terminal instance references, wire fitAddon
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTerminalStore, type TerminalSession } from './terminalStore';
 
 export function TerminalPanel() {
@@ -47,10 +47,22 @@ export function TerminalPanel() {
 
   const [input, setInput] = useState('');
   const [historyIdx, setHistoryIdx] = useState(-1);
+  const [showHistorySearch, setShowHistorySearch] = useState(false);
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
+  const [historySearchIdx, setHistorySearchIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const historySearchRef = useRef<HTMLInputElement>(null);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  // Filtered history from current session
+  const filteredHistory = useMemo(() => {
+    if (!activeSession) return [];
+    if (!historySearchQuery.trim()) return activeSession.history;
+    const q = historySearchQuery.toLowerCase();
+    return activeSession.history.filter((cmd) => cmd.toLowerCase().includes(q));
+  }, [activeSession, historySearchQuery]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -65,6 +77,13 @@ export function TerminalPanel() {
       createSession();
     }
   }, [sessions.length, createSession]);
+
+  // Focus history search input
+  useEffect(() => {
+    if (showHistorySearch && historySearchRef.current) {
+      historySearchRef.current.focus();
+    }
+  }, [showHistorySearch]);
 
   const handleSubmit = useCallback(() => {
     if (!input.trim() || isExecuting) return;
@@ -93,6 +112,11 @@ export function TerminalPanel() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         toggleAIInput();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+        e.preventDefault();
+        setShowHistorySearch(true);
+        setHistorySearchQuery('');
+        setHistorySearchIdx(0);
       }
     },
     [handleSubmit, historyIdx, activeSession, toggleAIInput]
@@ -187,6 +211,66 @@ export function TerminalPanel() {
           }}
           onClose={toggleAIInput}
         />
+      )}
+
+      {/* History search overlay (Ctrl+R) */}
+      {showHistorySearch && (
+        <div className="border-t border-gray-700 bg-[#252535] p-2 shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-yellow-400 shrink-0">(reverse-i-search)`</span>
+            <input
+              ref={historySearchRef}
+              type="text"
+              value={historySearchQuery}
+              onChange={(e) => {
+                setHistorySearchQuery(e.target.value);
+                setHistorySearchIdx(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setShowHistorySearch(false);
+                  inputRef.current?.focus();
+                } else if (e.key === 'Enter') {
+                  e.preventDefault();
+                  if (filteredHistory.length > 0) {
+                    const cmd = filteredHistory[historySearchIdx];
+                    setInput(cmd);
+                    setShowHistorySearch(false);
+                    inputRef.current?.focus();
+                  }
+                } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  const direction = e.key === 'ArrowUp' ? -1 : 1;
+                  setHistorySearchIdx((prev) => {
+                    const max = filteredHistory.length - 1;
+                    if (max < 0) return 0;
+                    const next = prev + direction;
+                    if (next < 0) return max;
+                    if (next > max) return 0;
+                    return next;
+                  });
+                }
+              }}
+              className="flex-1 bg-transparent text-gray-200 text-xs font-mono focus:outline-none"
+              placeholder="搜索命令历史..."
+            />
+            <span className="text-xs text-yellow-400 shrink-0">'</span>
+          </div>
+          {filteredHistory.length > 0 && (
+            <div className="mt-1">
+              <div className="text-[10px] text-blue-300 bg-blue-900/30 px-1.5 py-0.5 rounded font-mono">
+                {filteredHistory[historySearchIdx]}
+              </div>
+              <div className="text-[9px] text-gray-500 mt-0.5">
+                {historySearchIdx + 1}/{filteredHistory.length} 匹配
+              </div>
+            </div>
+          )}
+          {filteredHistory.length === 0 && historySearchQuery && (
+            <div className="text-[10px] text-gray-500 mt-1">无匹配结果</div>
+          )}
+        </div>
       )}
 
       {/* Command input */}

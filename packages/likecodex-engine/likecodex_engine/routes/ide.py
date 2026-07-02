@@ -38,6 +38,14 @@ _settings_manager: Any = None
 _test_runner: Any = None
 
 
+def _reset_services() -> None:
+    """Reset all lazy-init services (called during shutdown)."""
+    global _completion_service, _settings_manager, _test_runner
+    _completion_service = None
+    _settings_manager = None
+    _test_runner = None
+
+
 def _get_completion_service():
     global _completion_service
     if _completion_service is None:
