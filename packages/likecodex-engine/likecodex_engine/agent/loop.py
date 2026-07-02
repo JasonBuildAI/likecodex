@@ -214,8 +214,31 @@ class AgentLoop:
             if parallel and self.agent_factory:
                 from likecodex_engine.agent.subagent import SubAgentOrchestrator
 
-                orchestrator = SubAgentOrchestrator(self.agent_factory)
-                results = await orchestrator.run_parallel([(step.id, step.description) for step in parallel])
+                collected: list[LLMResponse] = []
+                def _on_progress(p: dict[str, Any]) -> None:
+                    collected.append(
+                        LLMResponse(
+                            content="",
+                            model="subagent",
+                            event_type="subagent_progress",
+                            metadata=p,
+                        )
+                    )
+
+                orchestrator = SubAgentOrchestrator(self.agent_factory, on_progress=_on_progress)
+                results_task = asyncio.create_task(
+                    orchestrator.run_parallel([(step.id, step.description) for step in parallel])
+                )
+                # Yield progress events as they come in
+                while not results_task.done():
+                    if collected:
+                        evt = collected.pop(0)
+                        yield self._emit(evt)
+                    await asyncio.sleep(0.1)
+                results = await results_task
+                # Emit any remaining progress
+                for evt in collected:
+                    yield self._emit(evt)
                 summary = SubAgentOrchestrator.summarize(results)
                 self.context.add_context_block(f"Sub-agent results:\n{summary}")
                 yield self._emit(LLMResponse(content=summary, model="subagent", event_type="subagent"))
