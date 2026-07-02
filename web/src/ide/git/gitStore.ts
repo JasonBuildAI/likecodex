@@ -20,11 +20,14 @@ import {
   gitPush,
   gitFetch,
   gitStash,
+  fetchGitHunks,
+  gitStageHunk,
   type GitChangeData,
   type GitCommitData,
   type GitBranchData,
   type GitDiffData,
   type GitSearchResult,
+  type GitHunksResult,
 } from '@/lib/api';
 
 interface GitState {
@@ -37,6 +40,8 @@ interface GitState {
   selectedPath: string | null;
   isLoading: boolean;
   error: string | null;
+  hunks: GitHunksResult | null;
+  selectedHunk: number;
 
   // Search
   searchQuery: string;
@@ -48,6 +53,8 @@ interface GitState {
   refreshLog: () => Promise<void>;
   refreshBranches: () => Promise<void>;
   selectFile: (path: string, staged: boolean) => Promise<void>;
+  loadHunks: (path: string, staged: boolean) => Promise<void>;
+  stageHunk: (path: string, hunkIndex: number) => Promise<boolean>;
   stageFile: (path: string) => Promise<void>;
   unstageFile: (path: string) => Promise<void>;
   stageAll: () => Promise<void>;
@@ -74,6 +81,8 @@ export const useGitStore = create<GitState>((set, get) => ({
   selectedPath: null,
   isLoading: false,
   error: null,
+  hunks: null,
+  selectedHunk: -1,
   searchQuery: '',
   searchResults: [],
   isSearching: false,
@@ -122,6 +131,29 @@ export const useGitStore = create<GitState>((set, get) => ({
       set({ selectedDiff: diff });
     } catch {
       set({ selectedDiff: null });
+    }
+  },
+
+  loadHunks: async (path, staged) => {
+    try {
+      const hunks = await fetchGitHunks(path, staged);
+      set({ hunks, selectedHunk: -1 });
+    } catch {
+      set({ hunks: null, selectedHunk: -1 });
+    }
+  },
+
+  stageHunk: async (path, hunkIndex) => {
+    try {
+      const result = await gitStageHunk(path, hunkIndex);
+      if (result.success) {
+        await get().refreshStatus();
+        await get().loadHunks(path, false);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
     }
   },
 

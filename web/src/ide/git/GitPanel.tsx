@@ -64,6 +64,10 @@ export function GitPanel() {
     fetch: gitFetchAction,
     stashPush,
     stashPop,
+    loadHunks,
+    stageHunk: stageHunkAction,
+    hunks,
+    selectedHunk,
   } = useGitStore();
 
   const [commitMessage, setCommitMessage] = useState('');
@@ -108,6 +112,7 @@ export function GitPanel() {
 
   const handleSelectFile = (path: string, staged: boolean) => {
     selectFile(path, staged);
+    loadHunks(path, staged);
     toggleExpand(path);
   };
 

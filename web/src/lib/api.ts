@@ -44,6 +44,8 @@ export {
   gitPush,
   gitFetch,
   gitStash,
+  fetchGitHunks,
+  gitStageHunk,
   type GitChangeData,
   type GitStatusData,
   type GitCommitData,
@@ -100,4 +102,6 @@ export {
   type LSPHover,
   fetchFileSymbols,
   type FileSymbol,
+  lspDiagnostics,
+  type LSPDiagnostic,
 } from './services/workspaceService';

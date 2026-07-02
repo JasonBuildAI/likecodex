@@ -58,7 +58,45 @@ async def ide_lsp_hover(request: web.Request) -> web.Response:
 
 
 async def ide_lsp_diagnostics(request: web.Request) -> web.Response:
-    return web.json_response({"diagnostics": []})
+    """Run diagnostics on a file or directory and return structured results."""
+    _, wd = _cfg_wd(request)
+    path = request.query.get("path", ".")
+    from likecodex_engine.tools.lsp import LspTools
+    tools = LspTools(wd)
+    result_str = await tools.diagnostics(path)
+    data = json.loads(result_str)
+    # Parse output into structured diagnostics if raw output is present
+    if data.get("output"):
+        parsed = []
+        for line in data["output"].split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # Try to parse ruff/pyright style: file:line:col: severity message
+            import re as _re
+            m = _re.match(r"(.+?):(\d+):(\d+):\s*(\w+):\s*(.+)", line)
+            if m:
+                parsed.append({
+                    "file": m.group(1),
+                    "line": int(m.group(2)),
+                    "column": int(m.group(3)),
+                    "severity": m.group(4).lower(),
+                    "message": m.group(5),
+                    "source": data.get("checker", ""),
+                })
+            else:
+                # Fallback: treat as full line diagnostic
+                parsed.append({
+                    "file": path,
+                    "line": 0,
+                    "column": 0,
+                    "severity": "error" if data.get("exit_code", 0) != 0 else "warning",
+                    "message": line,
+                    "source": data.get("checker", ""),
+                })
+        data["diagnostics"] = parsed
+        data.pop("output", None)
+    return web.json_response(data)
 
 
 def register_routes(app: web.Application, config: dict) -> None:

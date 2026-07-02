@@ -6,8 +6,8 @@
     按 Ctrl+C 优雅关闭所有服务。
 .PARAMETER Mode
     启动模式：
-      full   - 完整模式 (默认): 引擎 + Rust API + Next.js Web UI
-      lite   - 极简模式: 仅启动 Python 引擎 + 内置 Lite UI (无需 Rust 编译)
+      lite - 极简模式 (默认): 仅启动 Python 引擎 + 内置 Lite UI (无需 Rust 编译)
+      full - 完整模式: 引擎 + Rust API + Next.js Web UI
 .PARAMETER SkipBuild
     跳过 Rust 构建 (已构建过时使用，加快启动)
 .PARAMETER Port
@@ -16,7 +16,7 @@
 
 param(
     [ValidateSet("full", "lite")]
-    [string]$Mode = "full",
+    [string]$Mode = "lite",
     [switch]$SkipBuild,
     [int]$Port = 3000
 )

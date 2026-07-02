@@ -91,3 +91,20 @@ export async function lspHover(filePath: string, line: number, symbol: string): 
   if (!resp.ok) return null;
   return resp.json();
 }
+
+// ── IDE LSP Diagnostics API ────────────────────────────────────────────
+export interface LSPDiagnostic {
+  message: string;
+  severity: 'error' | 'warning' | 'info' | 'hint';
+  file: string;
+  line: number;
+  column: number;
+  code?: string;
+  source?: string;
+}
+
+export async function lspDiagnostics(path: string = '.'): Promise<{ diagnostics: LSPDiagnostic[]; checked: boolean; language?: string; ok?: boolean }> {
+  const resp = await fetchWithRetry(`/api/ide/lsp/diagnostics?path=${encodeURIComponent(path)}`);
+  if (!resp.ok) return { diagnostics: [], checked: false };
+  return resp.json();
+}

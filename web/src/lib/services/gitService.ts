@@ -111,3 +111,26 @@ export async function gitStash(action: string, message: string = ''): Promise<{ 
   if (!resp.ok) return { success: false, error: `HTTP ${resp.status}` };
   return resp.json();
 }
+
+export interface GitHunkData {
+  header: string;
+  content: string;
+}
+
+export interface GitHunksResult {
+  hunks: GitHunkData[];
+  path: string;
+  staged: boolean;
+}
+
+export async function fetchGitHunks(path: string, staged: boolean = false): Promise<GitHunksResult | null> {
+  const resp = await fetchWithRetry('/api/ide/git/hunks', { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ path, staged }) }, 1, 10000);
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function gitStageHunk(path: string, hunkIndex: number): Promise<{ success: boolean; error?: string; fallback?: string }> {
+  const resp = await fetchWithRetry('/api/ide/git/stage-hunk', { method: 'POST', headers: buildHeaders(), body: JSON.stringify({ path, hunkIndex }) }, 1, 10000);
+  if (!resp.ok) return { success: false, error: `HTTP ${resp.status}` };
+  return resp.json();
+}
