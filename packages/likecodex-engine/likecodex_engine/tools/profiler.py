@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import json
 import pstats
-import time
 import timeit
 from typing import Any
 

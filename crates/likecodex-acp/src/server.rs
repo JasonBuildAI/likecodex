@@ -1,26 +1,34 @@
-//! NDJSON JSON-RPC 2.0 transport layer.
+//! NDJSON JSON-RPC 2.0 transport layer (pure async).
 //!
 //! Handles stdin/stdout connection management, request/response
 //! pairing, and notification dispatch for the ACP protocol.
+//! Uses fully asynchronous I/O via tokio.
 
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::future::Future;
+use std::io::Write;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::oneshot;
 use tracing::{debug, error, warn};
 
 /// Maximum message size (32 MiB).
 const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
 
-/// Handler for an incoming JSON-RPC request.
-pub type RequestHandler = Arc<
-    dyn Fn(serde_json::Value) -> Result<serde_json::Value, RpcErrorBox> + Send + Sync,
+/// Async handler for an incoming JSON-RPC request.
+pub type AsyncRequestHandler = Arc<
+    dyn Fn(serde_json::Value) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, RpcErrorBox>> + Send>>
+        + Send
+        + Sync,
 >;
 
-/// Handler for an incoming JSON-RPC notification.
-pub type NotificationHandler = Arc<dyn Fn(serde_json::Value) + Send + Sync>;
+/// Async handler for an incoming JSON-RPC notification.
+pub type AsyncNotificationHandler = Arc<
+    dyn Fn(serde_json::Value) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
+>;
 
 /// A boxed RPC error compatible with the protocol.
 #[derive(Debug, Clone)]
@@ -40,47 +48,44 @@ impl RpcErrorBox {
     }
 }
 
-/// An NDJSON JSON-RPC 2.0 connection.
+/// An NDJSON JSON-RPC 2.0 connection with pure async I/O.
 pub struct Conn {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     next_id: AtomicU64,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
-    request_handlers: Arc<Mutex<HashMap<String, RequestHandler>>>,
-    notification_handlers: Arc<Mutex<HashMap<String, NotificationHandler>>>,
+    request_handlers: Arc<tokio::sync::Mutex<HashMap<String, AsyncRequestHandler>>>,
+    notification_handlers: Arc<tokio::sync::Mutex<HashMap<String, AsyncNotificationHandler>>>,
 }
 
 impl Conn {
-    /// Create a new connection from reader/writer pair.
-    pub fn new(
-        _reader: Box<dyn std::io::Read + Send>,
-        writer: Box<dyn Write + Send>,
-    ) -> Self {
+    /// Create a new connection with the given async writer.
+    pub fn new(writer: Box<dyn Write + Send>) -> Self {
         Self {
             writer: Arc::new(Mutex::new(writer)),
             next_id: AtomicU64::new(1),
             pending: Arc::new(Mutex::new(HashMap::new())),
-            request_handlers: Arc::new(Mutex::new(HashMap::new())),
-            notification_handlers: Arc::new(Mutex::new(HashMap::new())),
+            request_handlers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            notification_handlers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
-    fn lock_mutex<T>(lock: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-        lock.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Register a request handler for a method.
-    pub fn handle(&self, method: impl Into<String>, handler: RequestHandler) {
-        let mut handlers = self.request_handlers.lock().unwrap();
+    /// Register an async request handler for a method.
+    pub async fn handle(&self, method: impl Into<String>, handler: AsyncRequestHandler) {
+        let mut handlers = self.request_handlers.lock().await;
         handlers.insert(method.into(), handler);
     }
 
-    /// Register a notification handler for a method.
-    pub fn handle_notify(&self, method: impl Into<String>, handler: NotificationHandler) {
-        let mut handlers = self.notification_handlers.lock().unwrap();
+    /// Register an async notification handler for a method.
+    pub async fn handle_notify(
+        &self,
+        method: impl Into<String>,
+        handler: AsyncNotificationHandler,
+    ) {
+        let mut handlers = self.notification_handlers.lock().await;
         handlers.insert(method.into(), handler);
     }
 
-    /// Send a fire-and-forget notification.
+    /// Send a fire-and-forget notification (synchronous, non-blocking).
     pub fn notify(&self, method: &str, params: impl Serialize) {
         let msg = serde_json::json!({
             "jsonrpc": "2.0",
@@ -90,7 +95,7 @@ impl Conn {
         self.write(&msg);
     }
 
-    /// Send a request and wait for the response.
+    /// Send a request and wait for the response asynchronously.
     pub async fn request(
         &self,
         method: &str,
@@ -106,7 +111,7 @@ impl Conn {
 
         let (tx, rx) = oneshot::channel();
         {
-            let mut pending = Self::lock_mutex(&self.pending);
+            let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
             pending.insert(id, tx);
         }
 
@@ -121,9 +126,9 @@ impl Conn {
         }
     }
 
-    /// Write a JSON value to the output stream.
+    /// Write a JSON value to the output stream (synchronous).
     fn write(&self, value: &serde_json::Value) {
-        let mut writer = Self::lock_mutex(&self.writer);
+        let mut writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         let line = serde_json::to_string(value).unwrap_or_else(|e| {
             error!("JSON serialization error: {e}");
             "{}".to_string()
@@ -145,14 +150,16 @@ impl Conn {
         self.write(&error);
     }
 
-    /// Process incoming messages from the reader.
-    pub fn process_reader(&self, reader: Box<dyn std::io::Read + Send>) {
+    /// Process incoming messages from the reader asynchronously.
+    ///
+    /// Uses `tokio::io::AsyncBufReadExt` for non-blocking line-by-line reading.
+    pub async fn process_reader(&self, reader: Box<dyn AsyncRead + Send + Unpin>) {
         let mut buf_reader = BufReader::with_capacity(MAX_MESSAGE_BYTES, reader);
         let mut line = String::new();
 
         loop {
             line.clear();
-            match buf_reader.read_line(&mut line) {
+            match buf_reader.read_line(&mut line).await {
                 Ok(0) => {
                     debug!("ACP connection closed (EOF)");
                     break;
@@ -162,7 +169,7 @@ impl Conn {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    self.dispatch(trimmed);
+                    self.dispatch(trimmed).await;
                 }
                 Err(e) => {
                     error!("ACP read error: {e}");
@@ -173,7 +180,7 @@ impl Conn {
 
         // Clean up pending requests on disconnect
         {
-            let mut pending = Self::lock_mutex(&self.pending);
+            let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
             let count = pending.len();
             pending.clear();
             if count > 0 {
@@ -182,8 +189,8 @@ impl Conn {
         }
     }
 
-    /// Dispatch a single JSON-RPC message.
-    fn dispatch(&self, line: &str) {
+    /// Dispatch a single JSON-RPC message (async).
+    async fn dispatch(&self, line: &str) {
         let msg: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(e) => {
@@ -199,10 +206,11 @@ impl Conn {
         match (id, method) {
             // Request
             (Some(id), Some(method)) => {
-                let params = msg.get("params").cloned().unwrap_or(serde_json::Value::Null);
-                let handlers = Self::lock_mutex(&self.request_handlers);
+                let params =
+                    msg.get("params").cloned().unwrap_or(serde_json::Value::Null);
+                let handlers = self.request_handlers.lock().await;
                 if let Some(handler) = handlers.get(&method) {
-                    match handler(params) {
+                    match handler(params).await {
                         Ok(result) => {
                             let response = serde_json::json!({
                                 "jsonrpc": "2.0",
@@ -212,11 +220,7 @@ impl Conn {
                             self.write(&response);
                         }
                         Err(e) => {
-                            self.write_error(
-                                Some(id),
-                                e.code,
-                                &e.message,
-                            );
+                            self.write_error(Some(id), e.code, &e.message);
                         }
                     }
                 } else {
@@ -229,16 +233,17 @@ impl Conn {
             }
             // Notification
             (None, Some(method)) => {
-                let params = msg.get("params").cloned().unwrap_or(serde_json::Value::Null);
-                let handlers = Self::lock_mutex(&self.notification_handlers);
+                let params =
+                    msg.get("params").cloned().unwrap_or(serde_json::Value::Null);
+                let handlers = self.notification_handlers.lock().await;
                 if let Some(handler) = handlers.get(&method) {
-                    handler(params);
+                    handler(params).await;
                 }
             }
             // Response
             (Some(id), None) => {
                 if let Some(id_num) = id.as_u64() {
-                    let mut pending = Self::lock_mutex(&self.pending);
+                    let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(tx) = pending.remove(&id_num) {
                         if let Some(error) = msg.get("error") {
                             let _ = tx.send(serde_json::json!({ "error": error }));
