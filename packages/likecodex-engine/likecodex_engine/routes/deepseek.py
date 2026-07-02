@@ -29,17 +29,83 @@ logger = logging.getLogger(__name__)
 
 
 async def deepseek_cache_stats(request: web.Request) -> web.Response:
+    session_id = request.query.get("session_id", "")
     metrics = global_cache_metrics()
     from likecodex_engine.context.cache_shape import capture_prefix_shape
     shape = capture_prefix_shape()
+
+    # Calculate cache efficiency
+    total_tokens = metrics.total_hit_tokens + metrics.total_miss_tokens
+    cache_size_estimate = shape.get("prefix_length", 0) if shape else 0
+    entry_count = metrics.request_count
+
+    # Cache efficiency recommendations
+    recommendations: list[str] = []
+    if metrics.hit_rate < 0.3:
+        recommendations.append(
+            "Cache hit rate is low. Consider keeping system prompts stable, "
+            "avoiding frequent tool schema changes."
+        )
+    elif metrics.hit_rate < 0.6:
+        recommendations.append(
+            "Moderate hit rate. Session should improve with more turns."
+        )
+    elif metrics.hit_rate >= 0.8:
+        recommendations.append(
+            "Excellent cache efficiency! Continue maintaining stable prefix."
+        )
+    if metrics.cache_reset_count > 5:
+        recommendations.append(
+            f"High cache reset count ({metrics.cache_reset_count}). "
+            "Consider reducing system prompt changes."
+        )
+    if not recommendations:
+        recommendations.append("Cache health is good, no optimization needed.")
+
+    # Per-session cache stats (if session_id provided)
+    session_stats = None
+    if session_id:
+        from likecodex_engine.llm.cost_tracker import get_cost_tracker
+        tracker = get_cost_tracker()
+        record = tracker.get_session_cost(session_id)
+        if record:
+            session_stats = {
+                "session_id": session_id,
+                "request_count": record.request_count,
+                "total_cache_hit_tokens": record.total_cache_hit_tokens,
+                "total_cache_miss_tokens": record.total_cache_miss_tokens,
+                "overall_cache_hit_rate": round(record.overall_cache_hit_rate, 4),
+                "total_cost": record.total_cost,
+            }
+
     return web.json_response({
         "hit_rate": metrics.hit_rate,
         "recent_hit_rate": metrics.recent_hit_rate,
         "request_count": metrics.request_count,
         "total_hit_tokens": metrics.total_hit_tokens,
         "total_miss_tokens": metrics.total_miss_tokens,
+        "cache_reset_count": metrics.cache_reset_count,
+        "cache_size_estimate": cache_size_estimate,
+        "entry_count": entry_count,
         "prefix_shape": shape,
+        "session_stats": session_stats,
+        "recommendations": recommendations,
+        "efficiency_score": _calc_efficiency_score(metrics),
     })
+
+
+def _calc_efficiency_score(metrics: Any) -> dict[str, float]:
+    """Calculate cache efficiency score (0-100)."""
+    hit_score = metrics.hit_rate * 60  # 60 points for hit rate
+    stability_score = max(0, 20 - metrics.cache_reset_count * 2)  # 20 points for stability
+    volume_score = min(20, metrics.request_count * 2)  # 20 points for volume
+    total = hit_score + stability_score + volume_score
+    return {
+        "score": round(total, 1),
+        "hit_rate_component": round(hit_score, 1),
+        "stability_component": round(stability_score, 1),
+        "volume_component": round(volume_score, 1),
+    }
 
 
 async def deepseek_api_switch_model(request: web.Request) -> web.Response:
@@ -68,20 +134,35 @@ async def deepseek_session_cost(request: web.Request) -> web.Response:
         working_dir = cfg.get("working_dir", ".")
         from likecodex_engine.context.session_resolver import session_id_for_dir
         session_id = session_id_for_dir(working_dir)
-    metrics = global_cache_metrics()
-    usage = DeepSeekUsage(
-        prompt_tokens=metrics.total_hit_tokens + metrics.total_miss_tokens,
-        completion_tokens=0,
-        cache_hit_tokens=metrics.total_hit_tokens,
-        cache_miss_tokens=metrics.total_miss_tokens,
-        model="deepseek-v4-flash",
-    )
-    return web.json_response({
-        "session_id": session_id,
-        "cache_metrics": {"hit_rate": round(metrics.hit_rate, 4), "total_requests": metrics.request_count},
-        "cost": {"input_cost": round(usage.input_cost, 6), "output_cost": round(usage.output_cost, 6), "total_cost": round(usage.total_cost, 6), "currency": "USD"},
-        "usage": {"cache_hit_tokens": metrics.total_hit_tokens, "cache_miss_tokens": metrics.total_miss_tokens, "cache_hit_rate": round(usage.cache_hit_rate, 4), "reasoning_tokens": 0},
-    })
+
+    from likecodex_engine.llm.cost_tracker import get_cost_tracker
+    tracker = get_cost_tracker()
+    record = tracker.get_session_cost(session_id)
+
+    if record:
+        cost_data = record.to_dict()
+    else:
+        # Build from cache metrics as fallback
+        metrics = global_cache_metrics()
+        cost_data = {
+            "session_id": session_id,
+            "request_count": metrics.request_count,
+            "total_tokens": metrics.total_hit_tokens + metrics.total_miss_tokens,
+            "total_input_tokens": metrics.total_hit_tokens + metrics.total_miss_tokens,
+            "total_output_tokens": 0,
+            "total_input_cost": round(metrics.total_hit_tokens / 1_000_000 * 0.01, 8),
+            "total_output_cost": 0,
+            "total_cost": round(metrics.total_hit_tokens / 1_000_000 * 0.01, 8),
+            "total_cache_hit_tokens": metrics.total_hit_tokens,
+            "total_cache_miss_tokens": metrics.total_miss_tokens,
+            "overall_cache_hit_rate": round(metrics.hit_rate, 4),
+            "model_switch_count": 0,
+            "created_at": 0,
+            "updated_at": 0,
+            "duration_seconds": 0,
+        }
+
+    return web.json_response(cost_data)
 
 
 async def deepseek_diagnostics(request: web.Request) -> web.Response:
