@@ -14,6 +14,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { DiffViewer } from '@/components/DiffViewer';
+import { GitHistoryGraph } from './GitHistoryGraph';
 import { useGitStore } from './gitStore';
 
 const CHANGE_ICONS: Record<string, string> = {
@@ -383,27 +384,20 @@ export function GitPanel() {
 
       {/* History view */}
       {view === 'history' && (
-        <div className="flex-1 overflow-y-auto min-h-0">
-          {commits.length === 0 ? (
-            <div className="px-3 py-6 text-center text-xs text-gray-500">
-              加载中...
-            </div>
-          ) : (
-            commits.map((c) => (
-              <div
-                key={c.hash}
-                className="px-3 py-2 border-b border-gray-800 hover:bg-gray-800/50 cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-gray-500 font-mono">{c.shortHash}</span>
-                  <span className="text-xs text-gray-200 flex-1 truncate">{c.message}</span>
-                </div>
-                <div className="text-[10px] text-gray-500 mt-0.5">
-                  {c.author} · {c.date}
-                </div>
-              </div>
-            ))
-          )}
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <GitHistoryGraph
+            commits={commits.map((c) => ({
+              ...c,
+              parents: [],
+            }))}
+            branches={branches}
+            onSelectCommit={(hash) => {
+              const commit = commits.find((c) => c.hash === hash);
+              if (commit) {
+                setCommitMessage(commit.message);
+              }
+            }}
+          />
         </div>
       )}
 

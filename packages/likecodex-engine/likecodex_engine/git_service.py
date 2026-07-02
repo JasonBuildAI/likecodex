@@ -220,12 +220,17 @@ class GitService:
             parts = line.split("|", 4)
             if len(parts) < 5:
                 continue
+            hash_val = parts[0]
+            # Get files for this commit
+            _, files_out, _ = await self._run_git("diff-tree", "--no-commit-id", "--name-only", "-r", hash_val)
+            file_list = [f for f in files_out.strip().split("\n") if f.strip()][:50]
             commits.append({
-                "hash": parts[0],
+                "hash": hash_val,
                 "shortHash": parts[1],
                 "author": parts[2],
                 "date": parts[3],
                 "message": parts[4],
+                "files": file_list,
             })
 
         return {"commits": commits}
