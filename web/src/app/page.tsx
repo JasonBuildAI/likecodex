@@ -1,7 +1,7 @@
 ﻿'use client';
 
-import { useState, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { motion } from 'framer-motion';
 import { ChatMessages } from '@/components/Chat';
 import { DiffViewer } from '@/components/DiffViewer';
 import { PermissionModal } from '@/components/PermissionModal';
@@ -39,21 +39,10 @@ import { useEventSubscription } from '@/hooks/useEventSubscription';
 import { useChatLogic } from '@/hooks/useChatLogic';
 import { usePageLogic } from '@/hooks/usePageLogic';
 import { useFileManagement } from '@/hooks/useFileManagement';
+import { useAgentInteraction } from '@/hooks/useAgentInteraction';
 
 export default function Home() {
-  const [input, setInput] = useState('');
-  const [inputHistory, setInputHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-  const [showSkillAutocomplete, setShowSkillAutocomplete] = useState(false);
-  const [skillAutocompleteQuery, setSkillAutocompleteQuery] = useState('');
-  const [skillAutocompleteIndex, setSkillAutocompleteIndex] = useState(0);
-  const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [showInstallDialog, setShowInstallDialog] = useState(false);
-  const [showMentions, setShowMentions] = useState(false);
-  const [mentionQuery, setMentionQuery] = useState('');
-  const [mentionPos, setMentionPos] = useState({ top: 0, left: 0 });
-  const [mentions, setMentions] = useState<ContextMention[]>([]);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const {
@@ -64,6 +53,13 @@ export default function Home() {
 
   const fileMgmt = useFileManagement();
   const { sessions, currentSessionId, handleSessionSelect } = fileMgmt;
+
+  const agentInteraction = useAgentInteraction();
+  const { input, textareaRef, showSkillAutocomplete, skillAutocompleteQuery, skillAutocompleteIndex, showMentions, mentionQuery, mentionPos, handleInputChange, handleMentionSelect, insertSkillTag } = agentInteraction;
+
+  const onSubmit = useCallback((text: string, _skillName?: string) => {
+    runPrompt(text);
+  }, [runPrompt]);
 
   // Extract store slices
   const messages = useAppStore((s) => s.messages);
@@ -83,18 +79,14 @@ export default function Home() {
   const skills = useAppStore((s) => s.skills);
   const skillDetail = useAppStore((s) => s.skillDetail);
   const setSkillDetail = useAppStore((s) => s.setSkillDetail);
-  const setCollaborationMode = useAppStore((s) => s.setCollaborationMode);
-  const setCurrentSessionId = useAppStore((s) => s.setCurrentSessionId);
-  const setMessages = useAppStore((s) => s.setMessages);
   const addToast = useAppStore((s) => s.addToast);
-  const setSessions = useAppStore((s) => s.setSessions);
   const setAgentMode = useAppStore((s) => s.setAgentMode);
   const setActiveDiff = useAppStore((s) => s.setActiveDiff);
 
   // Initialize hooks
   useAppInit();
   useEventSubscription();
-  const { runPrompt, cancelPrompt } = useChatLogic();
+  const { runPrompt } = useChatLogic();
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -134,130 +126,12 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handler);
   }, [fileMgmt, addToast]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isStreaming) return;
-    setInputHistory((prev) => [input, ...prev].slice(0, 50));
-    setHistoryIndex(-1);
-    const prompt = input;
-    setInput('');
-    await runPrompt(prompt);
+  const handleSubmit = (e: React.FormEvent) => {
+    agentInteraction.handleSubmit(e, onSubmit);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      if (!input.trim() || isStreaming) return;
-      setInputHistory((prev) => [input, ...prev].slice(0, 50));
-      setHistoryIndex(-1);
-      const prompt = input;
-      setInput('');
-      runPrompt(prompt);
-      return;
-    }
-    if (showSkillAutocomplete) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setSkillAutocompleteIndex(i => Math.min(i + 1, 7)); return; }
-      if (e.key === 'ArrowUp') { e.preventDefault(); setSkillAutocompleteIndex(i => Math.max(0, i - 1)); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault();
-        const allSkills = useAppStore.getState().skills;
-        const filtered = allSkills.filter(s => s.enabled !== false).filter(s => !skillAutocompleteQuery || s.name.toLowerCase().includes(skillAutocompleteQuery.toLowerCase())).slice(0, 8);
-        const idx = skillAutocompleteIndex;
-        const selected = filtered[idx];
-        if (selected) {
-          const cursor = textareaRef.current?.selectionStart || input.length;
-          const beforeCursor = input.slice(0, cursor);
-          const slashIdx = beforeCursor.lastIndexOf('/');
-          if (slashIdx !== -1) {
-            const afterCursor = input.slice(cursor);
-            const tag = '/' + selected.name + ' ';
-            setInput(input.slice(0, slashIdx) + tag + afterCursor);
-          }
-          setSelectedSkill(selected);
-        }
-        setShowSkillAutocomplete(false);
-        setSkillAutocompleteIndex(0);
-        return;
-      }
-    }
-    if (e.key === 'ArrowUp' && input === '') {
-      e.preventDefault();
-      setHistoryIndex((prev) => {
-        const next = Math.min(prev + 1, inputHistory.length - 1);
-        if (inputHistory[next] !== undefined) setInput(inputHistory[next]);
-        return next;
-      });
-      return;
-    }
-    if (e.key === 'ArrowDown' && historyIndex >= 0) {
-      e.preventDefault();
-      setHistoryIndex((prev) => {
-        const next = prev - 1;
-        if (next < 0) { setInput(''); return -1; }
-        setInput(inputHistory[next] || '');
-        return next;
-      });
-    }
-  };
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    setInput(value);
-    const cursor = e.target.selectionStart;
-    const beforeCursor = value.slice(0, cursor);
-    const slashIndex = beforeCursor.lastIndexOf('/');
-    if (slashIndex !== -1 && (slashIndex === 0 || beforeCursor[slashIndex - 1] === ' ' || beforeCursor[slashIndex - 1] === '\n')) {
-      const query = beforeCursor.slice(slashIndex + 1);
-      if (!query.includes(' ') && !query.includes('\n') && query.length <= 50) {
-        setShowSkillAutocomplete(true);
-        setSkillAutocompleteQuery(query);
-        setShowMentions(false);
-        return;
-      }
-    }
-    setShowSkillAutocomplete(false);
-    // @ mention detection — Phase 3.3: file picker via @mention
-    // Phase 5.10 enhancement notes:
-    // - Added fuzzy matching via MentionPicker API search
-    // - Added relevance scores and token estimates per result
-    // - Added type-based icons (file, folder, symbol, git, issue)
-    // - TODO: Multi-token @mentions (e.g. @file:path/to/file.ts)
-    // - TODO: Recent/priority mentions showing first
-    // - TODO: Inline context preview on hover (expandable snippet)
-    // - TODO: Mention history (recently used references)
-    const atCursor = value.slice(0, cursor);
-    const atIndex = atCursor.lastIndexOf('@');
-    if (atIndex !== -1 && (atIndex === 0 || atCursor[atIndex - 1] === ' ' || atCursor[atIndex - 1] === '\n')) {
-      const query = atCursor.slice(atIndex + 1);
-      if (!query.includes(' ') && !query.includes('\n') && query.length <= 50) {
-        setShowMentions(true);
-        setMentionQuery(query);
-        const rect = textareaRef.current?.getBoundingClientRect();
-        if (rect) {
-          setMentionPos({ top: rect.bottom + 4, left: rect.left + 16 });
-        }
-        return;
-      }
-    }
-    setShowMentions(false);
-  };
-
-  const handleMentionSelect = (mention: ContextMention) => {
-    const cursor = textareaRef.current?.selectionStart || input.length;
-    const beforeCursor = input.slice(0, cursor);
-    const atIndex = beforeCursor.lastIndexOf('@');
-    if (atIndex === -1) return;
-    const afterCursor = input.slice(cursor);
-    const mentionTag = `@[${mention.label}](${mention.id}) `;
-    setInput(input.slice(0, atIndex) + mentionTag + afterCursor);
-    setShowMentions(false);
-    setTimeout(() => {
-      if (textareaRef.current) {
-        const newCursor = atIndex + mentionTag.length;
-        textareaRef.current.focus();
-        textareaRef.current.setSelectionRange(newCursor, newCursor);
-      }
-    }, 0);
+    agentInteraction.handleKeyDown(e, onSubmit);
   };
 
   const hasDiff = activeDiff?.before || activeDiff?.after;
@@ -420,7 +294,7 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="mt-3 text-center">
-                  <button type="button" onClick={() => setInput('/plan ')}
+                  <button type="button" onClick={() => agentInteraction.setInput('/plan ')}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border bg-background/50 hover:bg-accent/10 text-xs text-muted hover:text-foreground transition-colors">
                     <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
                     Plan New Idea
@@ -438,17 +312,7 @@ export default function Home() {
       )}
       <SkillAutocomplete skills={skills} query={skillAutocompleteQuery} visible={showSkillAutocomplete} selectedIndex={skillAutocompleteIndex}
         onSelect={(skill) => {
-          const cursor = textareaRef.current?.selectionStart || input.length;
-          const beforeCursor = input.slice(0, cursor);
-          const slashIdx = beforeCursor.lastIndexOf('/');
-          if (slashIdx !== -1) {
-            const afterCursor = input.slice(cursor);
-            setInput(input.slice(0, slashIdx) + '/' + skill.name + ' ' + afterCursor);
-          }
-          setSelectedSkill(skill);
-          setShowSkillAutocomplete(false);
-          setSkillAutocompleteIndex(0);
-          setTimeout(() => textareaRef.current?.focus(), 0);
+          insertSkillTag(skill);
         }} />
       {showInstallDialog && <SkillInstallDialog onClose={() => setShowInstallDialog(false)} />}
       {showMentions && <MentionPicker triggerPosition={mentionPos} query={mentionQuery} onSelect={handleMentionSelect} onClose={() => setShowMentions(false)} />}
