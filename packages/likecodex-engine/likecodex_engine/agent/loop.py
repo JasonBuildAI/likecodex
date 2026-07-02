@@ -128,6 +128,7 @@ class AgentLoop:
         self._handoff_active = False
         self._mode_downgraded = False
         self._all_done_counter = 0
+        self._no_tool_turns: int = 0
         self._watchdog_event: asyncio.Event | None = None
         self._last_activity_time: float = 0.0
         self.circuit_breaker = ToolCircuitBreaker()
@@ -176,6 +177,7 @@ class AgentLoop:
         self._final_readiness_blocks = 0
         self._empty_final_blocks = 0
         self._used_any_tool = False
+        self._no_tool_turns = 0
         self._handoff_nudges = 0
         self._handoff_active = self.executor_handoff_guard and EXECUTOR_HANDOFF_MARKER in prompt
         self.tools.set_evidence_ledger(self.evidence)
@@ -566,6 +568,7 @@ class AgentLoop:
                         yield self._emit(LLMResponse(content=notice, model="system", event_type="notice"))
                         continue
                 # Smart termination: detect "all done" loops
+                self._no_tool_turns += 1
                 content_lower = (response.content or "").lower().strip()
                 done_phrases = {"all done", "done", "finished", "completed", "that's all", "all finished"}
                 if content_lower in done_phrases or (
@@ -583,6 +586,31 @@ class AgentLoop:
                         break
                 else:
                     self._all_done_counter = 0
+
+                # Consecutive turns without tool calls
+                if self._no_tool_turns >= 3:
+                    yield self._emit(
+                        LLMResponse(
+                            content=f"Smart termination: {self._no_tool_turns} consecutive turns without tool calls.",
+                            model="system",
+                            event_type="notice",
+                        )
+                    )
+                    break
+
+                # GoalState integration
+                if self.goal_state and not self.is_subagent:
+                    follow_up = self.goal_state.parse_response(response.content or "")
+                    if not follow_up and self._used_any_tool:
+                        yield self._emit(
+                            LLMResponse(
+                                content="GoalState satisfied. Finishing loop.",
+                                model="system",
+                                event_type="notice",
+                            )
+                        )
+                        break
+
                 # Check if evidence ledger shows all steps complete
                 if self.evidence and not self.is_subagent:
                     pending = self.evidence.pending_steps()
@@ -598,6 +626,7 @@ class AgentLoop:
                 break
 
             self._empty_final_blocks = 0
+            self._no_tool_turns = 0
             self._used_any_tool = True
             self._turn_outcomes = []
 
