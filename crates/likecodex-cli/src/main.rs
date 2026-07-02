@@ -1,8 +1,12 @@
+mod completions;
 mod doctor;
 mod engine;
 mod interaction;
+mod output;
+mod progress;
 mod setup;
 mod supervisor;
+mod theme;
 mod tui;
 mod update;
 
@@ -59,6 +63,11 @@ enum Commands {
     Run { prompt: String },
     /// Chat without tools (streaming).
     Chat { prompt: Option<String> },
+    /// Generate shell completions.
+    Completions {
+        /// Shell to generate completions for (bash, zsh, fish, powershell, elvish).
+        shell: String,
+    },
     /// Check environment and connectivity.
     Doctor {
         /// Include sandbox/security checks.
