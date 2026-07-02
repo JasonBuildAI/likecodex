@@ -1111,13 +1111,13 @@ class AgentLoop:
                     body = await resp.json()
                     if resp.status >= 400 or "error" in body:
                         err = body.get("error", f"sandbox HTTP {resp.status}")
-                            if no_fallback:
-                                yield self._emit(
-                                    "tool",
-                                    json.dumps({"error": f"Sandbox execution failed: {err}"}),
-                                    tool_calls=[],
-                                )
-                                return
+                        if no_fallback:
+                            yield self._emit(
+                                "tool",
+                                json.dumps({"error": f"Sandbox execution failed: {err}"}),
+                                tool_calls=[],
+                            )
+                            return
                         tagged = await self.tools.execute(tool_name, arguments)
                         self._sandbox_fallbacks += 1
                         if self._sandbox_fallbacks >= 3 and self._degradation_level < 2:

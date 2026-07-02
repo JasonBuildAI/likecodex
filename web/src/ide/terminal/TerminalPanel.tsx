@@ -31,6 +31,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTerminalStore, type TerminalSession } from './terminalStore';
 import { getCompletions, applyCompletion, type CompletionItem } from './terminalCompletion';
+import { TerminalShortcutsHelp } from './TerminalShortcutsHelp';
 
 export function TerminalPanel() {
   const {
@@ -53,6 +54,7 @@ export function TerminalPanel() {
   const [historySearchIdx, setHistorySearchIdx] = useState(0);
   const [completions, setCompletions] = useState<CompletionItem[]>([]);
   const [completionIdx, setCompletionIdx] = useState(-1);
+  const [showHelp, setShowHelp] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const historySearchRef = useRef<HTMLInputElement>(null);
@@ -146,6 +148,9 @@ export function TerminalPanel() {
           setCompletions([]);
           setCompletionIdx(-1);
         }
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === '/') {
+        e.preventDefault();
+        setShowHelp(true);
       }
     },
     [handleSubmit, historyIdx, activeSession, toggleAIInput]
@@ -201,6 +206,13 @@ export function TerminalPanel() {
           title="新建终端"
         >
           +
+        </button>
+        <button
+          onClick={() => setShowHelp(true)}
+          className="text-xs text-gray-500 hover:text-white px-1"
+          title="快捷键帮助 (Ctrl+Shift+/)"
+        >
+          ?
         </button>
       </div>
 
@@ -350,6 +362,11 @@ export function TerminalPanel() {
           autoFocus
         />
       </div>
+
+      {/* Help modal */}
+      {showHelp && (
+        <TerminalShortcutsHelp onClose={() => setShowHelp(false)} />
+      )}
     </div>
   );
 }
