@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},

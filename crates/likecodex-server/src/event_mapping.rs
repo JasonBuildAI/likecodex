@@ -354,6 +354,7 @@ pub fn map_task_status(task_id: &str, prompt: &str, status: &str) -> Event {
     Event::TaskCompleted(task)
 }
 
+#[allow(dead_code)]
 pub fn assistant_message_event(task_id: &str, content: &str) -> Event {
     Event::MessageAdded {
         task_id: task_id.to_string(),
