@@ -181,6 +181,74 @@ class ShellTools:
     def __init__(self, working_dir: str) -> None:
         self.working_dir = Path(working_dir).resolve()
         self._jobs: dict[str, BackgroundJob] = {}
+        self._history: list[dict[str, Any]] = []
+        self._favorites: list[dict[str, Any]] = []
+        self._history_file: Path = Path.home() / ".likecodex" / "shell_history.json"
+        self._favorites_file: Path = Path.home() / ".likecodex" / "shell_favorites.json"
+        self._load_history()
+        self._load_favorites()
+
+    # ── History Persistence ────────────────────────────────────
+
+    def _load_history(self) -> None:
+        """Load command history from persistent storage."""
+        try:
+            if self._history_file.exists():
+                raw = self._history_file.read_text(encoding="utf-8")
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    self._history = data[-500:]  # Keep last 500
+        except Exception:
+            self._history = []
+
+    def _save_history(self) -> None:
+        """Save command history to persistent storage."""
+        try:
+            self._history_file.parent.mkdir(parents=True, exist_ok=True)
+            self._history_file.write_text(
+                json.dumps(self._history[-500:], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _add_to_history(self, command: str, exit_code: int, cwd: str) -> None:
+        """Add a command to history."""
+        entry: dict[str, Any] = {
+            "command": command,
+            "exit_code": exit_code,
+            "cwd": cwd or str(self.working_dir),
+            "timestamp": asyncio.get_running_loop().time(),
+            "favorite": False,
+        }
+        # Remove duplicate most recent occurrence
+        self._history = [h for h in self._history if h.get("command") != command]
+        self._history.append(entry)
+        if len(self._history) > 500:
+            self._history = self._history[-500:]
+        self._save_history()
+
+    def _load_favorites(self) -> None:
+        """Load favorite commands from persistent storage."""
+        try:
+            if self._favorites_file.exists():
+                raw = self._favorites_file.read_text(encoding="utf-8")
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    self._favorites = data
+        except Exception:
+            self._favorites = []
+
+    def _save_favorites(self) -> None:
+        """Save favorite commands to persistent storage."""
+        try:
+            self._favorites_file.parent.mkdir(parents=True, exist_ok=True)
+            self._favorites_file.write_text(
+                json.dumps(self._favorites, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
     def run_command_schema(self) -> dict[str, Any]:
         return {
@@ -215,6 +283,7 @@ class ShellTools:
     async def run_command(self, command: str, timeout: int = 120) -> str:
         executable, args = self._shell_command(command)
         proc: asyncio.subprocess.Process | None = None
+        cwd_str = str(self.working_dir)
         try:
             proc = await asyncio.create_subprocess_exec(
                 executable,
@@ -224,10 +293,14 @@ class ShellTools:
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=float(timeout))
+            exit_code = proc.returncode
+            # Record to history
+            if proc.returncode is not None:
+                self._add_to_history(command, proc.returncode, cwd_str)
             return json.dumps(
                 {
                     "command": command,
-                    "exit_code": proc.returncode,
+                    "exit_code": exit_code,
                     "stdout": stdout.decode("utf-8", errors="replace"),
                     "stderr": stderr.decode("utf-8", errors="replace"),
                 }
@@ -246,6 +319,7 @@ class ShellTools:
                 }
             )
         except Exception as e:
+            self._add_to_history(command, -1, cwd_str)
             return json.dumps({"command": command, "error": str(e)})
 
     def bgjobs_schema(self) -> dict[str, Any]:
@@ -396,6 +470,133 @@ class ShellTools:
 
     async def kill_shell(self, job_id: str) -> str:
         return await self.bgjobs("kill", job_id=job_id)
+
+    # ── Phase 6.14: Command History & Favorites ────────────────
+
+    def history_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Browse, search, and re-execute command history. "
+            "Actions: list (with optional search), get (by index), re-run (by index).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "get", "clear"],
+                        "description": "Action to perform",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query to filter history (for action=list)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 20)",
+                    },
+                },
+                "required": ["action"],
+            },
+        }
+
+    async def history(self, action: str = "list", query: str = "", limit: int = 20) -> str:
+        """Browse and manage command history."""
+        if action == "clear":
+            self._history = []
+            self._save_history()
+            return json.dumps({"ok": True, "message": "History cleared"})
+
+        if action == "get":
+            return json.dumps({
+                "total": len(self._history),
+                "history": [
+                    {
+                        "index": i,
+                        **{k: v for k, v in entry.items() if k != "favorite"},
+                    }
+                    for i, entry in enumerate(self._history)
+                ],
+            })
+
+        # Default: list with optional search
+        results = list(reversed(self._history))
+        if query:
+            q = query.lower()
+            results = [h for h in results if q in h.get("command", "").lower()]
+
+        limited = results[:limit]
+        return json.dumps({
+            "total": len(self._history),
+            "filtered": len(results),
+            "history": [
+                {
+                    "index": len(self._history) - 1 - i,
+                    "command": entry["command"],
+                    "exit_code": entry.get("exit_code"),
+                    "cwd": entry.get("cwd", ""),
+                    "timestamp": entry.get("timestamp", 0),
+                }
+                for i, entry in enumerate(limited)
+            ],
+        }, ensure_ascii=False)
+
+    def favorites_schema(self) -> dict[str, Any]:
+        return {
+            "description": "Manage favorite commands for quick re-execution. "
+            "Actions: list, add, remove, re-run.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "add", "remove"],
+                        "description": "Action to perform",
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Command to add/remove (required for add/remove)",
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Optional label for the favorite",
+                    },
+                },
+                "required": ["action"],
+            },
+        }
+
+    async def favorites(self, action: str = "list", command: str = "", label: str = "") -> str:
+        """Manage favorite commands."""
+        if action == "add":
+            if not command:
+                return json.dumps({"error": "command required for add"})
+            # Remove duplicate
+            self._favorites = [f for f in self._favorites if f.get("command") != command]
+            self._favorites.append({
+                "command": command,
+                "label": label or command[:40],
+                "timestamp": asyncio.get_running_loop().time(),
+            })
+            self._save_favorites()
+            return json.dumps({"ok": True, "command": command, "label": label or command[:40]})
+
+        if action == "remove":
+            if not command:
+                return json.dumps({"error": "command required for remove"})
+            self._favorites = [f for f in self._favorites if f.get("command") != command]
+            self._save_favorites()
+            return json.dumps({"ok": True, "removed": command})
+
+        # Default: list
+        return json.dumps({
+            "favorites": [
+                {
+                    "index": i,
+                    **entry,
+                }
+                for i, entry in enumerate(self._favorites)
+            ],
+            "total": len(self._favorites),
+        }, ensure_ascii=False)
 
     def wait_job_schema(self) -> dict[str, Any]:
         return {
