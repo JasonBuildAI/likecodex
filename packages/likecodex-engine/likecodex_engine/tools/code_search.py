@@ -44,27 +44,35 @@ class CodeSearchTools:
 
     def grep_schema(self) -> dict[str, Any]:
         return {
-            "description": "Search for a pattern across files using grep.",
+            "description": "Search for a pattern across files using grep with enhanced options.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string", "description": "Regex or literal pattern to search"},
                     "glob": {"type": "string", "description": "File glob to limit search, e.g. '*.py'"},
                     "max_results": {"type": "integer", "default": 20},
+                    "case_insensitive": {"type": "boolean", "default": False, "description": "Case insensitive search"},
+                    "context_lines": {"type": "integer", "default": 0, "description": "Number of context lines to show before and after each match"},
+                    "multiline": {"type": "boolean", "default": False, "description": "Enable multiline regex matching (. matches newline)"},
                 },
                 "required": ["pattern"],
             },
         }
 
 
-    async def grep_files(self, pattern: str, glob: str | None = None, max_results: int = 20) -> str:
+    async def grep_files(self, pattern: str, glob: str | None = None, max_results: int = 20,
+                          case_insensitive: bool = False, context_lines: int = 0,
+                          multiline: bool = False) -> str:
         try:
             file_glob = glob or "**/*"
             if "*" in file_glob and "**" not in file_glob:
                 file_glob = f"**/{file_glob}"
             files = list(self.working_dir.glob(file_glob))
             results = []
-            regex = re.compile(pattern)
+            flags = re.IGNORECASE if case_insensitive else 0
+            if multiline:
+                flags |= re.DOTALL
+            regex = re.compile(pattern, flags)
             for file_path in files:
                 if not file_path.is_file() or self._should_skip(file_path):
                     continue
@@ -72,17 +80,38 @@ class CodeSearchTools:
                     text = file_path.read_text(encoding="utf-8", errors="replace")
                 except Exception:
                     continue
-                for i, line in enumerate(text.splitlines(), start=1):
-                    if regex.search(line):
+                lines = text.splitlines()
+                if multiline:
+                    for match in regex.finditer(text):
+                        start_pos = match.start()
+                        line_no = text[:start_pos].count("\n") + 1
+                        matched_text = match.group()[:200]
                         results.append(
                             {
                                 "file": str(file_path.relative_to(self.working_dir)),
-                                "line": i,
-                                "content": line.strip(),
+                                "line": line_no,
+                                "content": matched_text,
                             }
                         )
                         if len(results) >= max_results:
                             break
+                else:
+                    for i, line in enumerate(lines, start=1):
+                        if regex.search(line):
+                            entry = {
+                                "file": str(file_path.relative_to(self.working_dir)),
+                                "line": i,
+                                "content": line.strip(),
+                            }
+                            if context_lines > 0:
+                                start_ctx = max(0, i - 1 - context_lines)
+                                end_ctx = min(len(lines), i + context_lines)
+                                entry["context"] = "\n".join(
+                                    f"{j + 1}:{lines[j]}" for j in range(start_ctx, end_ctx)
+                                )
+                            results.append(entry)
+                            if len(results) >= max_results:
+                                break
                 if len(results) >= max_results:
                     break
             return json.dumps({"pattern": pattern, "glob": file_glob, "results": results, "count": len(results)})
