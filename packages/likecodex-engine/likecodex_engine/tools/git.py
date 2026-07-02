@@ -79,20 +79,28 @@ class GitTools:
 
     def commit_schema(self) -> dict[str, Any]:
         return {
-            "description": "Commit staged changes with a message.",
+            "description": "Commit staged changes with a message (auto-generates if empty).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "message": {"type": "string", "description": "Commit message"},
-                    "all": {"type": "boolean", "default": False, "description": "Stage all changes before commit"},
+                    "message": {"type": "string", "description": "Commit message (optional, auto-generated if empty)"},
+                    "all": {"type": "boolean", "default": True, "description": "Stage all changes before commit"},
+                    "auto_message": {"type": "boolean", "default": True, "description": "Auto-generate commit message from diff"},
                 },
-                "required": ["message"],
+                "required": [],
             },
         }
 
-    async def git_commit(self, message: str, add_all: bool = False) -> str:
+    async def git_commit(self, message: str = "", add_all: bool = True, auto_message: bool = True) -> str:
         if add_all:
             await self._run("add -A")
+        if auto_message and not message:
+            diff_result = await self._run("diff --cached --stat")
+            if diff_result.get("exit_code") == 0 and diff_result.get("stdout"):
+                first_line = diff_result["stdout"].strip().split("\n")[0]
+                message = f"Auto-commit: {first_line[:80]}"
+            else:
+                message = "Auto-commit"
         escaped_message = message.replace('"', '\\"')
         result = await self._run(f'commit -m "{escaped_message}"')
         return json.dumps(result)
