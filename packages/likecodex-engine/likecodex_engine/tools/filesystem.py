@@ -273,44 +273,89 @@ class FileSystemTools:
 
     def search_files_schema(self) -> dict[str, Any]:
         return {
-            "description": "Search file contents for a regex pattern.",
+            "description": "Search file contents for a regex pattern with enhanced filtering.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string"},
-                    "path": {"type": "string"},
+                    "path": {"type": "string", "description": "Directory to search in, relative to workspace"},
+                    "glob": {"type": "string", "description": "Optional file glob pattern, e.g. '*.py' or 'src/**/*.ts'"},
+                    "case_insensitive": {"type": "boolean", "default": False},
+                    "max_results": {"type": "integer", "default": 50},
+                    "context_lines": {"type": "integer", "default": 0, "description": "Lines of context before/after each match"},
+                    "max_file_size_kb": {"type": "integer", "default": 1024, "description": "Skip files larger than this (KB)"},
                 },
                 "required": ["pattern"],
             },
         }
 
-    async def search_files(self, pattern: str, path: str = ".") -> str:
+    async def search_files(self, pattern: str, path: str = ".", glob: str | None = None,
+                            case_insensitive: bool = False, max_results: int = 50,
+                            context_lines: int = 0, max_file_size_kb: int = 1024) -> str:
         target, err = self._safe_resolve(path)
         if err:
             return err
         results = []
-        regex = re.compile(pattern)
-        for root, dirs, files in os.walk(target):
-            root_path = Path(root)
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-            if should_skip_path(self.working_dir, root_path):
-                continue
-            for name in files:
-                filepath = root_path / name
-                if should_skip_path(self.working_dir, filepath):
+        flags = re.IGNORECASE if case_insensitive else 0
+        regex = re.compile(pattern, flags)
+        max_bytes = max_file_size_kb * 1024
+
+        # Use glob if provided, otherwise walk
+        if glob:
+            search_root = self.working_dir if str(target) == str(self.working_dir) else target
+            for entry in search_root.glob(glob):
+                if not entry.is_file() or should_skip_path(self.working_dir, entry):
                     continue
-                try:
-                    with open(filepath, encoding="utf-8", errors="ignore") as f:
-                        for i, line in enumerate(f, 1):
-                            if regex.search(line):
-                                rel = filepath.relative_to(self.working_dir)
-                                results.append({"path": str(rel), "line": i, "text": line.strip()})
-                                if len(results) >= 50:
-                                    break
-                        if len(results) >= 50:
-                            break
-                except OSError:
+                if entry.stat().st_size > max_bytes:
                     continue
-            if len(results) >= 50:
-                break
+                results = await self._search_in_file(entry, regex, context_lines, results, max_results)
+                if len(results) >= max_results:
+                    break
+        else:
+            for root, dirs, files in os.walk(target):
+                root_path = Path(root)
+                dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+                if should_skip_path(self.working_dir, root_path):
+                    continue
+                for name in files:
+                    filepath = root_path / name
+                    if should_skip_path(self.working_dir, filepath):
+                        continue
+                    if filepath.stat().st_size > max_bytes:
+                        continue
+                    results = await self._search_in_file(filepath, regex, context_lines, results, max_results)
+                    if len(results) >= max_results:
+                        break
+                if len(results) >= max_results:
+                    break
         return json.dumps({"pattern": pattern, "matches": results})
+
+    async def _search_in_file(self, filepath: Path, regex: re.Pattern, context_lines: int,
+                                results: list, max_results: int) -> list:
+        try:
+            with open(filepath, encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+        except OSError:
+            return results
+
+        for i, line in enumerate(lines, 1):
+            if regex.search(line):
+                try:
+                    rel = filepath.relative_to(self.working_dir)
+                except ValueError:
+                    rel = filepath
+                entry = {
+                    "path": str(rel),
+                    "line": i,
+                    "text": line.strip(),
+                }
+                if context_lines > 0:
+                    start_ctx = max(0, i - 1 - context_lines)
+                    end_ctx = min(len(lines), i + context_lines)
+                    entry["context"] = "".join(
+                        f"{j}:{lines[j - 1]}" for j in range(start_ctx + 1, end_ctx + 1)
+                    )
+                results.append(entry)
+                if len(results) >= max_results:
+                    break
+        return results
