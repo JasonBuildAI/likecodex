@@ -139,12 +139,40 @@ const CodeBlock = memo(function CodeBlock({
   code: string;
 }) {
   const [copied, setCopied] = useState(false);
+  const addToast = useAppStore((s) => s.addToast);
+  const openFiles = useAppStore((s) => s.openFiles);
+  const activeFilePath = useAppStore((s) => s.activeFilePath);
+  const updateFileContent = useAppStore((s) => s.updateFileContent);
+  const openFile = useAppStore((s) => s.openFile);
+  const setActiveFile = useAppStore((s) => s.setActiveFile);
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(code);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  }, [code]);
+    addToast({ type: 'info', message: 'Code copied to clipboard' });
+  }, [code, addToast]);
+
+  const handleInsertAtCursor = useCallback(() => {
+    if (activeFilePath) {
+      const activeFile = openFiles.find(f => f.path === activeFilePath);
+      if (activeFile) {
+        updateFileContent(activeFilePath, activeFile.content + '\n' + code);
+        addToast({ type: 'success', message: 'Code appended to ' + activeFilePath.split('/').pop() });
+      }
+    } else {
+      addToast({ type: 'info', message: 'Open a file first to insert code' });
+    }
+  }, [activeFilePath, openFiles, updateFileContent, code, addToast]);
+
+  const handleInsertNewFile = useCallback(() => {
+    const ext = language === 'typescript' ? 'ts' : language === 'javascript' ? 'js' : language === 'python' ? 'py' : language === 'rust' ? 'rs' : language === 'go' ? 'go' : language;
+    const name = `snippet-${Date.now()}.${ext}`;
+    const path = `/tmp/${name}`;
+    openFile({ name, path, content: code, language, modified: true });
+    setActiveFile(path);
+    addToast({ type: 'success', message: `Opened as ${name}` });
+  }, [language, code, openFile, setActiveFile, addToast]);
 
   return (
     <motion.div
@@ -157,44 +185,73 @@ const CodeBlock = memo(function CodeBlock({
         <span className="text-[10px] font-medium text-muted uppercase tracking-wider">
           {language || 'code'}
         </span>
-        <motion.button
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-          onClick={handleCopy}
-          className="flex items-center gap-1 text-[10px] text-muted hover:text-foreground transition-colors"
-          title="Copy to clipboard"
-        >
-          {copied ? (
-            <svg
-              className="h-3 w-3 text-green-400"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M5 13l4 4L19 7"
-              />
+        <div className="flex items-center gap-1">
+          {/* Insert at active editor */}
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={handleInsertAtCursor}
+            className="flex items-center gap-1 text-[10px] text-muted hover:text-foreground transition-colors px-1.5 py-0.5 rounded hover:bg-accent/10"
+            title="Append to active file"
+          >
+            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
             </svg>
-          ) : (
-            <svg
-              className="h-3 w-3"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-              />
+            <span>Insert</span>
+          </motion.button>
+          {/* Open as new file */}
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={handleInsertNewFile}
+            className="flex items-center gap-1 text-[10px] text-muted hover:text-foreground transition-colors px-1.5 py-0.5 rounded hover:bg-accent/10"
+            title="Open as new file in editor"
+          >
+            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-          )}
-          {copied ? 'Copied!' : 'Copy'}
-        </motion.button>
+            <span>Open</span>
+          </motion.button>
+          {/* Copy */}
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={handleCopy}
+            className="flex items-center gap-1 text-[10px] text-muted hover:text-foreground transition-colors"
+            title="Copy to clipboard"
+          >
+            {copied ? (
+              <svg
+                className="h-3 w-3 text-green-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+            ) : (
+              <svg
+                className="h-3 w-3"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                />
+              </svg>
+            )}
+            {copied ? 'Copied!' : 'Copy'}
+          </motion.button>
+        </div>
       </div>
       {/* Code content */}
       <pre className="p-3 bg-background/50 overflow-x-auto">
