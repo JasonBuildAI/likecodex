@@ -68,6 +68,9 @@ impl SandboxExecutor {
         if DockerExecutor::is_available().await {
             let docker = DockerExecutor::new(&self.image, self.policy.clone());
             if let Err(e) = docker.ensure_image().await {
+                if !self.config.allow_fallback {
+                    anyhow::bail!("sandbox required but Docker image not available: {e}");
+                }
                 warn!(error = %e, "failed to ensure sandbox image, falling back to local");
                 return FallbackExecutor::new(self.policy.clone())
                     .execute(command, &working_dir)
@@ -76,17 +79,22 @@ impl SandboxExecutor {
             match docker.execute(command, &working_dir).await {
                 Ok(result) => Ok(result),
                 Err(e) => {
+                    if !self.config.allow_fallback {
+                        anyhow::bail!("sandbox required but execution failed: {e}");
+                    }
                     warn!(error = %e, "sandbox execution failed, falling back to local");
                     FallbackExecutor::new(self.policy.clone())
                         .execute(command, &working_dir)
                         .await
                 }
             }
-        } else {
+        } else if self.config.allow_fallback {
             info!("docker not available, using fallback local executor");
             FallbackExecutor::new(self.policy.clone())
                 .execute(command, &working_dir)
                 .await
+        } else {
+            anyhow::bail!("sandbox execution is required but Docker is not available");
         }
     }
 }
