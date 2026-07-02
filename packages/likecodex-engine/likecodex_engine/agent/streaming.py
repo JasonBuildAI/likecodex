@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+import random
 from typing import Any
 
 from likecodex_engine.llm.base import LLMProvider, LLMResponse, Message, ToolCall
@@ -11,7 +12,14 @@ from likecodex_engine.llm.errors import StreamInterruptedError
 from likecodex_engine.llm.retry import take_pending_retries
 from likecodex_engine.llm.tool_repair import merge_tool_calls
 
-MAX_STREAM_RECOVERIES = 1
+MAX_STREAM_RECOVERIES = 5
+
+
+def backoff_delay(attempt: int) -> float:
+    """Exponential backoff with jitter: 1s, 2s, 4s, 8s, 16s + random jitter."""
+    delay = 2 ** attempt  # 1, 2, 4, 8, 16
+    jitter = random.uniform(0, 0.5 * delay)
+    return delay + jitter
 
 
 def _build_response(

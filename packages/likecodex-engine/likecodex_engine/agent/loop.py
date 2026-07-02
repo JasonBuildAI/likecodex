@@ -38,6 +38,7 @@ from likecodex_engine.agent.readiness import final_readiness_check
 from likecodex_engine.agent.streaming import (
     MAX_STREAM_RECOVERIES,
     StreamTurnResult,
+    backoff_delay,
     stream_model_turn,
     stream_recovery_message,
 )
@@ -301,6 +302,8 @@ class AgentLoop:
                         self.context.add_assistant_message(content=partial_text)
                     if stream_recoveries < MAX_STREAM_RECOVERIES:
                         stream_recoveries += 1
+                        delay = backoff_delay(stream_recoveries)
+                        await asyncio.sleep(delay)
                         recovery = stream_recovery_message(bool(partial_text), turn_result.partial_tool_started)
                         self.context.add_user_message(recovery)
                         yield self._emit(
@@ -311,6 +314,7 @@ class AgentLoop:
                                 metadata={
                                     "retry_attempt": stream_recoveries,
                                     "retry_max": MAX_STREAM_RECOVERIES,
+                                    "retry_delay_s": round(delay, 2),
                                     "reason": "stream_recovery",
                                 },
                             )
