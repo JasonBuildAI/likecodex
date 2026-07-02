@@ -40,10 +40,11 @@ _test_runner: Any = None
 
 def _reset_services() -> None:
     """Reset all lazy-init services (called during shutdown)."""
-    global _completion_service, _settings_manager, _test_runner
+    global _completion_service, _settings_manager, _test_runner, _terminal_manager
     _completion_service = None
     _settings_manager = None
     _test_runner = None
+    _terminal_manager = None
 
 
 def _get_completion_service():
@@ -436,6 +437,87 @@ async def ide_extensions_toggle(request: web.Request) -> web.Response:
         return web.json_response({"error": str(exc)}, status=500)
 
 
+# ── Terminal API ──────────────────────────────────────────────
+
+_terminal_manager: Any = None
+
+
+def _get_terminal_manager(working_dir: str):
+    global _terminal_manager
+    if _terminal_manager is None:
+        from likecodex_engine.terminal.pty_manager import TerminalManager
+        _terminal_manager = TerminalManager(working_dir)
+    return _terminal_manager
+
+
+def _create_terminal_llm(cfg: dict):
+    from likecodex_engine.terminal.ai_assistant import TerminalAIAssistant
+    return TerminalAIAssistant(provider_from_config(cfg, thinking=False))
+
+
+async def ide_terminal_create(request: web.Request) -> web.Response:
+    _, wd = _cfg_wd(request)
+    manager = _get_terminal_manager(wd)
+    data = await request.json()
+    session_id = data.get("id") or f"term-{uuid.uuid4()}"
+    cwd = data.get("cwd", wd)
+    session = manager.create_session(session_id, cwd=cwd)
+    return web.json_response({"id": session.id, "cwd": session.cwd, "shell": session.shell})
+
+
+async def ide_terminal_execute(request: web.Request) -> web.Response:
+    _, wd = _cfg_wd(request)
+    manager = _get_terminal_manager(wd)
+    data = await request.json()
+    result = await manager.execute_command(data.get("sessionId", "term-default"), data.get("command", ""))
+    return web.json_response(result)
+
+
+async def ide_terminal_stream(request: web.Request) -> web.StreamResponse:
+    _, wd = _cfg_wd(request)
+    manager = _get_terminal_manager(wd)
+    data = await request.json()
+    session_id = data.get("sessionId", "term-default")
+    command = data.get("command", "")
+    response = _make_sse_response()
+    await response.prepare(request)
+    try:
+        async for event in manager.execute_command_stream(session_id, command):
+            payload = json.dumps(event)
+            await _sse_write(response, payload)
+    except Exception as exc:
+        error_event = json.dumps({"type": "error", "content": str(exc)})
+        await _sse_write(response, error_event)
+    await _sse_done(response)
+    return response
+
+
+async def ide_terminal_suggest(request: web.Request) -> web.Response:
+    cfg, _ = _cfg_wd(request)
+    data = await request.json()
+    description = data.get("description", "")
+    if not description:
+        return web.json_response({"command": "", "error": "Description required"}, status=400)
+    assistant = _create_terminal_llm(cfg)
+    command = await assistant.suggest_command(description)
+    return web.json_response({"command": command})
+
+
+async def ide_terminal_diagnose(request: web.Request) -> web.Response:
+    cfg, _ = _cfg_wd(request)
+    data = await request.json()
+    assistant = _create_terminal_llm(cfg)
+    diagnosis = await assistant.diagnose_error(data.get("command", ""), data.get("error", ""))
+    return web.json_response({"diagnosis": diagnosis})
+
+
+async def ide_terminal_close(request: web.Request) -> web.Response:
+    _, wd = _cfg_wd(request)
+    data = await request.json()
+    success = _get_terminal_manager(wd).close_session(data.get("sessionId", ""))
+    return web.json_response({"success": success})
+
+
 # ── Debug / Test API ───────────────────────────────────────────
 
 
@@ -505,6 +587,13 @@ def register_routes(app: web.Application, config: dict) -> None:
     # Extensions
     app.router.add_get("/api/ide/extensions/list", ide_extensions_list)
     app.router.add_post("/api/ide/extensions/toggle", ide_extensions_toggle)
+    # Terminal
+    app.router.add_post("/api/ide/terminal/create", ide_terminal_create)
+    app.router.add_post("/api/ide/terminal/execute", ide_terminal_execute)
+    app.router.add_post("/api/ide/terminal/stream", ide_terminal_stream)
+    app.router.add_post("/api/ide/terminal/suggest", ide_terminal_suggest)
+    app.router.add_post("/api/ide/terminal/diagnose", ide_terminal_diagnose)
+    app.router.add_post("/api/ide/terminal/close", ide_terminal_close)
     # Debug / Test
     app.router.add_get("/api/ide/tests/discover", ide_tests_discover)
     app.router.add_post("/api/ide/tests/run", ide_tests_run)

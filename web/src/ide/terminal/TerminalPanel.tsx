@@ -30,6 +30,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTerminalStore, type TerminalSession } from './terminalStore';
+import { getCompletions, applyCompletion, type CompletionItem } from './terminalCompletion';
 
 export function TerminalPanel() {
   const {
@@ -50,6 +51,8 @@ export function TerminalPanel() {
   const [showHistorySearch, setShowHistorySearch] = useState(false);
   const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [historySearchIdx, setHistorySearchIdx] = useState(0);
+  const [completions, setCompletions] = useState<CompletionItem[]>([]);
+  const [completionIdx, setCompletionIdx] = useState(-1);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const historySearchRef = useRef<HTMLInputElement>(null);
@@ -97,6 +100,26 @@ export function TerminalPanel() {
       if (e.key === 'Enter') {
         e.preventDefault();
         handleSubmit();
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        if (!activeSession) return;
+        // Get completions if not already shown
+        if (completions.length === 0) {
+          const items = getCompletions(input, input.length, activeSession.history);
+          setCompletions(items);
+          setCompletionIdx(0);
+          if (items.length > 0) {
+            const result = applyCompletion(input, input.length, items[0]);
+            setInput(result.text);
+          }
+        } else {
+          // Cycle through completions
+          const nextIdx = (completionIdx + 1) % completions.length;
+          setCompletionIdx(nextIdx);
+          const lastSpace = input.lastIndexOf(' ') + 1;
+          const baseText = input.slice(0, lastSpace);
+          setInput(baseText + completions[nextIdx].text + ' ');
+        }
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         if (!activeSession || activeSession.history.length === 0) return;
@@ -117,6 +140,12 @@ export function TerminalPanel() {
         setShowHistorySearch(true);
         setHistorySearchQuery('');
         setHistorySearchIdx(0);
+      } else if (e.key === 'Escape') {
+        if (completions.length > 0) {
+          e.preventDefault();
+          setCompletions([]);
+          setCompletionIdx(-1);
+        }
       }
     },
     [handleSubmit, historyIdx, activeSession, toggleAIInput]
@@ -211,6 +240,37 @@ export function TerminalPanel() {
           }}
           onClose={toggleAIInput}
         />
+      )}
+
+      {/* Completion popup */}
+      {completions.length > 0 && (
+        <div className="border-t border-gray-700 bg-[#252535] px-2 py-1 shrink-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {completions.map((item, i) => (
+              <span
+                key={i}
+                className={`text-[10px] px-1.5 py-0.5 rounded cursor-pointer ${
+                  i === completionIdx
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+                onClick={() => {
+                  const lastSpace = input.lastIndexOf(' ') + 1;
+                  const baseText = input.slice(0, lastSpace);
+                  setInput(baseText + item.text + ' ');
+                  setCompletions([]);
+                  setCompletionIdx(-1);
+                }}
+                title={item.description}
+              >
+                {item.text}
+              </span>
+            ))}
+          </div>
+          <div className="text-[9px] text-gray-500 mt-0.5">
+            Tab 循环 · Enter 选择 · Esc 关闭
+          </div>
+        </div>
       )}
 
       {/* History search overlay (Ctrl+R) */}
