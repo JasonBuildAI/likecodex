@@ -104,4 +104,7 @@ export {
   type FileSymbol,
   lspDiagnostics,
   type LSPDiagnostic,
+  lspCodeAction,
+  lspSuggestFixes,
+  type CodeAction,
 } from './services/workspaceService';

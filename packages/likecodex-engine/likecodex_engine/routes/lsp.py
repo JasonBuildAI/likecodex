@@ -117,6 +117,29 @@ async def ide_lsp_notify_change(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def ide_lsp_code_action(request: web.Request) -> web.Response:
+    """Get code actions (quick fixes) at a position."""
+    _, wd = _cfg_wd(request)
+    data = await request.json()
+    file_path = data.get("file_path", "")
+    line = data.get("line", 1)
+    if not file_path:
+        return web.json_response({"error": "file_path is required"}, status=400)
+    manager = _get_lsp_manager(wd)
+    result = await manager.code_action(file_path, line)
+    return web.json_response(json.loads(result) if isinstance(result, str) else result)
+
+
+async def ide_lsp_suggest_fixes(request: web.Request) -> web.Response:
+    """Run diagnostics and suggest fixes."""
+    _, wd = _cfg_wd(request)
+    path = request.query.get("path", ".")
+    from likecodex_engine.tools.lsp_tools import LspSemanticTools
+    tools = LspSemanticTools(wd)
+    result = await tools.lsp_suggest_fixes(path)
+    return web.json_response(json.loads(result))
+
+
 def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_post("/api/ide/lsp/definition", ide_lsp_definition)
     app.router.add_post("/api/ide/lsp/references", ide_lsp_references)
@@ -124,3 +147,5 @@ def register_routes(app: web.Application, config: dict) -> None:
     app.router.add_get("/api/ide/lsp/diagnostics", ide_lsp_diagnostics)
     app.router.add_get("/api/ide/lsp/diagnostics/sse", ide_lsp_diagnostics_sse)
     app.router.add_post("/api/ide/lsp/notify-change", ide_lsp_notify_change)
+    app.router.add_post("/api/ide/lsp/code-action", ide_lsp_code_action)
+    app.router.add_get("/api/ide/lsp/suggest-fixes", ide_lsp_suggest_fixes)

@@ -133,6 +133,9 @@ class ToolRegistry:
         self.register("lsp_references", lsp_sem.lsp_references_schema(), lsp_sem.lsp_references, read_only=True)
         self.register("lsp_hover", lsp_sem.lsp_hover_schema(), lsp_sem.lsp_hover, read_only=True)
         self.register("lsp_diagnostics", lsp_sem.lsp_diagnostics_schema(), lsp_sem.lsp_diagnostics, read_only=True)
+        self.register("lsp_code_action", lsp_sem.lsp_code_action_schema(), lsp_sem.lsp_code_action, read_only=True)
+        self.register("lsp_code_action_apply", lsp_sem.lsp_code_action_apply_schema(), lsp_sem.lsp_code_action_apply, read_only=True)
+        self.register("lsp_suggest_fixes", lsp_sem.lsp_suggest_fixes_schema(), lsp_sem.lsp_suggest_fixes, read_only=True)
 
         checker = LspTools(self.working_dir)
         self._checker = checker

@@ -103,6 +103,8 @@ READ_TOOLS = {
     "lsp_diagnostics",
     "lsp_definition",
     "lsp_references",
+    "lsp_code_action",
+    "lsp_suggest_fixes",
     "web_search",
     "web_fetch",
     "bash_output",

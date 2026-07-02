@@ -264,7 +264,7 @@ class GitTools:
         message = f"{commit_type}{scope_str}: {desc}"
         return message[:100]
 
-    async def git_commit(self, message: str = "", add_all: bool = True, auto_message: bool = True) -> str:
+    async def git_commit(self, message: str = "", add_all: bool = True, auto_message: bool = True, use_ai: bool = False) -> str:
         if add_all:
             await self._run("add -A")
 
@@ -279,7 +279,10 @@ class GitTools:
             })
 
         if auto_message and not message:
-            message = await self._generate_commit_message()
+            if use_ai:
+                message = await self._generate_ai_commit_message()
+            else:
+                message = await self._generate_commit_message()
 
         if not message:
             message = "Auto-commit"

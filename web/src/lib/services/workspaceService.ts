@@ -108,3 +108,26 @@ export async function lspDiagnostics(path: string = '.'): Promise<{ diagnostics:
   if (!resp.ok) return { diagnostics: [], checked: false };
   return resp.json();
 }
+
+export interface CodeAction {
+  title: string;
+  kind: string;
+  has_edit: boolean;
+  command?: string;
+}
+
+export async function lspCodeAction(filePath: string, line: number): Promise<{ actions: CodeAction[]; count: number; error?: string }> {
+  const resp = await fetchWithRetry('/api/ide/lsp/code-action', {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({ file_path: filePath, line }),
+  }, 1, 10000);
+  if (!resp.ok) return { actions: [], count: 0 };
+  return resp.json();
+}
+
+export async function lspSuggestFixes(path: string): Promise<{ fixes: Array<{ line: number; message: string; severity: string; suggestions: Array<{ title: string; kind: string }> }>; count: number }> {
+  const resp = await fetchWithRetry(`/api/ide/lsp/suggest-fixes?path=${encodeURIComponent(path)}`);
+  if (!resp.ok) return { fixes: [], count: 0 };
+  return resp.json();
+}
