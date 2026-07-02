@@ -166,6 +166,14 @@ class ToolRegistry:
         self.register("session_export", share.export_schema(), share.export, read_only=True)
         self.register("session_import", share.import_schema(), share.import_, read_only=True)
 
+        gh = GitHubTools()
+        self.register("github_create_pr", gh.create_pr_schema(), gh.create_pr)
+        self.register("github_review_pr", gh.review_pr_schema(), gh.review_pr)
+        self.register("github_add_pr_comment", gh.add_pr_comment_schema(), gh.add_pr_comment)
+        self.register("github_create_issue", gh.create_issue_schema(), gh.create_issue)
+        self.register("github_list_prs", gh.list_prs_schema(), gh.list_prs, read_only=True)
+        self.register("github_list_issues", gh.list_issues_schema(), gh.list_issues, read_only=True)
+
         mem = AgentMemoryTools(self.working_dir)
         self.register("remember", mem.remember_schema(), mem.remember)
         self.register("forget", mem.forget_schema(), mem.forget)
