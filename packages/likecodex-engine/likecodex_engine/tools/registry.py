@@ -192,6 +192,12 @@ class ToolRegistry:
         self.register("net_http_headers", net.http_headers_schema(), net.http_headers, read_only=True)
         self.register("net_port_scan", net.port_scan_schema(), net.port_scan, read_only=True)
 
+        log = LogAnalyzerTools()
+        self.register("log_analyze", log.analyze_log_schema(), log.analyze_log, read_only=True)
+        self.register("log_tail", log.tail_schema(), log.tail, read_only=True)
+        self.register("log_grep", log.grep_log_schema(), log.grep_log, read_only=True)
+        self.register("log_error_summary", log.error_summary_schema(), log.error_summary, read_only=True)
+
         mem = AgentMemoryTools(self.working_dir)
         self.register("remember", mem.remember_schema(), mem.remember)
         self.register("forget", mem.forget_schema(), mem.forget)
