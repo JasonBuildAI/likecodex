@@ -19,10 +19,14 @@ from rich.markdown import Markdown
 from rich.prompt import Confirm, Prompt
 from rich.panel import Panel
 
+from likecodex_engine.doctor import DiagnosisResult, Doctor
+
 __all__ = [
     "interactive_setup",
     "run_doctor",
     "test_deepseek_connection",
+    "Doctor",
+    "DiagnosisResult",
 ]
 
 console = Console()
@@ -185,61 +189,13 @@ Created: {__import__('datetime').datetime.now().strftime('%Y-%m-%d')}
 
 
 async def run_doctor() -> None:
-    """Run diagnostics and health checks."""
-    console.print("[bold]LikeCodex Diagnostics[/bold]\n")
+    """Run diagnostics and health checks.
 
-    # 1. Python version
-    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    if sys.version_info >= (3, 11):
-        console.print(f"[green]✓ Python {py_ver}[/green]")
-    else:
-        console.print(f"[red]✗ Python {py_ver} (need >= 3.11)[/red]")
-
-    # 2. Config
-    config_path = Path.home() / ".likecodex" / "config.toml"
-    if config_path.exists():
-        console.print(f"[green]✓ Config found at {config_path}[/green]")
-        config_text = config_path.read_text(encoding="utf-8")
-        # Mask API key
-        for line in config_text.splitlines():
-            if "api_key" in line.lower() and "=" in line:
-                console.print(f"   {line.split('=')[0].strip()} = ***")
-    else:
-        console.print("[yellow]⚠ No config found. Run `likecodex --setup`[/yellow]")
-
-    # 3. API key
-    api_key = os.environ.get("DEEPSEEK_API_KEY") or ""
-    if api_key:
-        console.print(f"[green]✓ DEEPSEEK_API_KEY set ({api_key[:8]}...)[/green]")
-    else:
-        # Check config file
-        if config_path.exists():
-            cfg_text = config_path.read_text(encoding="utf-8")
-            for line in cfg_text.splitlines():
-                if "api_key" in line.lower() and "=" in line:
-                    api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    break
-        if api_key:
-            console.print(f"[green]✓ API key found in config[/green]")
-        else:
-            console.print("[red]✗ No API key found[/red]")
-
-    # 4. Engine status
-    port = int(os.environ.get("LIKECODEX_ENGINE_PORT", "9090"))
-    import urllib.request
-
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as resp:
-            data = json.loads(resp.read().decode())
-        console.print(f"[green]✓ Engine running on port {port}[/green]")
-        if data.get("model"):
-            console.print(f"   Model: {data['model']}")
-    except Exception:
-        console.print(f"[yellow]⚠ Engine not running on port {port}[/yellow]")
-
-    # 5. System info
-    console.print(f"\n[bold]System:[/bold] {platform.system()} {platform.release()}")
-    console.print(f"[bold]CWD:[/bold] {Path.cwd()}")
+    Delegates to Doctor class from the doctor module.
+    """
+    doctor = Doctor()
+    result = await doctor.diagnose()
+    doctor.print_report(result)
 
 
 if __name__ == "__main__":
