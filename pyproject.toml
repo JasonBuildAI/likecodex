@@ -4,13 +4,36 @@ version = "0.1.0"
 description = "LikeCodex - DeepSeek V4 native AI coding assistant"
 readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
 
 dependencies = [
     "likecodex-engine",
 ]
 
+[project.urls]
+Homepage = "https://github.com/JasonBuildAI/likecodex"
+Documentation = "https://github.com/JasonBuildAI/likecodex/tree/main/docs"
+Repository = "https://github.com/JasonBuildAI/likecodex.git"
+Issues = "https://github.com/JasonBuildAI/likecodex/issues"
+Changelog = "https://github.com/JasonBuildAI/likecodex/blob/main/CHANGELOG.md"
+
 [project.scripts]
 likecodex = "likecodex_engine.cli:main"
+
+[project.classifiers]
+Development Status :: 4 - Beta
+License :: OSI Approved :: MIT License
+Programming Language :: Python :: 3
+Programming Language :: Python :: 3.11
+Programming Language :: Python :: 3.12
+Programming Language :: Python :: 3.13
+Natural Language :: English
+Natural Language :: Chinese (Simplified)
+Operating System :: OS Independent
+Topic :: Software Development :: Code Generators
+Topic :: Software Development :: Debuggers
+Topic :: Software Development :: Libraries :: Python Modules
+Intended Audience :: Developers
 
 [project.optional-dependencies]
 sandbox = [
