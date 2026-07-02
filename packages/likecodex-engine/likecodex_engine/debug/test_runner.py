@@ -1,9 +1,15 @@
 """Test Runner Service — discovers and runs tests for multiple frameworks.
 
+Phase 7.10: Test Coverage Visualization
+- Future: Integrate coverage tools (pytest-cov, c8/istanbul, tarpaulin)
+  and return per-file coverage data for frontend rendering.
+- API: run_coverage() → {"files": [{path, statements, covered, missed, branches, ...}]}
+- Frontend: Render coverage overlays in editor gutter, plus summary dashboard.
+
 Supports:
-- Python: pytest, unittest
-- JavaScript/TypeScript: jest, vitest
-- Rust: cargo test
+- Python: pytest, unittest, pytest-cov
+- JavaScript/TypeScript: jest, vitest, c8
+- Rust: cargo test, cargo-tarpaulin  -- --out Xml
 """
 
 from __future__ import annotations
