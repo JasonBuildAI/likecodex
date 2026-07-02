@@ -32,6 +32,7 @@ impl EngineBridge {
         let resp = self
             .client
             .get(&url)
+            .timeout(std::time::Duration::from_secs(15))
             .send()
             .await
             .context("failed to contact engine")?;
@@ -48,6 +49,7 @@ impl EngineBridge {
             .client
             .post(&url)
             .json(body)
+            .timeout(std::time::Duration::from_secs(30))
             .send()
             .await
             .context("failed to contact engine")?;

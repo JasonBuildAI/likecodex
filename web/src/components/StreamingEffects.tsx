@@ -1,1 +1,259 @@
-﻿'use client';import { memo, useEffect, useState } from 'react';// 鈹€鈹€ TypingIndicator: animated dots for streaming response 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€export const TypingIndicator = memo(function TypingIndicator() {  return (    <div className="flex items-center gap-1.5 px-3 py-2">      <span className="text-xs text-muted">AI is thinking</span>      <div className="flex gap-1">        {[0, 1, 2].map((i) => (          <span            key={i}            className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce"            style={{ animationDelay: `${i * 150}ms` }}          />        ))}      </div>    </div>  );});// 鈹€鈹€ StreamingText: typewriter effect for streaming content 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€interface StreamingTextProps {  content: string;  speed?: number; // characters per second  onComplete?: () => void;}export const StreamingText = memo(function StreamingText({   content,   speed = 50,  onComplete }: StreamingTextProps) {  const [displayedContent, setDisplayedContent] = useState('');  const [currentIndex, setCurrentIndex] = useState(0);  useEffect(() => {    if (currentIndex >= content.length) {      onComplete?.();      return;    }    const interval = setInterval(() => {      setDisplayedContent((prev) => prev + content[currentIndex]);      setCurrentIndex((prev) => prev + 1);    }, 1000 / speed);    return () => clearInterval(interval);  }, [content, currentIndex, speed, onComplete]);  return <>{displayedContent}</>;});// 鈹€鈹€ ThinkingProcess: collapsible reasoning visualization 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€interface ThinkingStep {  id: string;  label: string;  status: 'pending' | 'active' | 'completed';  duration?: number;}interface ThinkingProcessProps {  steps: ThinkingStep[];  isComplete?: boolean;}export const ThinkingProcess = memo(function ThinkingProcess({   steps,   isComplete = false }: ThinkingProcessProps) {  const [expanded, setExpanded] = useState(false);  const getStatusIcon = (status: ThinkingStep['status']) => {    switch (status) {      case 'completed':        return (          <svg className="h-3 w-3 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />          </svg>        );      case 'active':        return (          <svg className="h-3 w-3 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />          </svg>        );      default:        return (          <div className="h-3 w-3 rounded-full border-2 border-muted/30" />        );    }  };  return (    <div className="my-2 rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden">      {/* Header */}      <button        onClick={() => setExpanded(!expanded)}        className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-amber-700 hover:bg-amber-500/10 transition-colors"      >        <div className="flex items-center gap-2">          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />          </svg>          <span>Thinking Process</span>          {!isComplete && (            <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />          )}        </div>        <svg          className={`h-3 w-3 transition-transform ${expanded ? 'rotate-180' : ''}`}          fill="none"          viewBox="0 0 24 24"          stroke="currentColor"        >          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />        </svg>      </button>      {/* Steps list */}      {expanded && (        <div className="border-t border-amber-500/20 px-3 py-2 space-y-1.5">          {steps.map((step) => (            <div key={step.id} className="flex items-center gap-2 text-[11px]">              {getStatusIcon(step.status)}              <span className={`flex-1 ${                step.status === 'completed' ? 'text-foreground' :                 step.status === 'active' ? 'text-amber-700 font-medium' :                 'text-muted/50'              }`}>                {step.label}              </span>              {step.duration !== undefined && (                <span className="text-[10px] text-muted/60">{step.duration}ms</span>              )}            </div>          ))}        </div>      )}    </div>  );});
+﻿'use client';
+
+import { memo, useEffect, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+
+// ── TypingIndicator: animated dots for streaming response ───────────────
+export const TypingIndicator = memo(function TypingIndicator() {
+  const [dots, setDots] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDots((prev) => (prev + 1) % 4);
+    }, 400);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -5 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -5 }}
+      className="flex items-center gap-2 px-3 py-2"
+    >
+      <span className="text-xs text-muted">AI is thinking</span>
+      <div className="flex gap-1">
+        {[0, 1, 2].map((i) => (
+          <motion.span
+            key={i}
+            className="inline-block w-1.5 h-1.5 rounded-full bg-gradient-to-r from-blue-400 to-purple-400"
+            animate={{
+              y: [0, -4, 0],
+              opacity: [0.5, 1, 0.5],
+            }}
+            transition={{
+              duration: 0.8,
+              repeat: Infinity,
+              delay: i * 0.15,
+              ease: 'easeInOut',
+            }}
+          />
+        ))}
+      </div>
+    </motion.div>
+  );
+});
+
+// ── StreamingText: typewriter effect for streaming content ──────────────
+interface StreamingTextProps {
+  content: string;
+  speed?: number; // characters per second
+  onComplete?: () => void;
+}
+
+export const StreamingText = memo(function StreamingText({
+  content,
+  speed = 50,
+  onComplete,
+}: StreamingTextProps) {
+  const [displayedContent, setDisplayedContent] = useState('');
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [isComplete, setIsComplete] = useState(false);
+
+  useEffect(() => {
+    if (currentIndex >= content.length) {
+      if (!isComplete) {
+        setIsComplete(true);
+        onComplete?.();
+      }
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setDisplayedContent((prev) => prev + content[currentIndex]);
+      setCurrentIndex((prev) => prev + 1);
+    }, 1000 / speed);
+
+    return () => clearInterval(interval);
+  }, [content, currentIndex, speed, onComplete, isComplete]);
+
+  return (
+    <span>
+      {displayedContent}
+      {!isComplete && (
+        <motion.span
+          animate={{ opacity: [1, 0] }}
+          transition={{ duration: 0.5, repeat: Infinity }}
+          className="inline-block w-[2px] h-[1em] bg-blue-400 ml-0.5 align-middle"
+        />
+      )}
+    </span>
+  );
+});
+
+// ── ThinkingProcess: collapsible reasoning visualization ────────────────
+interface ThinkingStep {
+  id: string;
+  label: string;
+  status: 'pending' | 'active' | 'completed';
+  duration?: number;
+}
+
+interface ThinkingProcessProps {
+  steps: ThinkingStep[];
+  isComplete?: boolean;
+}
+
+export const ThinkingProcess = memo(function ThinkingProcess({
+  steps,
+  isComplete = false,
+}: ThinkingProcessProps) {
+  const [expanded, setExpanded] = useState(true);
+
+  const getStatusIcon = (status: ThinkingStep['status']) => {
+    switch (status) {
+      case 'completed':
+        return (
+          <motion.svg
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+            className="h-3 w-3 text-green-400"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M5 13l4 4L19 7"
+            />
+          </motion.svg>
+        );
+      case 'active':
+        return (
+          <svg
+            className="h-3 w-3 text-blue-400 animate-spin"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            />
+          </svg>
+        );
+      default:
+        return (
+          <div className="h-3 w-3 rounded-full border-2 border-muted/30" />
+        );
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -5 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="my-2 rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden"
+    >
+      {/* Header */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-amber-600 hover:bg-amber-500/10 transition-all-smooth"
+      >
+        <div className="flex items-center gap-2">
+          <svg
+            className="h-3.5 w-3.5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+            />
+          </svg>
+          <span>Thinking Process</span>
+          {!isComplete && (
+            <motion.span
+              animate={{ opacity: [1, 0.3] }}
+              transition={{ duration: 1, repeat: Infinity }}
+              className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400"
+            />
+          )}
+        </div>
+        <motion.svg
+          animate={{ rotate: expanded ? 180 : 0 }}
+          transition={{ duration: 0.2 }}
+          className="h-3 w-3"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M19 9l-7 7-7-7"
+          />
+        </motion.svg>
+      </button>
+
+      {/* Steps list */}
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="border-t border-amber-500/20 px-3 py-2 space-y-1.5">
+              {steps.map((step, i) => (
+                <motion.div
+                  key={step.id}
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.05 }}
+                  className="flex items-center gap-2 text-[11px]"
+                >
+                  {getStatusIcon(step.status)}
+                  <span
+                    className={`flex-1 ${
+                      step.status === 'completed'
+                        ? 'text-foreground'
+                        : step.status === 'active'
+                        ? 'text-amber-700 font-medium'
+                        : 'text-muted/50'
+                    }`}
+                  >
+                    {step.label}
+                  </span>
+                  {step.duration !== undefined && (
+                    <span className="text-[10px] text-muted/60">
+                      {step.duration}ms
+                    </span>
+                  )}
+                </motion.div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+});
+'use client';import { memo, useEffect, useState } from 'react';// 鈹€鈹€ TypingIndicator: animated dots for streaming response 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€export const TypingIndicator = memo(function TypingIndicator() {  return (    <div className="flex items-center gap-1.5 px-3 py-2">      <span className="text-xs text-muted">AI is thinking</span>      <div className="flex gap-1">        {[0, 1, 2].map((i) => (          <span            key={i}            className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce"            style={{ animationDelay: `${i * 150}ms` }}          />        ))}      </div>    </div>  );});// 鈹€鈹€ StreamingText: typewriter effect for streaming content 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€interface StreamingTextProps {  content: string;  speed?: number; // characters per second  onComplete?: () => void;}export const StreamingText = memo(function StreamingText({   content,   speed = 50,  onComplete }: StreamingTextProps) {  const [displayedContent, setDisplayedContent] = useState('');  const [currentIndex, setCurrentIndex] = useState(0);  useEffect(() => {    if (currentIndex >= content.length) {      onComplete?.();      return;    }    const interval = setInterval(() => {      setDisplayedContent((prev) => prev + content[currentIndex]);      setCurrentIndex((prev) => prev + 1);    }, 1000 / speed);    return () => clearInterval(interval);  }, [content, currentIndex, speed, onComplete]);  return <>{displayedContent}</>;});// 鈹€鈹€ ThinkingProcess: collapsible reasoning visualization 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€interface ThinkingStep {  id: string;  label: string;  status: 'pending' | 'active' | 'completed';  duration?: number;}interface ThinkingProcessProps {  steps: ThinkingStep[];  isComplete?: boolean;}export const ThinkingProcess = memo(function ThinkingProcess({   steps,   isComplete = false }: ThinkingProcessProps) {  const [expanded, setExpanded] = useState(false);  const getStatusIcon = (status: ThinkingStep['status']) => {    switch (status) {      case 'completed':        return (          <svg className="h-3 w-3 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />          </svg>        );      case 'active':        return (          <svg className="h-3 w-3 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />          </svg>        );      default:        return (          <div className="h-3 w-3 rounded-full border-2 border-muted/30" />        );    }  };  return (    <div className="my-2 rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden">      {/* Header */}      <button        onClick={() => setExpanded(!expanded)}        className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-amber-700 hover:bg-amber-500/10 transition-colors"      >        <div className="flex items-center gap-2">          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />          </svg>          <span>Thinking Process</span>          {!isComplete && (            <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />          )}        </div>        <svg          className={`h-3 w-3 transition-transform ${expanded ? 'rotate-180' : ''}`}          fill="none"          viewBox="0 0 24 24"          stroke="currentColor"        >          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />        </svg>      </button>      {/* Steps list */}      {expanded && (        <div className="border-t border-amber-500/20 px-3 py-2 space-y-1.5">          {steps.map((step) => (            <div key={step.id} className="flex items-center gap-2 text-[11px]">              {getStatusIcon(step.status)}              <span className={`flex-1 ${                step.status === 'completed' ? 'text-foreground' :                 step.status === 'active' ? 'text-amber-700 font-medium' :                 'text-muted/50'              }`}>                {step.label}              </span>              {step.duration !== undefined && (                <span className="text-[10px] text-muted/60">{step.duration}ms</span>              )}            </div>          ))}        </div>      )}    </div>  );});
