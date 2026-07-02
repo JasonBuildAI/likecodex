@@ -185,6 +185,13 @@ class ToolRegistry:
         self.register("db_explain", db.explain_schema(), db.explain, read_only=True)
         self.register("db_list_tables", db.list_tables_schema(), db.list_tables, read_only=True)
 
+        net = NetworkTools()
+        self.register("net_ping", net.ping_schema(), net.ping, read_only=True)
+        self.register("net_dns_lookup", net.dns_lookup_schema(), net.dns_lookup, read_only=True)
+        self.register("net_traceroute", net.traceroute_schema(), net.traceroute, read_only=True)
+        self.register("net_http_headers", net.http_headers_schema(), net.http_headers, read_only=True)
+        self.register("net_port_scan", net.port_scan_schema(), net.port_scan, read_only=True)
+
         mem = AgentMemoryTools(self.working_dir)
         self.register("remember", mem.remember_schema(), mem.remember)
         self.register("forget", mem.forget_schema(), mem.forget)
