@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from likecodex_engine.agent.subagent_registry import subagent_tool_registry
 from likecodex_engine.context.manager import ContextManager
@@ -95,7 +96,9 @@ Carry out the task, adapting the plan as needed."""
 
 
 class Coordinator:
-    """Runs planner (isolated session) then executor on a formatted handoff."""
+    """Runs planner (isolated session) then executor on a formatted handoff.
+    Supports plan approval bidirectional flow (confirm/modify/reject).
+    """
 
     def __init__(
         self,
@@ -117,6 +120,9 @@ class Coordinator:
         self._planner_context = ContextManager(system_prompt=planner_prompt_with_context(planning_context))
         if hasattr(self._planner_context, "set_working_dir"):
             self._planner_context.set_working_dir(executor.tools.working_dir)
+
+        # Plan approval flow
+        self._pending_approval: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
         # Set up should_plan function based on auto_plan config
         if should_plan_fn is not None:
@@ -182,7 +188,57 @@ class Coordinator:
             },
         )
 
+        # Wait for user approval (confirm/modify/reject)
+        approval_future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._pending_approval[approval_id] = approval_future
+        try:
+            approval_result = await asyncio.wait_for(approval_future, timeout=300.0)
+        except asyncio.TimeoutError:
+            approval_result = {"action": "timeout", "plan": plan}
+        finally:
+            self._pending_approval.pop(approval_id, None)
+
+        action = approval_result.get("action", "approved")
+        if action == "rejected":
+            yield LLMResponse(
+                content=f"Plan rejected by user: {approval_result.get('reason', 'No reason')}",
+                model="planner",
+                event_type="plan_rejected",
+                metadata={"approval_id": approval_id},
+            )
+            return
+        elif action == "modified":
+            modified_plan = approval_result.get("plan", plan)
+            plan = modified_plan
+            yield LLMResponse(
+                content=modified_plan,
+                model="planner",
+                event_type="plan_modified",
+                metadata={"approval_id": approval_id},
+            )
+            # Re-inject research context for modified plan
+            self._inject_planner_research()
+            yield LLMResponse(content="", model="executor", event_type="phase", metadata={"phase": "executing"})
+            async for resp in self.executor.run(format_handoff(prompt, modified_plan)):
+                yield resp
+            return
+        # approved: continue with original plan
+        yield LLMResponse(
+            content="",
+            model="planner",
+            event_type="plan_approved",
+            metadata={"approval_id": approval_id},
+        )
+
         # Inject Planner's research findings into Executor context
+        self._inject_planner_research()
+
+        yield LLMResponse(content="", model="executor", event_type="phase", metadata={"phase": "executing"})
+        async for resp in self.executor.run(format_handoff(prompt, plan)):
+            yield resp
+
+    def _inject_planner_research(self) -> None:
+        """Inject Planner research findings into Executor context."""
         injected = 0
         for msg in self._planner_context.messages:
             if msg.role in ("assistant", "tool") and msg.content and len(msg.content) > 100:
@@ -190,12 +246,8 @@ class Coordinator:
                     f"[Planner Research]\n{msg.content[:1500]}"
                 )
                 injected += 1
-                if injected >= 3:  # Limit to avoid bloating context
+                if injected >= 3:
                     break
-
-        yield LLMResponse(content="", model="executor", event_type="phase", metadata={"phase": "executing"})
-        async for resp in self.executor.run(format_handoff(prompt, plan)):
-            yield resp
 
     async def _plan_with_tools(self, prompt: str) -> str:
         from likecodex_engine.agent.loop import AgentLoop
@@ -226,8 +278,45 @@ class Coordinator:
     async def respond_ask(self, request_id: str, answers: list) -> bool:
         return await self.executor.respond_ask(request_id, answers)
 
+    async def respond_plan_approval(
+        self,
+        approval_id: str,
+        action: str,
+        reason: str = "",
+        modified_plan: str = "",
+    ) -> bool:
+        """Respond to a plan approval request.
+        
+        Args:
+            approval_id: The approval request ID.
+            action: "approved", "rejected", or "modified".
+            reason: Reason for rejection (if rejected).
+            modified_plan: Modified plan text (if modified).
+        
+        Returns:
+            True if the response was delivered successfully.
+        """
+        future = self._pending_approval.get(approval_id)
+        if future is None or future.done():
+            return False
+        result: dict[str, Any] = {"action": action}
+        if action == "rejected":
+            result["reason"] = reason
+        elif action == "modified":
+            result["plan"] = modified_plan
+        future.set_result(result)
+        return True
+
     def list_pending_asks(self) -> list:
         return self.executor.list_pending_asks()
+
+    def list_pending_approvals(self) -> list[dict[str, Any]]:
+        """List pending plan approval requests."""
+        return [
+            {"approval_id": aid}
+            for aid, fut in self._pending_approval.items()
+            if not fut.done()
+        ]
 
     def list_pending_permissions(self) -> list[dict]:
         return self.executor.list_pending_permissions()
