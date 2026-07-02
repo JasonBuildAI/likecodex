@@ -100,6 +100,15 @@ class ComposerAgent:
                         if change and change.file_path not in self._captured_paths:
                             self.change_set.append(change)
                             self._captured_paths.add(change.file_path)
+                            # Generate unified diff
+                            import difflib
+                            diff_lines = list(difflib.unified_diff(
+                                change.original_content.splitlines(keepends=True),
+                                change.modified_content.splitlines(keepends=True),
+                                fromfile=change.file_path,
+                                tofile=change.file_path,
+                            ))
+                            diff_text = "".join(diff_lines)
                             yield {
                                 "type": "file_change",
                                 "filePath": change.file_path,
@@ -107,6 +116,7 @@ class ComposerAgent:
                                 "originalContent": change.original_content,
                                 "modifiedContent": change.modified_content,
                                 "language": change.language,
+                                "diff": diff_text,
                             }
 
             yield {"type": "done"}
