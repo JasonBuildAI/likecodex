@@ -19,16 +19,17 @@ const ReasoningBlock = memo(function ReasoningBlock({
   content: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const tokens = content.split(' ').length;
 
   return (
     <motion.div
       initial={{ opacity: 0, y: -5 }}
       animate={{ opacity: 1, y: 0 }}
-      className="my-2 rounded-lg border border-amber-500/30 bg-amber-500/5 overflow-hidden"
+      className="rounded-lg border border-amber-500/30 bg-gradient-to-r from-amber-500/10 to-amber-500/5 overflow-hidden shadow-sm"
     >
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-amber-600 hover:bg-amber-500/10 transition-all-smooth"
+        className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 transition-all-smooth"
       >
         <span className="flex items-center gap-1.5">
           <svg
@@ -45,22 +46,30 @@ const ReasoningBlock = memo(function ReasoningBlock({
             />
           </svg>
           Reasoning
+          <span className="text-[9px] text-amber-400/60 ml-1">
+            (~{tokens} tokens)
+          </span>
         </span>
-        <svg
-          className={`h-3 w-3 transition-transform duration-200 ${
-            isExpanded ? 'rotate-180' : ''
-          }`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M19 9l-7 7-7-7"
-          />
-        </svg>
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] text-amber-400/60">
+            {isExpanded ? 'Click to collapse' : 'Click to expand'}
+          </span>
+          <svg
+            className={`h-3 w-3 transition-transform duration-200 ${
+              isExpanded ? 'rotate-180' : ''
+            }`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M19 9l-7 7-7-7"
+            />
+          </svg>
+        </div>
       </button>
       <AnimatePresence>
         {isExpanded && (
@@ -71,7 +80,7 @@ const ReasoningBlock = memo(function ReasoningBlock({
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             className="overflow-hidden"
           >
-            <div className="border-t border-amber-500/20 px-3 py-2 text-xs text-amber-800/80 whitespace-pre-wrap max-h-64 overflow-y-auto">
+            <div className="border-t border-amber-500/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-200/80 whitespace-pre-wrap max-h-64 overflow-y-auto leading-relaxed">
               {content}
             </div>
           </motion.div>
@@ -338,6 +347,13 @@ const MessageBubble = memo(function MessageBubble({
         </motion.div>
       </div>
 
+      {/* Reasoning content - above the bubble */}
+      {!isUser && msg.reasoningContent && (
+        <div className="mb-2">
+          <ReasoningBlock content={msg.reasoningContent} />
+        </div>
+      )}
+
       {/* Message content */}
       <motion.div
         whileHover={{ scale: 1.002 }}
@@ -369,11 +385,6 @@ const MessageBubble = memo(function MessageBubble({
           <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
             <MessageContent content={msg.content} />
           </div>
-        )}
-
-        {/* Reasoning content */}
-        {msg.reasoningContent && (
-          <ReasoningBlock content={msg.reasoningContent} />
         )}
 
         {/* Tool calls */}
