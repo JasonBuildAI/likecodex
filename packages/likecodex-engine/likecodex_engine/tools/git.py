@@ -91,16 +91,113 @@ class GitTools:
             },
         }
 
+    async def _generate_commit_message(self) -> str:
+        """Generate a descriptive commit message from the staged diff.
+
+        Analyzes file changes to determine type and creates a meaningful message.
+        """
+        # Get diff stat for file-level overview
+        stat_result = await self._run("diff --cached --stat")
+        if stat_result.get("exit_code") != 0 or not stat_result.get("stdout"):
+            return "Auto-commit"
+
+        stat_lines = stat_result["stdout"].strip().split("\n")
+        changed_files = []
+        for line in stat_lines:
+            if "|" in line and not line.startswith(" "):
+                fname = line.split("|")[0].strip()
+                changed_files.append(fname)
+
+        if not changed_files:
+            # Check for new untracked files
+            status_result = await self._run("status --porcelain")
+            if status_result.get("stdout"):
+                return "Auto-commit: new changes"
+            return "Auto-commit"
+
+        # Determine commit type from file extensions
+        type_indicators = {
+            "feat": [".py", ".rs", ".js", ".ts", ".jsx", ".tsx", ".go", ".java"],
+            "fix": [],
+            "docs": [".md", ".rst", ".txt"],
+            "test": ["test_", "_test", ".spec.", ".test."],
+            "config": [".json", ".yaml", ".yml", ".toml", ".ini", ".cfg"],
+            "style": [".css", ".scss", ".less", ".sass"],
+        }
+
+        # Detect primary type
+        commit_type = "chore"
+        has_feat = False
+        has_fix = False
+        has_docs = False
+        has_test = False
+        has_config = False
+
+        for fname in changed_files:
+            lower_fname = fname.lower()
+            if any(lower_fname.endswith(ext) for ext in type_indicators["feat"]):
+                has_feat = True
+            if "fix" in lower_fname or "bug" in lower_fname or "hotfix" in lower_fname:
+                has_fix = True
+            if any(lower_fname.endswith(ext) for ext in type_indicators["docs"]):
+                has_docs = True
+            if any(kw in lower_fname for kw in type_indicators["test"]):
+                has_test = True
+            if any(lower_fname.endswith(ext) for ext in type_indicators["config"]):
+                has_config = True
+
+        if has_feat:
+            commit_type = "feat"
+        elif has_fix:
+            commit_type = "fix"
+        elif has_docs:
+            commit_type = "docs"
+        elif has_test:
+            commit_type = "test"
+        elif has_config:
+            commit_type = "chore"
+
+        # Extract changed directory/module name for scope
+        scopes = set()
+        for fname in changed_files:
+            parts = fname.replace("\\", "/").split("/")
+            if len(parts) >= 2:
+                scopes.add(parts[0])
+
+        scope_str = f"({', '.join(sorted(scopes)[:3])})" if scopes else ""
+
+        # Use the first changed file for description
+        first_file = Path(changed_files[0]).stem.replace("_", " ").replace("-", " ")
+        file_count = len(changed_files)
+
+        if file_count == 1:
+            desc = first_file[:60]
+        else:
+            desc = f"{first_file[:40]} +{file_count - 1} more"
+
+        message = f"{commit_type}{scope_str}: {desc}"
+        return message[:100]
+
     async def git_commit(self, message: str = "", add_all: bool = True, auto_message: bool = True) -> str:
         if add_all:
             await self._run("add -A")
+
+        # Check if there's anything to commit
+        status_result = await self._run("status --porcelain")
+        if not status_result.get("stdout", "").strip():
+            return json.dumps({
+                "command": "git commit",
+                "exit_code": 0,
+                "stdout": "Nothing to commit, working tree clean",
+                "stderr": "",
+            })
+
         if auto_message and not message:
-            diff_result = await self._run("diff --cached --stat")
-            if diff_result.get("exit_code") == 0 and diff_result.get("stdout"):
-                first_line = diff_result["stdout"].strip().split("\n")[0]
-                message = f"Auto-commit: {first_line[:80]}"
-            else:
-                message = "Auto-commit"
+            message = await self._generate_commit_message()
+
+        if not message:
+            message = "Auto-commit"
+
         escaped_message = message.replace('"', '\\"')
         result = await self._run(f'commit -m "{escaped_message}"')
         return json.dumps(result)
