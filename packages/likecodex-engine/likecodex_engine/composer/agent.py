@@ -131,6 +131,43 @@ class ComposerAgent:
         self._captured_paths = {c.file_path for c in self.change_set}
         return snapshot
 
+    async def apply_undo(self) -> list[dict] | None:
+        """Undo the last change group AND write original content to disk.
+
+        Returns the list of restored (original) change dicts, or None if nothing to undo.
+        """
+        snapshot = await self.undo()
+        if snapshot is None:
+            return None
+        for change in snapshot:
+            file_path = os.path.join(self.working_dir, change["file_path"])
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(change["original_content"])
+        return snapshot
+
+    async def apply_redo(self) -> list[dict] | None:
+        """Redo the last undone change group AND write modified content to disk.
+
+        Returns the list of restored change dicts, or None if nothing to redo.
+        """
+        snapshot = await self.redo()
+        if snapshot is None:
+            return None
+        for change in snapshot:
+            file_path = os.path.join(self.working_dir, change["file_path"])
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(change["modified_content"])
+        return snapshot
+
+    def reset_state(self):
+        """Reset all undo/redo stacks and change set to empty."""
+        self.change_set.clear()
+        self._captured_paths.clear()
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+
     async def get_bg_status(self, task_id: str) -> dict | None:
         """Get the status of a background task."""
         task = self._bg_tasks.get(task_id)
