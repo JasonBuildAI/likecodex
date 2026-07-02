@@ -18,7 +18,8 @@ Issues = "https://github.com/JasonBuildAI/likecodex/issues"
 Changelog = "https://github.com/JasonBuildAI/likecodex/blob/main/CHANGELOG.md"
 
 [project.scripts]
-likecodex = "likecodex_engine.cli:main"
+likecodex-engine = "likecodex_engine.cli:main"
+# Note: 'likecodex' CLI is provided by Rust binary; Python entrypoint renamed to avoid conflict
 
 [project.classifiers]
 classifiers = [
