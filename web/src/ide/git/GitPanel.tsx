@@ -45,6 +45,9 @@ export function GitPanel() {
     selectedPath,
     isLoading,
     error,
+    searchQuery,
+    searchResults,
+    isSearching,
     refreshStatus,
     refreshLog,
     refreshBranches,
@@ -55,12 +58,15 @@ export function GitPanel() {
     commit,
     discardChanges,
     checkoutBranch,
+    search,
   } = useGitStore();
 
   const [commitMessage, setCommitMessage] = useState('');
   const [view, setView] = useState<'changes' | 'history' | 'branches'>('changes');
   const [newBranchName, setNewBranchName] = useState('');
   const [showNewBranch, setShowNewBranch] = useState(false);
+  const [filterText, setFilterText] = useState('');
+  const [expandedChanges, setExpandedChanges] = useState<Set<string>>(new Set());
 
   // Auto-refresh on mount
   useEffect(() => {
@@ -75,8 +81,28 @@ export function GitPanel() {
     return () => clearInterval(timer);
   }, [view, refreshStatus]);
 
-  const stagedChanges = changes.filter((c) => c.staged);
-  const unstagedChanges = changes.filter((c) => !c.staged);
+  const allChanges = changes.filter((c) => c.staged);
+  const allUnstaged = changes.filter((c) => !c.staged);
+
+  const filterFn = (c: { path: string }) =>
+    !filterText || c.path.toLowerCase().includes(filterText.toLowerCase());
+
+  const stagedChanges = allChanges.filter(filterFn);
+  const unstagedChanges = allUnstaged.filter(filterFn);
+
+  const toggleExpand = (path: string) => {
+    setExpandedChanges((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const handleSelectFile = (path: string, staged: boolean) => {
+    selectFile(path, staged);
+    toggleExpand(path);
+  };
 
   const handleCommit = useCallback(async () => {
     if (!commitMessage.trim()) return;
@@ -85,6 +111,10 @@ export function GitPanel() {
       setCommitMessage('');
     }
   }, [commitMessage, commit]);
+
+  const handleStageAllUnstaged = useCallback(async () => {
+    await stageAll();
+  }, [stageAll]);
 
   if (!isRepo) {
     return (
@@ -136,6 +166,17 @@ export function GitPanel() {
         <>
           {/* Changes list */}
           <div className="flex-1 overflow-y-auto min-h-0">
+            {/* Search / filter bar */}
+            <div className="px-2 py-1 border-b border-gray-700">
+              <input
+                type="text"
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+                placeholder="过滤文件..."
+                className="w-full bg-gray-800 text-gray-200 text-[10px] border border-gray-700 rounded px-2 py-0.5 focus:outline-none focus:border-blue-500 placeholder-gray-600"
+              />
+            </div>
+
             {/* Staged changes */}
             {stagedChanges.length > 0 && (
               <div className="border-b border-gray-700">
@@ -155,10 +196,11 @@ export function GitPanel() {
                     key={c.path}
                     change={c}
                     selected={selectedPath === c.path}
-                    onClick={() => selectFile(c.path, true)}
+                    onClick={() => handleSelectFile(c.path, true)}
                     actionIcon="−"
                     actionTitle="取消暂存"
                     onAction={() => unstageFile(c.path)}
+                    isExpanded={expandedChanges.has(c.path)}
                   />
                 ))}
               </div>
@@ -172,7 +214,7 @@ export function GitPanel() {
                 </span>
                 {unstagedChanges.length > 0 && (
                   <button
-                    onClick={() => stageAll()}
+                    onClick={handleStageAllUnstaged}
                     className="text-[10px] text-gray-500 hover:text-white"
                   >
                     全部暂存
@@ -181,7 +223,7 @@ export function GitPanel() {
               </div>
               {unstagedChanges.length === 0 && stagedChanges.length === 0 && (
                 <div className="px-3 py-6 text-center text-xs text-gray-500">
-                  没有未提交的变更
+                  {filterText ? '没有匹配的变更' : '没有未提交的变更'}
                 </div>
               )}
               {unstagedChanges.map((c) => (
@@ -189,7 +231,7 @@ export function GitPanel() {
                   key={c.path}
                   change={c}
                   selected={selectedPath === c.path}
-                  onClick={() => selectFile(c.path, false)}
+                  onClick={() => handleSelectFile(c.path, false)}
                   actionIcon="+"
                   actionTitle="暂存"
                   onAction={() => stageFile(c.path)}
@@ -198,6 +240,7 @@ export function GitPanel() {
                       ? () => discardChanges(c.path)
                       : undefined
                   }
+                  isExpanded={expandedChanges.has(c.path)}
                 />
               ))}
             </div>
@@ -355,6 +398,7 @@ function ChangeItem({
   actionTitle,
   onAction,
   onDiscard,
+  isExpanded,
 }: {
   change: { path: string; changeType: string; staged: boolean };
   selected: boolean;
@@ -363,48 +407,67 @@ function ChangeItem({
   actionTitle: string;
   onAction: () => void;
   onDiscard?: () => void;
+  isExpanded?: boolean;
 }) {
+  const changeTypeLabel: Record<string, string> = {
+    modified: '修改', added: '新增', deleted: '删除',
+    untracked: '未跟踪', renamed: '重命名', 'both-added': '冲突',
+  };
+
   return (
-    <div
-      onClick={onClick}
-      className={`flex items-center px-3 py-1 cursor-pointer border-b border-gray-800/50 ${
-        selected ? 'bg-blue-900/30' : 'hover:bg-gray-800/50'
-      }`}
-    >
-      <span className={`text-[10px] w-4 font-mono ${CHANGE_COLORS[change.changeType] || 'text-gray-400'}`}>
-        {CHANGE_ICONS[change.changeType] || '?'}
-      </span>
-      <span className="text-xs text-gray-300 flex-1 truncate ml-1">
-        {change.path.split('/').pop()}
-      </span>
-      <span className="text-[10px] text-gray-600 ml-1 mr-2 hidden sm:inline">
-        {change.path.split('/').slice(0, -1).join('/')}
-      </span>
-      <div className="flex items-center gap-1">
-        {onDiscard && (
+    <>
+      <div
+        onClick={onClick}
+        className={`flex items-center px-3 py-1 cursor-pointer border-b border-gray-800/50 ${
+          selected ? 'bg-blue-900/30' : 'hover:bg-gray-800/50'
+        } ${isExpanded ? 'border-l-2 border-l-blue-500' : ''}`}
+      >
+        <span
+          className={`text-[10px] w-4 font-mono ${
+            CHANGE_COLORS[change.changeType] || 'text-gray-400'
+          }`}
+        >
+          {CHANGE_ICONS[change.changeType] || '?'}
+        </span>
+        <span className="text-xs text-gray-300 flex-1 truncate ml-1" title={change.path}>
+          {change.path.split('/').pop()}
+        </span>
+        <span className="text-[10px] text-gray-600 ml-1 mr-2 hidden sm:inline">
+          {change.path.split('/').slice(0, -1).join('/')}
+        </span>
+        <span className="text-[9px] text-gray-500 mr-1 hidden md:inline">
+          {changeTypeLabel[change.changeType] || change.changeType}
+        </span>
+        <div className="flex items-center gap-1">
+          {onDiscard && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDiscard();
+              }}
+              className="text-[10px] text-red-500 hover:text-red-400 px-1"
+              title="丢弃变更"
+            >
+              ✕
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
-              onDiscard();
+              onAction();
             }}
-            className="text-[10px] text-red-500 hover:text-red-400 px-1"
-            title="丢弃变更"
+            className={`text-xs px-1 ${
+              actionIcon === '+'
+                ? 'text-green-400 hover:text-green-300'
+                : 'text-yellow-400 hover:text-yellow-300'
+            }`}
+            title={actionTitle}
           >
-            ✕
+            {actionIcon === '+' ? '▸ 暂存' : '◂ 取消'}
           </button>
-        )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onAction();
-          }}
-          className="text-xs text-gray-400 hover:text-white px-1"
-          title={actionTitle}
-        >
-          {actionIcon}
-        </button>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
