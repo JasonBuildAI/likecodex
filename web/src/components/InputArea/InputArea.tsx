@@ -4,9 +4,11 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '@/lib/store';
 import { ModeCapsule } from './ModeCapsule';
+import { useMultiModalInput, type ImageItem } from '@/hooks/useMultiModalInput';
+import { ImagePreview } from '@/components/ImagePreview';
 
 interface InputAreaProps {
-  onSubmit: (prompt: string) => void;
+  onSubmit: (prompt: string, images?: ImageItem[]) => void;
   inputHistory: string[];
   placeholder?: string;
 }
@@ -33,12 +35,44 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSubmit, inputHistory, pl
   const activeFilePath = useAppStore((s) => s.activeFilePath);
   const openFiles = useAppStore((s) => s.openFiles);
   const textareaRef = useAutoResize(input);
+  const containerRef = useRef<HTMLFormElement>(null);
+
+  const {
+    images,
+    isDragOver,
+    addImagesFromFiles,
+    removeImage,
+    clearImages,
+    reorderImages,
+    pasteHook,
+    dropHook,
+    dragOverHook,
+    dragLeaveHook,
+    openFilePicker,
+  } = useMultiModalInput();
+
+  // Attach native event listeners for paste/drag-drop
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener('paste', pasteHook);
+    el.addEventListener('drop', dropHook);
+    el.addEventListener('dragover', dragOverHook);
+    el.addEventListener('dragleave', dragLeaveHook);
+    return () => {
+      el.removeEventListener('paste', pasteHook);
+      el.removeEventListener('drop', dropHook);
+      el.removeEventListener('dragover', dragOverHook);
+      el.removeEventListener('dragleave', dragLeaveHook);
+    };
+  }, [pasteHook, dropHook, dragOverHook, dragLeaveHook]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isStreaming) return;
-    onSubmit(input);
+    if ((!input.trim() && images.length === 0) || isStreaming) return;
+    onSubmit(input, images.length > 0 ? images : undefined);
     setInput('');
+    clearImages();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -107,7 +141,7 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSubmit, inputHistory, pl
 
   return (
     <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-surface via-surface to-transparent">
-      <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
+      <form ref={containerRef} onSubmit={handleSubmit} className="max-w-2xl mx-auto">
         {/* Mode Selector */}
         <ModeCapsule />
 
@@ -145,6 +179,20 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSubmit, inputHistory, pl
               disabled={isStreaming}
             />
 
+            {/* Image preview */}
+            {images.length > 0 && (
+              <ImagePreview
+                images={images}
+                onRemove={removeImage}
+                onReorder={reorderImages}
+              />
+            )}
+
+            {/* Drag-over indicator */}
+            {isDragOver && (
+              <div className="absolute inset-0 border-2 border-dashed border-primary/50 rounded-2xl bg-primary/5 z-30 pointer-events-none" />
+            )}
+
             {/* Modified files pills */}
             {modifiedFiles.length > 0 && (
               <div className="flex items-center gap-1.5 px-4 pb-1 flex-wrap">
@@ -168,14 +216,15 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSubmit, inputHistory, pl
             {/* Action buttons row */}
             <div className="flex items-center justify-between px-3 pb-2">
               <div className="flex items-center gap-2">
-                {/* Add context button */}
+                {/* Attach image button */}
                 <button
                   type="button"
-                  className="p-1.5 rounded-full hover:bg-accent/10 text-muted hover:text-foreground transition-colors"
-                  title="Add context (@files, #issues, etc.)"
+                  onClick={openFilePicker}
+                  className="p-1.5 rounded-full hover:bg-accent/10 text-muted hover:text-foreground transition-colors relative"
+                  title="Attach image (paste, drag-drop, or click to browse)"
                 >
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7.172l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                   </svg>
                 </button>
 
@@ -217,9 +266,9 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSubmit, inputHistory, pl
                 {/* Send button */}
                 <motion.button
                   type="submit"
-                  disabled={isStreaming || !input.trim()}
-                  whileHover={{ scale: (isStreaming || !input.trim()) ? 1 : 1.05 }}
-                  whileTap={{ scale: (isStreaming || !input.trim()) ? 1 : 0.95 }}
+                  disabled={isStreaming || (!input.trim() && images.length === 0)}
+                  whileHover={{ scale: (isStreaming || (!input.trim() && images.length === 0)) ? 1 : 1.05 }}
+                  whileTap={{ scale: (isStreaming || (!input.trim() && images.length === 0)) ? 1 : 0.95 }}
                   className={`p-2.5 rounded-full text-white shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                     agentMode === 'ask'
                       ? 'bg-emerald-600 hover:bg-emerald-700'
@@ -264,7 +313,8 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSubmit, inputHistory, pl
         {/* Bottom hint */}
         <div className="mt-2 text-center text-[11px] text-muted/50">
           Use <kbd className="px-1.5 py-0.5 rounded bg-accent/10 text-[10px]">/model</kbd> to pick the best model ·{' '}
-          <kbd className="px-1.5 py-0.5 rounded bg-accent/10 text-[10px]">Ctrl+Enter</kbd> to send
+          <kbd className="px-1.5 py-0.5 rounded bg-accent/10 text-[10px]">Ctrl+Enter</kbd> to send ·{' '}
+          {images.length > 0 ? `${images.length} image(s) attached` : 'Paste or drop images'}
         </div>
       </form>
     </div>

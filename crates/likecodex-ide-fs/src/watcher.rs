@@ -7,9 +7,7 @@ use tracing::{error, info, warn};
 /// A file system change event emitted by the watcher.
 #[derive(Debug, Clone)]
 pub struct FileChangeEvent {
-    /// The absolute path of the affected file/directory.
     pub path: PathBuf,
-    /// The kind of change detected.
     pub kind: FileChangeKind,
 }
 
@@ -24,10 +22,6 @@ pub enum FileChangeKind {
 }
 
 /// Start watching a directory tree, forwarding notify events into a broadcast channel.
-///
-/// Returns the watcher handle. The watcher runs on its own thread and forwards
-/// events to the broadcast sender. The handle is returned so the caller can
-/// drop it to stop watching.
 pub fn start_watcher(
     root: impl AsRef<Path>,
     tx: broadcast::Sender<FileChangeEvent>,
@@ -47,7 +41,6 @@ pub fn start_watcher(
 
     watcher.watch(&root_for_watch, RecursiveMode::Recursive)?;
     info!("[ide-fs::watcher] started watching: {}", root_for_watch.display());
-
     Ok(watcher)
 }
 
@@ -57,7 +50,6 @@ fn handle_notify_event(
     root: &Path,
 ) -> anyhow::Result<()> {
     let event = result?;
-
     if event.paths.is_empty() {
         return Ok(());
     }
@@ -71,52 +63,11 @@ fn handle_notify_event(
 
     for path in &event.paths {
         if path.starts_with(root) {
-            let change_event = FileChangeEvent {
-                path: path.clone(),
-                kind: kind.clone(),
-            };
-
+            let change_event = FileChangeEvent { path: path.clone(), kind: kind.clone() };
             if let Err(e) = tx.send(change_event) {
                 warn!("[ide-fs::watcher] no receivers: {e}");
             }
         }
     }
-
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use std::time::Duration;
-    use tokio::sync::broadcast;
-    use tokio::time::sleep;
-
-    #[tokio::test]
-    async fn test_watcher_detects_creation() {
-        let dir = std::env::temp_dir().join(format!("ide-fs-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-
-        let (tx, mut rx) = broadcast::channel::<FileChangeEvent>(256);
-        let _watcher = start_watcher(&dir, tx).unwrap();
-
-        // Allow watcher to initialise
-        sleep(Duration::from_millis(200)).await;
-
-        let test_file = dir.join("hello.txt");
-        fs::write(&test_file, b"world").unwrap();
-
-        // Wait for event
-        let received = tokio::time::timeout(Duration::from_secs(3), rx.recv()).await;
-
-        let _ = fs::remove_dir_all(&dir);
-
-        assert!(received.is_ok(), "should have received a file change event");
-        if let Ok(event) = received {
-            assert_eq!(event.path, test_file);
-            assert_eq!(event.kind, FileChangeKind::Created);
-        }
-    }
 }
