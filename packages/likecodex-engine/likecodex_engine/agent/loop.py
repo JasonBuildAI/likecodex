@@ -437,6 +437,25 @@ class AgentLoop:
                         finish = str(response.usage.get("finish_reason", finish))
                     self._empty_final_blocks += 1
                     if self._empty_final_blocks >= MAX_EMPTY_FINAL_BLOCKS:
+                        # Graceful degradation: downgrade from agent to ask mode
+                        if self.agent_mode == "agent" and not self._mode_downgraded:
+                            self._mode_downgraded = True
+                            self.agent_mode = "ask"
+                            self._empty_final_blocks = 0
+                            downgrade_msg = (
+                                "[mode-downgraded] Agent loop returned empty responses consecutively. "
+                                "Downgraded to ask mode. You can still read files and search code."
+                            )
+                            self.context.add_context_block(downgrade_msg)
+                            yield self._emit(
+                                LLMResponse(
+                                    content=downgrade_msg,
+                                    model="system",
+                                    event_type="mode_downgraded",
+                                    metadata={"from_mode": "agent", "to_mode": "ask"},
+                                )
+                            )
+                            continue
                         yield self._emit(
                             LLMResponse(
                                 content=(
@@ -867,12 +886,26 @@ class AgentLoop:
                         if no_fallback:
                             return json.dumps({"error": f"Sandbox execution failed: {err}"})
                         tagged = await self.tools.execute(tool_name, arguments)
+                        yield self._emit(
+                            LLMResponse(
+                                content=f"Sandbox unavailable, falling back to local execution: {err}",
+                                model="system",
+                                event_type="degraded",
+                            )
+                        )
                         return self._tag_result(tagged, "fallback-local")
                     return json.dumps(body)
             except Exception as exc:
                 if no_fallback:
                     return json.dumps({"error": f"Sandbox unreachable: {exc}"})
                 tagged = await self.tools.execute(tool_name, arguments)
+                yield self._emit(
+                    LLMResponse(
+                        content=f"Sandbox unreachable, falling back to local execution: {exc}",
+                        model="system",
+                        event_type="degraded",
+                    )
+                )
                 return self._tag_result(tagged, "fallback-local")
         if require_sandbox:
             return json.dumps({"error": f"Tool {tool_name} must run in sandbox but only run_command is supported"})
