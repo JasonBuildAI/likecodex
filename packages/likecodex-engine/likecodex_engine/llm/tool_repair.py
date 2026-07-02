@@ -134,13 +134,19 @@ def merge_tool_calls(response: LLMResponse) -> LLMResponse:
 
 
 def ensure_tool_call_ids(tool_calls: list[ToolCall]) -> list[ToolCall]:
-    """Assign stable ids to tool calls missing them before persistence."""
+    """Assign stable ids to tool calls missing them before persistence.
+    Also detects and fixes duplicate IDs by appending a unique suffix.
+    """
     out: list[ToolCall] = []
+    used_ids: set[str] = set()
     for idx, tc in enumerate(tool_calls):
-        if tc.id:
-            out.append(tc)
-            continue
-        out.append(tc.model_copy(update={"id": f"call_{idx}_{uuid.uuid4().hex[:8]}"}))
+        tid = tc.id
+        if not tid:
+            tid = f"call_{idx}_{uuid.uuid4().hex[:8]}"
+        elif tid in used_ids:
+            tid = f"{tid}_{uuid.uuid4().hex[:4]}"
+        used_ids.add(tid)
+        out.append(tc.model_copy(update={"id": tid}))
     return out
 
 
