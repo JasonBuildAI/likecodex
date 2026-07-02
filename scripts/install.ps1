@@ -1,10 +1,10 @@
-# LikeCodex Windows installer — enhanced with environment detection & auto-config
+# LikeCodex Windows installer — pip-first approach with optional Rust compilation
 $ErrorActionPreference = "Stop"
 
 $Repo = if ($env:LIKECODEX_INSTALL_REPO) { $env:LIKECODEX_INSTALL_REPO } else { "https://github.com/JasonBuildAI/likecodex.git" }
 $InstallDir = if ($env:LIKECODEX_INSTALL_DIR) { $env:LIKECODEX_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".likecodex\install" }
 
-Write-Host "==> LikeCodex installer (Phase 8.4 enhanced)" -ForegroundColor Cyan
+Write-Host "==> LikeCodex Installer (pip-first)" -ForegroundColor Cyan
 Write-Host "    Target: $InstallDir"
 
 # ---------------------------------------------------------------
@@ -28,49 +28,29 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
     $pythonVersion = & python3 --version 2>&1
     $pythonPath = (Get-Command python3).Source
 }
-if ($pythonPath) {
-    Write-Host "  [OK] $pythonVersion at $pythonPath" -ForegroundColor Green
-} else {
-    Write-Host "  [WARN] Python not found — attempting install..." -ForegroundColor Yellow
-    Write-Host "  Please install Python 3.11+ from https://python.org" -ForegroundColor Red
-    Write-Host "  After installation, re-run this script." -ForegroundColor Red
+if (-not $pythonPath) {
+    Write-Host "  [ERROR] Python not found — install Python 3.11+ from https://python.org" -ForegroundColor Red
+    exit 1
 }
+Write-Host "  [OK] $pythonVersion at $pythonPath" -ForegroundColor Green
 
-# --- uv (Python package manager) ---
+# --- uv (recommended package manager) ---
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Host "  [..] Installing uv..." -ForegroundColor Yellow
     irm https://astral.sh/uv/install.ps1 | iex
     $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
-    if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-        throw "uv installation failed — please install manually from https://docs.astral.sh/uv/"
-    }
 }
 Write-Host "  [OK] uv" -ForegroundColor Green
 
-# --- Node.js ---
-$nodeVersion = $null
-if (Get-Command node -ErrorAction SilentlyContinue) {
-    $nodeVersion = & node --version 2>&1
-    Write-Host "  [OK] Node.js $nodeVersion" -ForegroundColor Green
+# --- Rust/Cargo (optional) ---
+$rustAvailable = Get-Command cargo -ErrorAction SilentlyContinue
+if ($rustAvailable) {
+    $cargoVersion = & cargo --version 2>&1
+    Write-Host "  [OK] $cargoVersion (optional)" -ForegroundColor Green
 } else {
-    Write-Host "  [WARN] Node.js not found — frontend build will be skipped" -ForegroundColor Yellow
-    Write-Host "  Install from https://nodejs.org (v20+ recommended)" -ForegroundColor DarkYellow
+    Write-Host "  [..] Rust not found — Python-only mode will be used" -ForegroundColor Yellow
+    Write-Host "  [..] Install Rust later for enhanced performance: https://rustup.rs" -ForegroundColor DarkYellow
 }
-
-# --- Rust/Cargo ---
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-    Write-Host "  [..] Rust not found — installing via rustup..." -ForegroundColor Yellow
-    # Download and run rustup-init.exe silently
-    $rustupPath = "$env:TEMP\rustup-init.exe"
-    irm -Uri "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe" -OutFile $rustupPath
-    & $rustupPath -y --default-toolchain stable --profile default 2>&1 | Out-Null
-    $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
-    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-        throw "Rust install failed — install from https://rustup.rs"
-    }
-}
-$cargoVersion = & cargo --version 2>&1
-Write-Host "  [OK] $cargoVersion" -ForegroundColor Green
 
 # --- Docker (optional) ---
 $dockerAvailable = Get-Command docker -ErrorAction SilentlyContinue
@@ -94,51 +74,70 @@ if (-not (Test-Path (Join-Path $InstallDir ".git"))) {
 }
 
 # ---------------------------------------------------------------
-# Step 3: Python dependencies
+# Step 3: Install likecodex via pip (primary method)
 # ---------------------------------------------------------------
-Write-Host "`n[3/7] Installing Python dependencies..." -ForegroundColor Yellow
+Write-Host "`n[3/7] Installing likecodex via pip (primary method)..." -ForegroundColor Yellow
 Push-Location $InstallDir
-uv sync --all-packages 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  [WARN] uv sync had warnings" -ForegroundColor Yellow
-} else {
-    Write-Host "  [OK] Python dependencies installed" -ForegroundColor Green
-}
-Pop-Location
 
-# ---------------------------------------------------------------
-# Step 4: Build Rust CLI
-# ---------------------------------------------------------------
-Write-Host "`n[4/7] Building Rust CLI..." -ForegroundColor Yellow
-Push-Location $InstallDir
-$cargoArgs = @("install", "--path", "crates/likecodex-cli", "--force")
-if ($env:LIKECODEX_CARGO_PROFILE -eq "release") {
-    $cargoArgs = @("install", "--path", "crates/likecodex-cli", "--force")
-}
-& cargo $cargoArgs 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "  [OK] likecodex CLI built" -ForegroundColor Green
-} else {
-    Write-Host "  [WARN] CLI build failed — check Rust toolchain" -ForegroundColor Yellow
-}
-Pop-Location
-
-# ---------------------------------------------------------------
-# Step 5: Install frontend dependencies (optional)
-# ---------------------------------------------------------------
-$webDir = Join-Path $InstallDir "web"
-if ($nodeVersion -and (Test-Path $webDir)) {
-    Write-Host "`n[5/7] Installing frontend dependencies..." -ForegroundColor Yellow
-    Push-Location $webDir
-    if (Test-Path "package.json") {
-        & npm install --silent 2>&1 | Out-Null
-        Write-Host "  [OK] frontend dependencies installed" -ForegroundColor Green
+try {
+    # Install engine and all dependencies via uv/pip
+    uv sync --all-packages 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  [OK] likecodex installed via uv sync" -ForegroundColor Green
     } else {
-        Write-Host "  [..] no package.json found, skipping" -ForegroundColor DarkYellow
+        Write-Host "  [WARN] uv sync had issues, trying pip install..." -ForegroundColor Yellow
+        & pip install -e packages/likecodex-engine 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  [OK] likecodex-engine installed via pip" -ForegroundColor Green
+        } else {
+            Write-Host "  [ERROR] pip install failed" -ForegroundColor Red
+        }
     }
+} catch {
+    Write-Host "  [ERROR] Installation failed: $_" -ForegroundColor Red
     Pop-Location
+    exit 1
+}
+Pop-Location
+
+# ---------------------------------------------------------------
+# Step 4: Verify Python installation
+# ---------------------------------------------------------------
+Write-Host "`n[4/7] Verifying Python installation..." -ForegroundColor Yellow
+try {
+    $verifyOutput = & uv run python -c "import likecodex_engine; print('OK')" 2>&1
+    if ($verifyOutput -match "OK") {
+        Write-Host "  [OK] likecodex_engine imported successfully" -ForegroundColor Green
+    } else {
+        Write-Host "  [WARN] Verification output: $verifyOutput" -ForegroundColor Yellow
+    }
+} catch {
+    Write-Host "  [WARN] Verification skipped (not critical): $_" -ForegroundColor Yellow
+}
+
+# ---------------------------------------------------------------
+# Step 5: Optional Rust compilation
+# ---------------------------------------------------------------
+if ($rustAvailable) {
+    Write-Host "`n[5/7] Building Rust CLI (optional, for enhanced performance)..." -ForegroundColor Yellow
+    Write-Host "  [..] This step is optional. Skip? (Y/n, default Y): " -NoNewline
+    $skipRust = Read-Host
+    if ($skipRust -ne "n" -and $skipRust -ne "N") {
+        Write-Host "  [..] Skipping Rust build. Run later: cargo install --path crates/likecodex-cli --force" -ForegroundColor DarkYellow
+    } else {
+        Push-Location $InstallDir
+        $cargoArgs = @("install", "--path", "crates/likecodex-cli", "--force")
+        & cargo $cargoArgs 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  [OK] likecodex CLI built (enhanced mode)" -ForegroundColor Green
+        } else {
+            Write-Host "  [WARN] CLI build failed — Python-only mode still works" -ForegroundColor Yellow
+        }
+        Pop-Location
+    }
 } else {
-    Write-Host "`n[5/7] Skipping frontend (Node.js not available)" -ForegroundColor DarkYellow
+    Write-Host "`n[5/7] Skipping Rust build (not available)" -ForegroundColor DarkYellow
+    Write-Host "  [..] Using Python-only mode" -ForegroundColor Green
 }
 
 # ---------------------------------------------------------------
@@ -176,72 +175,10 @@ allow_fallback = true
 }
 
 # ---------------------------------------------------------------
-# Step 7: Verify installation
+# Step 7: Verify and finish
 # ---------------------------------------------------------------
-Write-Host "`n[7/7] Verifying installation..." -ForegroundColor Yellow
-$cliPath = Join-Path $env:USERPROFILE ".cargo\bin\likecodex.exe"
-if (Test-Path $cliPath) {
-    Write-Host "  [OK] likecodex CLI at $cliPath" -ForegroundColor Green
-} elseif (Get-Command likecodex -ErrorAction SilentlyContinue) {
-    Write-Host "  [OK] likecodex CLI found in PATH" -ForegroundColor Green
-} else {
-    Write-Host "  [WARN] likecodex not found in PATH — add %USERPROFILE%\.cargo\bin to PATH" -ForegroundColor Yellow
-}
-
-Write-Host "`n==> Installation complete!" -ForegroundColor Cyan
-Write-Host "    Run: likecodex doctor; likecodex code" -ForegroundColor White
-# LikeCodex Windows installer
-$ErrorActionPreference = "Stop"
-
-$Repo = if ($env:LIKECODEX_INSTALL_REPO) { $env:LIKECODEX_INSTALL_REPO } else { "https://github.com/JasonBuildAI/likecodex.git" }
-$InstallDir = if ($env:LIKECODEX_INSTALL_DIR) { $env:LIKECODEX_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".likecodex\install" }
-
-Write-Host "==> LikeCodex installer"
-
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    throw "git is required"
-}
-
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Host "Installing uv..."
-    irm https://astral.sh/uv/install.ps1 | iex
-    $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
-}
-
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-    throw "Rust/cargo is required — install from https://rustup.rs"
-}
-
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-if (-not (Test-Path (Join-Path $InstallDir ".git"))) {
-    git clone $Repo $InstallDir
-} else {
-    git -C $InstallDir pull --ff-only
-}
-
-Push-Location $InstallDir
-uv sync --all-packages
-cargo install --path crates/likecodex-cli --force
-Pop-Location
-
-$ConfigDir = Join-Path $env:USERPROFILE ".likecodex"
-New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
-$ConfigPath = Join-Path $ConfigDir "config.toml"
-if (-not (Test-Path $ConfigPath)) {
-@'
-[llm]
-provider = "deepseek"
-model = "deepseek-v4-flash"
-
-[approval]
-mode = "auto"
-
-[agent]
-planner_model = "deepseek-v4-pro"
-executor_model = "deepseek-v4-flash"
-compact_ratio = 0.8
-enable_planner = false
-'@ | Set-Content -Path $ConfigPath -Encoding UTF8
-}
-
-Write-Host "==> Done. Run: likecodex doctor; likecodex code"
+Write-Host "`n[7/7] Installation complete!" -ForegroundColor Cyan
+Write-Host "  Run: likecodex --doctor (check setup)" -ForegroundColor White
+Write-Host "  Run: likecodex --setup (configure API key)" -ForegroundColor White
+Write-Host "  Run: likecodex --web   (start Web UI)" -ForegroundColor White
+Write-Host "`n==> Happy coding with LikeCodex!" -ForegroundColor Cyan
