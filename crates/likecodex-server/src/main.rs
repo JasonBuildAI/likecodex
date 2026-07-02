@@ -642,6 +642,11 @@ async fn codegraph_search(
     State(state): State<Arc<AppState>>,
     Query(query): Query<IndexSearchQuery>,
 ) -> Json<serde_json::Value> {
+    // Phase 7.15: Code Metrics Dashboard endpoint
+    // Future: Add /metrics/code endpoint that returns:
+    // - Per-file SLOC, comment ratio, complexity estimate
+    // - Module dependency counts, circular dependency detection
+    // - Historical diff of metrics across git commits
     let path = format!(
         "/codegraph/search?pattern={}",
         percent_encode_query(&query.pattern)

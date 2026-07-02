@@ -1,4 +1,13 @@
-"""Tests for the code graph and diagnostics tools."""
+"""Tests for the code graph and diagnostics tools.
+
+Phase 7.15: Code Metrics Dashboard
+- Future: Add tests for metrics collection:
+  - SLOC, cyclomatic complexity, function length
+  - Dependency count, coupling metrics
+  - Per-file and per-module aggregate statistics
+  - Historical trend tracking across commits
+- See also: crates/likecodex-indexer/src/lib.rs (CodeGraph metrics)
+"""
 
 from __future__ import annotations
 
